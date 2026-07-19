@@ -1,0 +1,385 @@
+# Authentication & User System — Implementation Spec
+
+**Scope:** Register, Login, Forgot/Reset Password, Email Verification (link-based, no OTP), User Management, Roles, XP, Badges, Memory.
+**Explicitly out of scope for now:** OTP, OAuth/social login.
+
+---
+
+## 1. Locked Tech Decisions
+
+| Layer | Choice | Why |
+|---|---|---|
+| Backend | Node.js + Express | Matches Next.js frontend — one language across the team |
+| ORM | Prisma | Type-safe, auto-migrations, works great with Postgres |
+| Database | PostgreSQL | Relational integrity for users/roles/tokens; JSONB where flexibility is needed |
+| Password hashing | bcrypt (cost factor 12) | Industry standard, simple, no external dependency |
+| Auth tokens | JWT access token + opaque refresh token | Access token stateless & short-lived; refresh token stored & revocable |
+| Refresh token storage | httpOnly, secure, sameSite=strict cookie | Not accessible to JS → mitigates XSS token theft |
+| Email delivery | Nodemailer (SMTP) | Works with any SMTP provider (Gmail, etc.) — no vendor lock-in |
+| Validation | Zod | Type-safe schema validation on every request body |
+| Rate limiting | express-rate-limit + Redis store (or in-memory if no Redis yet) | Stops brute force on login/register/reset |
+| Security headers | Helmet | One-line baseline hardening |
+| File uploads | Cloudinary + Multer | Server-side image upload, CDN delivery, on-the-fly transformations |
+| Image middleware | Multer (memory storage) | Parses multipart form, 5 MB limit, image-only filter |
+
+No OTP = email verification and password reset both use a **signed, single-use link with an expiring token**, not a code.
+
+---
+
+## 2. Auth Flows (step-by-step)
+
+### 2.1 Register
+1. `POST /api/auth/register` — body: `email`, `password`, `display_name`, `gender` (`"MALE"`/`"FEMALE"`), `nationality`, `language` (array, e.g. `["en","ar"]`), and optional tourist preferences (`budget_level`, `arrival_date`, `departure_date`, `travel_style`, `interests`, `accommodation_type`)
+2. Validate with Zod (email format, password ≥ 8 chars, 1 upper, 1 number; gender, nationality, language required; preferences optional)
+3. Check `users` table for existing email → if found, return generic error `"Unable to register with these details"` (never reveal "email already exists" — prevents user enumeration)
+4. Hash password with bcrypt
+5. Insert into `users` with `is_email_verified = false`, default `role_id` = `user`, along with all provided fields
+6. Generate verification token → insert into `email_verification_tokens` (store **hash** of token, not the raw token)
+7. Send verification email with link: `https://app.com/verify-email?token=<raw_token>`
+8. Return `201` with basic user info (no tokens issued yet — user must verify email before login, decision below)
+
+**Decision:** Require email verification before first login. Cleaner than allowing unverified logins with limited access — one less state to manage.
+
+### 2.2 Email Verification
+1. User clicks link → frontend calls `GET /api/auth/verify-email?token=...`
+2. Backend hashes incoming token, looks up `email_verification_tokens` where `token_hash` matches, `used_at IS NULL`, `expires_at > now()`
+3. If valid → set `users.is_email_verified = true`, set `used_at = now()` on the token row, award XP ("Verify email" badge/XP trigger)
+4. If invalid/expired → return error; frontend shows "Resend verification email" option
+5. `POST /api/auth/resend-verification` — rate limited to 1 per 60 seconds per email
+
+Token expiry: **24 hours**.
+
+### 2.3 Login
+1. `POST /api/auth/login` — body: `email`, `password`
+2. Rate limit: 5 attempts per 15 min per IP+email combo
+3. Look up user by email → if not found, return generic `"Invalid credentials"` (same message as wrong password — no enumeration)
+4. Check `is_banned` → reject with specific "account suspended" message
+5. Check `is_email_verified` → reject, prompt to verify
+6. Compare password with bcrypt
+7. On success: issue **access token** (JWT, 15 min expiry, payload = `{user_id, role}`) and **refresh token** (random 256-bit string, hashed and stored in `refresh_tokens` table with device/IP info, 30 day expiry)
+8. Access token returned in response body; refresh token set as httpOnly cookie
+9. Update `users.last_login_at`, award daily-login XP if not already awarded today
+
+### 2.4 Token Refresh
+1. `POST /api/auth/refresh` — reads refresh token from cookie
+2. Hash it, look up in `refresh_tokens` where not revoked and not expired
+3. If valid → issue new access token. **Rotate** the refresh token (revoke old, issue new) — prevents replay if a token is stolen
+4. If invalid → force re-login
+
+### 2.5 Logout
+1. `POST /api/auth/logout` — revoke the current refresh token (`revoked_at = now()`), clear cookie
+2. Optional: `POST /api/auth/logout-all` — revoke every refresh token for the user (useful after password reset or suspicious activity)
+
+### 2.6 Forgot Password
+1. `POST /api/auth/forgot-password` — body: `email`
+2. Always return `200` with generic message regardless of whether email exists (prevents enumeration)
+3. If user exists: generate reset token → insert into `password_reset_tokens` (store hash), expiry **1 hour**
+4. Send email with link: `https://app.com/reset-password?token=<raw_token>`
+
+### 2.7 Reset Password
+1. `POST /api/auth/reset-password` — body: `token`, `new_password`
+2. Hash incoming token, validate against `password_reset_tokens` (not used, not expired)
+3. Hash new password, update `users.password_hash`
+4. Mark token as used
+5. **Revoke all existing refresh tokens for that user** (force logout everywhere — standard security practice after password change)
+
+---
+
+## 3. Database Schema (PostgreSQL DDL)
+
+```sql
+-- Extensions
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Gender enum
+CREATE TYPE gender AS ENUM ('MALE', 'FEMALE');
+
+-- ROLES
+CREATE TABLE roles (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(50) UNIQUE NOT NULL,        -- 'user', 'moderator', 'admin'
+  permissions JSONB NOT NULL DEFAULT '[]'  -- e.g. ["users:read","users:ban"]
+);
+
+INSERT INTO roles (name, permissions) VALUES
+  ('user', '[]'),
+  ('moderator', '["users:read","content:moderate"]'),
+  ('admin', '["users:read","users:write","users:ban","roles:assign"]');
+
+-- USERS
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  display_name VARCHAR(100) NOT NULL,
+  avatar_url TEXT,
+  bio TEXT,
+  gender GENDER NOT NULL,                          -- tourist assistance
+  nationality VARCHAR(100) NOT NULL,
+  languages JSONB NOT NULL DEFAULT '[]',            -- e.g. ["en","ar"]
+  budget_level VARCHAR(50),                         -- 'budget' | 'mid-range' | 'luxury'
+  arrival_date DATE,
+  departure_date DATE,
+  travel_style VARCHAR(50),                         -- 'solo' | 'couple' | 'family' | 'group'
+  interests JSONB DEFAULT '[]',                     -- e.g. ["historical","beach"]
+  accommodation_type VARCHAR(50),                   -- 'hotel' | 'hostel' | 'apartment' | 'resort'
+  role_id INT NOT NULL REFERENCES roles(id) DEFAULT 1,
+  is_email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  is_banned BOOLEAN NOT NULL DEFAULT FALSE,
+  xp INT NOT NULL DEFAULT 0,
+  level INT NOT NULL DEFAULT 1,
+  last_login_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_users_email ON users(email);
+
+-- EMAIL VERIFICATION TOKENS
+CREATE TABLE email_verification_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash VARCHAR(255) NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_evt_user ON email_verification_tokens(user_id);
+
+-- PASSWORD RESET TOKENS
+CREATE TABLE password_reset_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash VARCHAR(255) NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_prt_user ON password_reset_tokens(user_id);
+
+-- REFRESH TOKENS (sessions)
+CREATE TABLE refresh_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash VARCHAR(255) NOT NULL,
+  device_info TEXT,
+  ip_address VARCHAR(45),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_rt_user ON refresh_tokens(user_id);
+
+-- BADGES
+CREATE TABLE badges (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) UNIQUE NOT NULL,
+  description TEXT,
+  icon_url TEXT,
+  criteria_type VARCHAR(50) NOT NULL,   -- 'xp_threshold' | 'action_count' | 'manual'
+  criteria_value INT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE user_badges (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  badge_id INT NOT NULL REFERENCES badges(id) ON DELETE CASCADE,
+  awarded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(user_id, badge_id)
+);
+
+-- XP TRANSACTIONS (audit trail of every XP change)
+CREATE TABLE xp_transactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount INT NOT NULL,
+  reason VARCHAR(100) NOT NULL,   -- 'daily_login','email_verified','message_sent',...
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_xp_user ON xp_transactions(user_id);
+
+-- AUDIT LOG (admin actions)
+CREATE TABLE audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_id UUID REFERENCES users(id),
+  action VARCHAR(100) NOT NULL,        -- 'role_changed','user_banned',...
+  target_user_id UUID REFERENCES users(id),
+  metadata JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- MEMORY (long-term, per-user conversation history for the AI system)
+CREATE TABLE conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title VARCHAR(255),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_conv_user ON conversations(user_id);
+
+CREATE TABLE messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  role VARCHAR(20) NOT NULL,       -- 'user' | 'assistant' | 'system'
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_msg_conversation ON messages(conversation_id);
+```
+
+**Notes:**
+- Every token table stores a **hash** of the token, never the raw value — if the DB leaks, tokens can't be reused.
+- Short-term memory (current chat context) lives in application memory / passed in the request — it does **not** need its own table. Only persisted history goes to `conversations` / `messages`.
+- `messages` here is your relational source of truth. If you also embed messages into the vector DB for semantic recall, store the `message.id` alongside the embedding so you can trace back to source.
+
+---
+
+## 4. API Endpoints
+
+```
+POST   /api/auth/register
+GET    /api/auth/verify-email?token=
+POST   /api/auth/resend-verification
+POST   /api/auth/login
+POST   /api/auth/logout
+POST   /api/auth/logout-all
+POST   /api/auth/refresh
+POST   /api/auth/forgot-password
+POST   /api/auth/reset-password
+
+GET    /api/users/me
+PATCH  /api/users/me
+POST   /api/users/me/avatar     (multipart, field: "avatar")
+DELETE /api/users/me/avatar
+DELETE /api/users/me
+
+GET    /api/users/:id/badges
+GET    /api/leaderboard
+
+GET    /api/admin/users               (admin/moderator)
+PATCH  /api/admin/users/:id/role      (admin)
+PATCH  /api/admin/users/:id/ban       (admin/moderator)
+GET    /api/admin/audit-logs          (admin)
+```
+
+The `POST /api/auth/register` body now requires `gender` (`"MALE"`/`"FEMALE"`), `nationality`, and `language` (array) in addition to `email`, `password`, `display_name`. Tourist preferences (`budget_level`, `arrival_date`, `departure_date`, `travel_style`, `interests`, `accommodation_type`) are optional. `PATCH /api/users/me` accepts all the same optional fields for profile updates.
+
+---
+
+## 5. Security Decisions (locked)
+
+- **Password rule:** min 8 chars, at least 1 uppercase, 1 number. Checked client-side (UX) and server-side (source of truth) with Zod.
+- **Bcrypt cost factor:** 12.
+- **Rate limits:** login 5/15min per IP+email, register 5/hour per IP, forgot-password 3/hour per IP, resend-verification 1/60s per email.
+- **Generic error messages** on login/register/forgot-password to prevent user enumeration.
+- **CORS:** whitelist only your frontend origin(s), `credentials: true` for cookies.
+- **Helmet** enabled globally for security headers.
+- **Input validation:** every route validated with a Zod schema before touching the DB.
+- **Refresh token rotation:** every refresh call issues a new refresh token and revokes the old one.
+- **Force logout on password reset:** all refresh tokens revoked when password changes.
+
+---
+
+## 6. Roles & Permissions (RBAC)
+
+Three roles, permission checks done server-side via middleware — never trust the frontend to hide a button as your only protection.
+
+| Role | Can do |
+|---|---|
+| `user` | Manage own profile, own conversations, view own badges/XP |
+| `moderator` | Everything `user` can, + view all users, ban/unban users |
+| `admin` | Everything `moderator` can, + assign roles, view audit logs |
+
+Middleware pattern: `requireRole(['admin'])` on protected routes, checks `req.user.role` (decoded from JWT) against an allow-list.
+
+---
+
+## 7. XP & Leveling System
+
+**Formula (application-computed, not stored as a trigger):**
+```
+xp_required_for_level(n) = round(100 * n^1.5)
+```
+Level 1→2: 100 XP · Level 2→3: 283 XP · Level 3→4: 520 XP · Level 4→5: 800 XP, etc.
+
+On every `xp_transactions` insert: increment `users.xp`, recompute `users.level` by walking the formula, and check badge criteria (see below).
+
+**XP awarding table:**
+
+| Action | XP | Notes |
+|---|---|---|
+| Register | 5 | On successful signup |
+| Verify email | 10 | On successful verification |
+| Complete profile (avatar + bio) | 20 | One-time |
+| Daily login | 5 | Max once per calendar day |
+| Send a message to the AI | 2 | Capped at 20/day to prevent grinding |
+
+---
+
+## 8. Badges System
+
+Criteria types map directly to `badges.criteria_type`:
+
+| Badge | Criteria type | Value | Trigger point |
+|---|---|---|---|
+| Welcome Aboard | manual | — | Awarded at registration |
+| Verified | manual | — | Awarded on email verification |
+| Getting Started | xp_threshold | 100 | Checked after every XP transaction |
+| Power User | xp_threshold | 1000 | Checked after every XP transaction |
+| Century Club | action_count | 100 messages | Checked when message count hits threshold |
+
+Implementation: a single `checkAndAwardBadges(userId)` function runs after any XP-changing event, queries `badges` for unmet criteria, and inserts into `user_badges` if met (guarded by the `UNIQUE(user_id, badge_id)` constraint so it's safe to call repeatedly).
+
+---
+
+## 9. Environment Variables
+
+```
+# Server
+PORT=3000
+DATABASE_URL=
+JWT_ACCESS_SECRET=
+JWT_ACCESS_EXPIRY=15m
+REFRESH_TOKEN_EXPIRY_DAYS=30
+FRONTEND_URL=
+CORS_ORIGIN=
+BCRYPT_COST=12
+NODE_ENV=development
+
+# Nodemailer (SMTP)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASS=
+EMAIL_FROM=ITI Hub <noreply@itihub.com>
+
+# Cloudinary
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
+
+# Admin Panel (AdminJS at /admin-panel)
+ADMIN_SESSION_SECRET=change-me-to-a-long-secret-at-least-32-chars
+ADMIN_EMAIL=admin@itihub.com
+ADMIN_PASSWORD=Admin123!
+```
+
+---
+
+## 10. Implementation Order
+
+1. DB schema + migrations (Prisma) — `users`, `roles` first
+2. Register + login + JWT/refresh middleware (core loop working end to end)
+3. Email verification (wire Resend)
+4. Forgot/reset password
+5. User management endpoints + admin routes + RBAC middleware
+6. XP transactions + leveling logic
+7. Badges + `checkAndAwardBadges`
+8. Memory tables (`conversations`/`messages`) — wire once the AI chat endpoint exists
+9. Rate limiting + Helmet + CORS lockdown (do this before demo day, not after)
+
+---
+
+*OTP and OAuth are deliberately excluded from this spec. When you're ready to add them, OAuth slots in as an alternate `POST /api/auth/oauth/:provider` flow that creates/links a `users` row without a `password_hash`; OTP would add a `phone_number` column and an `otp_codes` table following the same hashed-token pattern used above.*

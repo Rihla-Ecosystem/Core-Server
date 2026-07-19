@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: core-server-db
+    environment:
+      POSTGRES_USER: core_user
+      POSTGRES_PASSWORD: core_pass
+      POSTGRES_DB: core_server
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U core_user -d core_server"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:

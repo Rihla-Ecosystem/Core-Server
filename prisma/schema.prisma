@@ -1,0 +1,253 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Gender {
+  MALE
+  FEMALE
+
+  @@map("gender")
+}
+
+model Role {
+  id          Int    @id @default(autoincrement())
+  name        String @unique @db.VarChar(50)
+  permissions Json   @default("[]")
+  users       User[]
+
+  @@map("roles")
+}
+
+model User {
+  id              String   @id @default(uuid()) @db.Uuid
+  email           String   @unique @db.VarChar(255)
+  passwordHash    String   @map("password_hash") @db.VarChar(255)
+  displayName     String   @map("display_name") @db.VarChar(100)
+  avatarUrl       String?  @map("avatar_url") @db.Text
+  bio             String?  @db.Text
+  gender          Gender   @map("gender")
+  nationality     String   @db.VarChar(100)
+  language        Json     @default("[]") @map("languages")
+  budgetLevel     String?  @map("budget_level") @db.VarChar(50)
+  arrivalDate     DateTime? @map("arrival_date") @db.Date
+  departureDate   DateTime? @map("departure_date") @db.Date
+  travelStyle     String?  @map("travel_style") @db.VarChar(50)
+  interests       Json?    @default("[]") @map("interests")
+  accommodationType String? @map("accommodation_type") @db.VarChar(50)
+  roleId          Int      @default(1) @map("role_id")
+  isEmailVerified Boolean  @default(false) @map("is_email_verified")
+  isActive        Boolean  @default(true) @map("is_active")
+  isBanned        Boolean  @default(false) @map("is_banned")
+  xp              Int      @default(0)
+  level           Int      @default(1)
+  lastLoginAt     DateTime? @map("last_login_at") @db.Timestamptz
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  role                  Role                     @relation(fields: [roleId], references: [id])
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens    PasswordResetToken[]
+  refreshTokens          RefreshToken[]
+  userBadges             UserBadge[]
+  xpTransactions         XpTransaction[]
+  auditLogsAsActor       AuditLog[]             @relation("ActorAuditLogs")
+  auditLogsAsTarget      AuditLog[]             @relation("TargetAuditLogs")
+  conversations          Conversation[]
+  tripHistories          TripHistory[]
+  userPreferences        UserPreference[]
+  userFeedbacks          UserFeedback[]
+  interactionSummaries   InteractionSummary[]
+
+  @@map("users")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  String    @map("token_hash") @db.VarChar(255)
+  deviceInfo String?   @map("device_info") @db.Text
+  ipAddress  String?   @map("ip_address") @db.VarChar(45)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Badge {
+  id            Int         @id @default(autoincrement())
+  name          String      @unique @db.VarChar(100)
+  description   String?     @db.Text
+  iconUrl       String?     @map("icon_url") @db.Text
+  criteriaType  String      @map("criteria_type") @db.VarChar(50)
+  criteriaValue Int?        @map("criteria_value")
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  userBadges    UserBadge[]
+
+  @@map("badges")
+}
+
+model UserBadge {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  badgeId   Int      @map("badge_id")
+  awardedAt DateTime @default(now()) @map("awarded_at") @db.Timestamptz
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badge Badge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, badgeId])
+  @@map("user_badges")
+}
+
+model XpTransaction {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  amount    Int
+  reason    String   @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("xp_transactions")
+}
+
+model AuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  actorId      String?  @map("actor_id") @db.Uuid
+  action       String   @db.VarChar(100)
+  targetUserId String?  @map("target_user_id") @db.Uuid
+  metadata     Json?
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  actor  User? @relation("ActorAuditLogs", fields: [actorId], references: [id])
+  target User? @relation("TargetAuditLogs", fields: [targetUserId], references: [id])
+
+  @@map("audit_logs")
+}
+
+model Conversation {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  title     String?  @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([userId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  role           String   @db.VarChar(20)
+  content        String   @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@map("messages")
+}
+
+model TripHistory {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  title       String   @db.VarChar(255)
+  destination String   @db.VarChar(255)
+  startDate   DateTime @map("start_date") @db.Date
+  endDate     DateTime @map("end_date") @db.Date
+  itinerary   Json?
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("trip_histories")
+}
+
+model UserPreference {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  key       String   @db.VarChar(100)
+  value     Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@map("user_preferences")
+}
+
+model UserFeedback {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  type       String   @db.VarChar(50)
+  targetId   String?  @map("target_id") @db.Uuid
+  targetType String?  @map("target_type") @db.VarChar(50)
+  rating     Int?
+  comment    String?  @db.Text
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_feedback")
+}
+
+model InteractionSummary {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  summary     String   @db.Text
+  periodStart DateTime @map("period_start") @db.Timestamptz
+  periodEnd   DateTime @map("period_end") @db.Timestamptz
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("interaction_summaries")
+}
