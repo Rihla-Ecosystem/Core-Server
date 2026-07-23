@@ -8,15 +8,23 @@ import { swaggerSpec } from './config/swagger.js';
 import { getAdminRouter } from './config/admin.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import routes from './routes/index.js';
+import vectorUploadRoute from "./routes/Vectorupload.route.js";
 
 const app = express();
 
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
-app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
+app.use(cors());
 app.use(cookieParser());
 app.use(express.json());
 
+// console any request
+app.use((req, _res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+});
+
 app.use('/api', routes);
+app.use("/api/vector/upload", vectorUploadRoute);
 
 app.get('/api/docs.json', (_req, res) => {
   res.json(swaggerSpec);
