@@ -14,6 +14,130 @@ enum Gender {
   @@map("gender")
 }
 
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+model PaymentPlan {
+  id          Int     @id @default(autoincrement())
+  name        String  @db.VarChar(100)
+  description String? @db.Text
+
+  /// Price in smallest currency unit (e.g. cents or piasters)
+  price Int
+
+  currency String @default("EGP") @db.VarChar(10)
+
+  durationDays Int
+
+  maxTrips         Int?
+  maxAiChats       Int?
+  maxUploads       Int?
+  maxMassegsInChat Int?
+  tokens           Int?
+  maxRemper        Int?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  payments      Payment[]
+  subscriptions Subscription[]
+
+  @@map("payment_plans")
+}
+
+model Payment {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId        String @db.Uuid
+  paymentPlanId Int
+
+  amount   Int
+  currency String @default("EGP") @db.VarChar(10)
+
+  status PaymentStatus @default(PENDING)
+
+  transactionId String? @unique @map("transaction_id") @db.VarChar(255)
+
+  provider String? @db.VarChar(100)
+
+  paidAt DateTime? @db.Timestamptz
+
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paymentPlan PaymentPlan @relation(fields: [paymentPlanId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+  @@index([paymentPlanId])
+  @@map("payments")
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+model Subscription {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId        String @unique @db.Uuid
+  paymentPlanId Int
+
+  startDate DateTime
+  endDate   DateTime
+
+  status SubscriptionStatus @default(ACTIVE)
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paymentPlan PaymentPlan @relation(fields: [paymentPlanId], references: [id])
+
+  tokenTransactions TokenTransaction[]
+}
+
+enum TokenTransactionType {
+  GRANT
+  CONSUME
+  REFUND
+  BONUS
+  ADJUSTMENT
+  EXPIRE
+}
+
+model TokenTransaction {
+  id String @id @default(uuid()) @db.Uuid
+
+  subscriptionId String @db.Uuid
+  userId         String @db.Uuid
+
+  type TokenTransactionType
+
+  amount Int
+
+  source String?
+
+  referenceId String?
+  metadata    Json?
+
+  createdAt DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+  @@index([userId])
+  @@index([type])
+}
+
 model Role {
   id          Int    @id @default(autoincrement())
   name        String @unique @db.VarChar(50)
@@ -24,44 +148,47 @@ model Role {
 }
 
 model User {
-  id              String   @id @default(uuid()) @db.Uuid
-  email           String   @unique @db.VarChar(255)
-  passwordHash    String   @map("password_hash") @db.VarChar(255)
-  displayName     String   @map("display_name") @db.VarChar(100)
-  avatarUrl       String?  @map("avatar_url") @db.Text
-  bio             String?  @db.Text
-  gender          Gender   @map("gender")
-  nationality     String   @db.VarChar(100)
-  language        Json     @default("[]") @map("languages")
-  budgetLevel     String?  @map("budget_level") @db.VarChar(50)
-  arrivalDate     DateTime? @map("arrival_date") @db.Date
-  departureDate   DateTime? @map("departure_date") @db.Date
-  travelStyle     String?  @map("travel_style") @db.VarChar(50)
-  interests       Json?    @default("[]") @map("interests")
-  accommodationType String? @map("accommodation_type") @db.VarChar(50)
-  roleId          Int      @default(1) @map("role_id")
-  isEmailVerified Boolean  @default(false) @map("is_email_verified")
-  isActive        Boolean  @default(true) @map("is_active")
-  isBanned        Boolean  @default(false) @map("is_banned")
-  xp              Int      @default(0)
-  level           Int      @default(1)
-  lastLoginAt     DateTime? @map("last_login_at") @db.Timestamptz
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  id                String    @id @default(uuid()) @db.Uuid
+  email             String    @unique @db.VarChar(255)
+  passwordHash      String    @map("password_hash") @db.VarChar(255)
+  displayName       String    @map("display_name") @db.VarChar(100)
+  avatarUrl         String?   @map("avatar_url") @db.Text
+  bio               String?   @db.Text
+  gender            Gender    @map("gender")
+  nationality       String    @db.VarChar(100)
+  language          Json      @default("[]") @map("languages")
+  budgetLevel       String?   @map("budget_level") @db.VarChar(50)
+  arrivalDate       DateTime? @map("arrival_date") @db.Date
+  departureDate     DateTime? @map("departure_date") @db.Date
+  travelStyle       String?   @map("travel_style") @db.VarChar(50)
+  interests         Json?     @default("[]") @map("interests")
+  accommodationType String?   @map("accommodation_type") @db.VarChar(50)
+  roleId            Int       @default(1) @map("role_id")
+  isEmailVerified   Boolean   @default(false) @map("is_email_verified")
+  isActive          Boolean   @default(true) @map("is_active")
+  isBanned          Boolean   @default(false) @map("is_banned")
+  xp                Int       @default(0)
+  level             Int       @default(1)
+  lastLoginAt       DateTime? @map("last_login_at") @db.Timestamptz
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
-  role                  Role                     @relation(fields: [roleId], references: [id])
+  role                    Role                     @relation(fields: [roleId], references: [id])
   emailVerificationTokens EmailVerificationToken[]
-  passwordResetTokens    PasswordResetToken[]
-  refreshTokens          RefreshToken[]
-  userBadges             UserBadge[]
-  xpTransactions         XpTransaction[]
-  auditLogsAsActor       AuditLog[]             @relation("ActorAuditLogs")
-  auditLogsAsTarget      AuditLog[]             @relation("TargetAuditLogs")
-  conversations          Conversation[]
-  tripHistories          TripHistory[]
-  userPreferences        UserPreference[]
-  userFeedbacks          UserFeedback[]
-  interactionSummaries   InteractionSummary[]
+  passwordResetTokens     PasswordResetToken[]
+  refreshTokens           RefreshToken[]
+  userBadges              UserBadge[]
+  xpTransactions          XpTransaction[]
+  auditLogsAsActor        AuditLog[]               @relation("ActorAuditLogs")
+  auditLogsAsTarget       AuditLog[]               @relation("TargetAuditLogs")
+  conversations           Conversation[]
+  tripHistories           TripHistory[]
+  userPreferences         UserPreference[]
+  userFeedbacks           UserFeedback[]
+  interactionSummaries    InteractionSummary[]
+  payments                Payment[]
+  subscription            Subscription?
+  tokenTransactions       TokenTransaction[]
 
   @@map("users")
 }
