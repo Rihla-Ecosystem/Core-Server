@@ -31,6 +31,14 @@ const envSchema = z.object({
   CONTEXT_SERVICE_URL: z.string().url().default('http://context-service:3001'),
   GIS_SERVICE_URL: z.string().url().default('http://gis-service:3002'),
   AI_SERVICE_URL: z.string().url().default('http://ai-service:3003'),
+
+  PAYMOB_SECRET_KEY: z.string().min(1),
+  PAYMOB_PUBLIC_KEY: z.string().min(1),
+  PAYMOB_HMAC_SECRET: z.string().min(1),
+  PAYMOB_CARD_INTEGRATION_ID: z.coerce.number().int().positive(),
+  PAYMOB_REDIRECTION_URL: z.string().url(),
+  PAYMOB_NOTIFICATION_URL: z.string().url(),
+  PAYMOB_API_BASE_URL: z.string().url().default('https://accept.paymob.com'),
 });
 
 export const env = envSchema.parse(process.env);

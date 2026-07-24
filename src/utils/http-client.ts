@@ -24,10 +24,17 @@ export async function get<T = unknown>(url: string, params?: Record<string, stri
   return (await res.json()) as T;
 }
 
-export async function post<T = unknown>(url: string, body?: unknown): Promise<T> {
+export async function post<T = unknown>(
+  url: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...headers,
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {

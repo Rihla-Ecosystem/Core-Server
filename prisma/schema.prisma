@@ -22,86 +22,86 @@ enum PaymentStatus {
   REFUNDED
 }
 
-model PaymentPlan {
-  id          Int     @id @default(autoincrement())
-  name        String  @db.VarChar(100)
-  description String? @db.Text
+model TokenPackage {
+  id Int @id @default(autoincrement())
 
-  /// Price in smallest currency unit (e.g. cents or piasters)
-  price Int
+  name        String
+  description String?
+  code        String  @unique
+  price       Decimal @db.Decimal(10,2)
+  currency    String
+  tokens      Int
 
-  currency String @default("EGP") @db.VarChar(10)
-
-  durationDays Int
-
-  maxTrips         Int?
-  maxAiChats       Int?
-  maxUploads       Int?
-  maxMassegsInChat Int?
-  tokens           Int?
-  maxRemper        Int?
+  sortOrder Int @default(0)
 
   isActive Boolean @default(true)
 
-  createdAt DateTime @default(now()) @db.Timestamptz
-  updatedAt DateTime @updatedAt @db.Timestamptz
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  payments      Payment[]
-  subscriptions Subscription[]
-
-  @@map("payment_plans")
+  payments Payment[]
 }
 
 model Payment {
   id String @id @default(uuid()) @db.Uuid
 
-  userId        String @db.Uuid
-  paymentPlanId Int
+  userId         String @db.Uuid
+  tokenPackageId Int
 
-  amount   Int
-  currency String @default("EGP") @db.VarChar(10)
+  amount Decimal @db.Decimal(10,2)
+  currency    String
+  status   PaymentStatus @default(PENDING)
 
-  status PaymentStatus @default(PENDING)
+  packageNameSnapshot String
+  tokensSnapshot      Int
+  priceSnapshot Decimal @db.Decimal(10,2)
+  currencySnapshot    String
 
-  transactionId String? @unique @map("transaction_id") @db.VarChar(255)
+  // Payment method
+  provider            String  @default("PAYMOB")
+  providerIntentionId String? @unique
+  providerOrderId     String?
+  providerTransactionId String? @unique
 
-  provider String? @db.VarChar(100)
+  failureReason String?
+  providerData  Json?
 
-  paidAt DateTime? @db.Timestamptz
+  paidAt        DateTime?
 
-  createdAt DateTime @default(now()) @db.Timestamptz
-  updatedAt DateTime @updatedAt @db.Timestamptz
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  paymentPlan PaymentPlan @relation(fields: [paymentPlanId], references: [id])
-
-  @@index([userId])
-  @@index([status])
-  @@index([paymentPlanId])
-  @@map("payments")
-}
-
-enum SubscriptionStatus {
-  ACTIVE
-  EXPIRED
-  CANCELLED
-}
-
-model Subscription {
-  id String @id @default(uuid()) @db.Uuid
-
-  userId        String @unique @db.Uuid
-  paymentPlanId Int
-
-  startDate DateTime
-  endDate   DateTime
-
-  status SubscriptionStatus @default(ACTIVE)
-
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  paymentPlan PaymentPlan @relation(fields: [paymentPlanId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   tokenTransactions TokenTransaction[]
+
+  tokenPackage TokenPackage @relation(fields: [tokenPackageId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([tokenPackageId])
+  @@index([status])
+  @@index([status, createdAt])
+}
+
+enum WalletStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+model TokenWallet {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId  String @unique @db.Uuid
+  tokenBalance Int    @default(0)
+
+  status WalletStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User               @relation(fields: [userId], references: [id], onDelete: Restrict)
+  transactions TokenTransaction[]
 }
 
 enum TokenTransactionType {
@@ -110,32 +110,51 @@ enum TokenTransactionType {
   REFUND
   BONUS
   ADJUSTMENT
-  EXPIRE
+}
+
+enum TokenTransactionSource {
+  CHAT
+  IMAGE
+  FILE_UPLOAD
+  OCR
+  VOICE
+  PURCHASE
+  ADMIN
 }
 
 model TokenTransaction {
   id String @id @default(uuid()) @db.Uuid
 
-  subscriptionId String @db.Uuid
-  userId         String @db.Uuid
+  walletId String @db.Uuid
+  userId String @db.Uuid
 
   type TokenTransactionType
 
-  amount Int
+  tokens Int
 
-  source String?
+  source TokenTransactionSource
+
+  paymentId String? @db.Uuid
 
   referenceId String?
-  metadata    Json?
+  metadata Json?
 
   createdAt DateTime @default(now())
 
-  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet TokenWallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
 
-  @@index([subscriptionId])
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@unique([source, referenceId])
+  @@index([userId, createdAt])
   @@index([userId])
+  @@index([walletId])
   @@index([type])
+  @@index([paymentId])
+  @@index([createdAt])
+  @@index([source])
 }
 
 model Role {
@@ -167,6 +186,11 @@ model User {
   isEmailVerified   Boolean   @default(false) @map("is_email_verified")
   isActive          Boolean   @default(true) @map("is_active")
   isBanned          Boolean   @default(false) @map("is_banned")
+
+  // Soft Delete
+  isDeleted         Boolean   @default(false) @map("is_deleted")
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamptz
+
   xp                Int       @default(0)
   level             Int       @default(1)
   lastLoginAt       DateTime? @map("last_login_at") @db.Timestamptz
@@ -187,7 +211,7 @@ model User {
   userFeedbacks           UserFeedback[]
   interactionSummaries    InteractionSummary[]
   payments                Payment[]
-  subscription            Subscription?
+  tokenWallet            TokenWallet?
   tokenTransactions       TokenTransaction[]
 
   @@map("users")
