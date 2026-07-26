@@ -168,6 +168,18 @@ const options: swaggerJsdoc.Options = {
             overview: { type: 'object', nullable: true, additionalProperties: true },
           },
         },
+        GeoContext: {
+          type: 'object',
+          properties: {
+            pois: {
+              type: 'array',
+              items: { type: 'object', additionalProperties: true },
+              nullable: true,
+            },
+            route: { type: 'object', nullable: true, additionalProperties: true },
+            geocode: { type: 'object', nullable: true, additionalProperties: true },
+          },
+        },
       },
     },
     tags: [
@@ -175,6 +187,7 @@ const options: swaggerJsdoc.Options = {
       { name: 'Users', description: 'User profile & badges' },
       { name: 'Admin', description: 'Admin & moderator endpoints' },
       { name: 'Environment', description: 'Environment endpoints' },
+      { name: 'Geo', description: 'Geo endpoints' },
       { name: 'System', description: 'Health & documentation' },
     ],
   },
