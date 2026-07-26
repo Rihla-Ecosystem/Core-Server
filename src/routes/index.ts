@@ -7,6 +7,8 @@ import envRoutes from './env.routes.js';
 import geoRoutes from './geo.routes.js';
 import chatRoutes from './chat.routes.js';
 import paymentRoutes from './payment.routes.js';
+import tokenPackageRoutes from './token-package.routes.js';
+import tokenRoutes from './token.routes.js';
 import * as userController from '../controllers/user.controller.js';
 
 const router = Router();
@@ -19,7 +21,10 @@ router.use('/env', envRoutes);
 router.use('/geo', geoRoutes);
 router.use('/chat', chatRoutes);
 router.use('/payments', paymentRoutes);
+router.use('/token-packages', tokenPackageRoutes);
+router.use('/tokens', tokenRoutes);
 
 router.get('/leaderboard', userController.getLeaderboard);
 
 export default router;
+
