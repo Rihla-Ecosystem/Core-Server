@@ -159,12 +159,35 @@ const options: swaggerJsdoc.Options = {
           type: 'object',
           properties: { avatarUrl: { type: 'string', nullable: true } },
         },
+        EnvContext: {
+          type: 'object',
+          properties: {
+            weather: { type: 'object', nullable: true, additionalProperties: true },
+            airQuality: { type: 'object', nullable: true, additionalProperties: true },
+            prayerTimes: { type: 'object', nullable: true, additionalProperties: true },
+            overview: { type: 'object', nullable: true, additionalProperties: true },
+          },
+        },
+        GeoContext: {
+          type: 'object',
+          properties: {
+            pois: {
+              type: 'array',
+              items: { type: 'object', additionalProperties: true },
+              nullable: true,
+            },
+            route: { type: 'object', nullable: true, additionalProperties: true },
+            geocode: { type: 'object', nullable: true, additionalProperties: true },
+          },
+        },
       },
     },
     tags: [
       { name: 'Auth', description: 'Authentication endpoints' },
       { name: 'Users', description: 'User profile & badges' },
       { name: 'Admin', description: 'Admin & moderator endpoints' },
+      { name: 'Environment', description: 'Environment endpoints' },
+      { name: 'Geo', description: 'Geo endpoints' },
       { name: 'System', description: 'Health & documentation' },
     ],
   },

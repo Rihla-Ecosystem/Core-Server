@@ -11,6 +11,35 @@ const envQuerySchema = z.object({
   lon: z.coerce.number().min(-180).max(180),
 });
 
+/**
+ * @openapi
+ * /env:
+ *   get:
+ *     tags: [Environment]
+ *     summary: Get environmental context
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: lat
+ *         required: true
+ *         schema: { type: number }
+ *       - in: query
+ *         name: lon
+ *         required: true
+ *         schema: { type: number }
+ *     responses:
+ *       200:
+ *         description: Environmental context
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/EnvContext'
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Authentication required
+ */
 router.get('/', authenticate, validate(envQuerySchema, 'query'), async (req, res, next) => {
   try {
     const { lat, lon } = req.query as unknown as { lat: number; lon: number };

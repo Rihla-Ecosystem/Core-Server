@@ -19,6 +19,41 @@ const searchQuerySchema = z.object({
   lon: z.coerce.number().min(-180).max(180).optional(),
 });
 
+/**
+ * @openapi
+ * /geo/pois:
+ *   get:
+ *     tags: [Geo]
+ *     summary: Get points of interest
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: lat
+ *         required: true
+ *         schema: { type: number }
+ *       - in: query
+ *         name: lon
+ *         required: true
+ *         schema: { type: number }
+ *       - in: query
+ *         name: radius
+ *         schema: { type: number }
+ *       - in: query
+ *         name: categories
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Points of interest
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/GeoContext'
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Authentication required
+ */
 router.get('/pois', authenticate, validate(poisQuerySchema, 'query'), async (req, res, next) => {
   try {
     const { lat, lon, radius, categories } = req.query as unknown as { lat: number; lon: number; radius?: number; categories?: string };
@@ -29,6 +64,37 @@ router.get('/pois', authenticate, validate(poisQuerySchema, 'query'), async (req
   }
 });
 
+/**
+ * @openapi
+ * /geo/search:
+ *   get:
+ *     tags: [Geo]
+ *     summary: Search places
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: q
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: lat
+ *         schema: { type: number }
+ *       - in: query
+ *         name: lon
+ *         schema: { type: number }
+ *     responses:
+ *       200:
+ *         description: Search results
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/GeoContext'
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Authentication required
+ */
 router.get('/search', authenticate, validate(searchQuerySchema, 'query'), async (req, res, next) => {
   try {
     const { q, lat, lon } = req.query as unknown as { q: string; lat?: number; lon?: number };
