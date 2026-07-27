@@ -33,7 +33,28 @@ async function main() {
     });
   }
 
-  console.log('Seeded roles and badges');
+  const journey = await prisma.journey.upsert({
+    where: { slug: 'scam-smart-traveler' },
+    update: { title: 'Scam-Smart Traveler', description: 'Learn practical ways to recognize and avoid common travel scams in Egypt.', xpReward: 50, isActive: true },
+    create: { slug: 'scam-smart-traveler', title: 'Scam-Smart Traveler', description: 'Learn practical ways to recognize and avoid common travel scams in Egypt.', xpReward: 50, isActive: true },
+  });
+  const steps = [
+    { stepNumber: 1, title: 'Confirm the price and currency', content: 'Agree on the total price and currency before accepting a ride, service, or tour.', xpReward: 10 },
+    { stepNumber: 2, title: 'Use official channels', content: 'Prefer official entrances, licensed guides, and app-based transport when available.', xpReward: 10 },
+    { stepNumber: 3, title: 'Protect your documents and payment cards', content: 'Keep passports, cards, and PINs private; use secure payment methods.', xpReward: 10 },
+    { stepNumber: 4, title: 'Pause when pressured', content: 'Walk away from unexpected urgency, free gifts, or requests to change the agreed deal.', xpReward: 10 },
+    { stepNumber: 5, title: 'Know how to report a problem', content: 'Keep receipts and contact the official venue, accommodation, or local emergency service when needed.', xpReward: 10 },
+  ];
+  for (const step of steps) {
+    await prisma.journeyStep.upsert({ where: { journeyId_stepNumber: { journeyId: journey.id, stepNumber: step.stepNumber } }, update: step, create: { ...step, journeyId: journey.id } });
+  }
+  await prisma.badge.upsert({
+    where: { name: 'Scam-Smart Traveler' },
+    update: { description: 'Complete the Scam-Smart Traveler journey', criteriaType: 'journey_complete', criteriaValue: null },
+    create: { name: 'Scam-Smart Traveler', description: 'Complete the Scam-Smart Traveler journey', criteriaType: 'journey_complete' },
+  });
+
+  console.log('Seeded roles, badges, and journeys');
 }
 
 main()
