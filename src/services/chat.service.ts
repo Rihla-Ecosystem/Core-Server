@@ -3,7 +3,12 @@ import { env } from '../config/env.js';
 import { post } from '../utils/http-client.js';
 import { fetchEnvContext } from './env.service.js';
 import { fetchPois } from './geo.service.js';
+import { fetchSafetyContext } from './risk.service.js';
+import { getExchangeRates, isSupportedCurrency } from './currency.service.js';
+import { getJourneyProgress } from './internal.service.js';
 import { AppError } from '../middleware/errorHandler.js';
+
+export type ChatPersona = 'auto' | 'tour_guide' | 'local_expert' | 'safety_guru';
 
 export async function chat(
   userId: string,
@@ -12,6 +17,9 @@ export async function chat(
     lat?: number;
     lon?: number;
     conversationId?: string;
+    authorization?: string;
+    baseCurrency?: string;
+    persona?: ChatPersona;
   },
 ) {
   const user = await prisma.user.findUnique({
@@ -39,13 +47,20 @@ export async function chat(
 
   let envContext: unknown = null;
   let geoContext: unknown = null;
+  let safetyContext: unknown = null;
+  let currencyContext: unknown = null;
 
   if (options?.lat !== undefined && options?.lon !== undefined) {
-    [envContext, geoContext] = await Promise.all([
-      fetchEnvContext(options.lat, options.lon).catch(() => null),
-      fetchPois(options.lat, options.lon).catch(() => null),
+    [envContext, geoContext, safetyContext, currencyContext] = await Promise.all([
+      fetchEnvContext(options.lat, options.lon, options.authorization).catch(() => null),
+      fetchPois(options.lat, options.lon, undefined, undefined, options.authorization).catch(() => null),
+      fetchSafetyContext(options.lat, options.lon, options.authorization),
+      options.baseCurrency && isSupportedCurrency(options.baseCurrency) ? getExchangeRates(options.baseCurrency) : Promise.resolve(null),
     ]);
   }
+
+  // Always fetch journey progress for gamification context (Task 8.6)
+  const journeyProgress = await getJourneyProgress(userId).catch(() => null);
 
   let conversationId = options?.conversationId;
   if (!conversationId) {
@@ -56,6 +71,12 @@ export async function chat(
   }
   const cid = conversationId!;
 
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: cid, userId },
+    include: { messages: { orderBy: { createdAt: 'desc' }, take: 20, select: { role: true, content: true } } },
+  });
+  if (!conversation) throw new AppError(404, 'Conversation not found');
+
   await prisma.message.create({
     data: { conversationId: cid, role: 'user', content: message },
   });
@@ -63,6 +84,7 @@ export async function chat(
   const aiPayload: Record<string, unknown> = {
     message,
     conversation_id: cid,
+    persona: options?.persona ?? 'auto',
     user: {
       display_name: user.displayName,
       gender: user.gender,
@@ -74,13 +96,23 @@ export async function chat(
       accommodation_type: user.accommodationType,
       preferences: prefs,
     },
+    history: conversation.messages.reverse().map((item) => ({ role: item.role, content: item.content })),
   };
+  if (options?.lat !== undefined) aiPayload.lat = options.lat;
+  if (options?.lon !== undefined) aiPayload.lon = options.lon;
   if (envContext) aiPayload.environment = envContext;
   if (geoContext) aiPayload.geography = geoContext;
+  if (safetyContext) aiPayload.safety = safetyContext;
+  if (currencyContext) aiPayload.currency = currencyContext;
+  if (journeyProgress) aiPayload.user_journeys = journeyProgress;
 
-  const aiResponse = await post<{ response: string; context?: unknown }>(
+  const aiResponse = await post<{ response: string; context?: unknown; persona?: string; blocked?: boolean; reason?: string | null }>(
     `${env.AI_SERVICE_URL}/chat`,
     aiPayload,
+    {
+      ...(options?.authorization ? { Authorization: options.authorization } : {}),
+      'X-Internal-Api-Key': env.INTERNAL_API_KEY,
+    },
   ).catch(() => {
     throw new AppError(502, 'AI service unavailable');
   });
@@ -96,9 +128,15 @@ export async function chat(
   const result: Record<string, unknown> = {
     response: aiResponse.response,
     conversation_id: cid,
+    persona: aiResponse.persona ?? options?.persona ?? 'auto',
   };
+  if (aiResponse.blocked != null) result.blocked = aiResponse.blocked;
+  if (aiResponse.reason != null) result.reason = aiResponse.reason;
   if (envContext) result.environment = envContext;
   if (geoContext) result.geography = geoContext;
+  if (safetyContext) result.safety = safetyContext;
+  if (currencyContext) result.currency = currencyContext;
+  if (journeyProgress) result.user_journeys = journeyProgress;
 
   return result;
 }
