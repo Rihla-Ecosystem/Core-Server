@@ -1,8 +1,10 @@
 import { Request } from 'express';
 
 export interface AuthPayload {
-  userId: string;
+  sub: string;
   role: string;
+  exp: number;
+  userId: string;
 }
 
 declare global {
