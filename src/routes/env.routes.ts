@@ -43,7 +43,7 @@ const envQuerySchema = z.object({
 router.get('/', authenticate, validate(envQuerySchema, 'query'), async (req, res, next) => {
   try {
     const { lat, lon } = req.query as unknown as { lat: number; lon: number };
-    const context = await fetchEnvContext(lat, lon);
+    const context = await fetchEnvContext(lat, lon, req.headers.authorization);
     res.json(context);
   } catch (err) {
     next(err);

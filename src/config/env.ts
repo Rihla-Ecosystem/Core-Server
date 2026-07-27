@@ -24,13 +24,25 @@ const envSchema = z.object({
   CLOUDINARY_API_KEY: z.string().min(1),
   CLOUDINARY_API_SECRET: z.string().min(1),
 
-  ADMIN_SESSION_SECRET: z.string().min(32).default('change-me-to-a-long-secret-at-least-32-chars'),
-  ADMIN_EMAIL: z.string().email().default('admin@itihub.com'),
-  ADMIN_PASSWORD: z.string().min(8).default('Admin123!'),
+  ADMIN_SESSION_SECRET: z.string().min(32),
+  ADMIN_EMAIL: z.string().email(),
+  ADMIN_PASSWORD: z.string().min(8),
 
   CONTEXT_SERVICE_URL: z.string().url().default('http://context-service:3001'),
   GIS_SERVICE_URL: z.string().url().default('http://gis-service:3002'),
+  RISK_SERVICE_URL: z.string().url().default('http://risk-intelligence:3004'),
   AI_SERVICE_URL: z.string().url().default('http://ai-service:3003'),
+  INTERNAL_API_KEY: z.string().min(32),
+  // Treat an explicitly empty value in local/test env files as unset.
+  EXCHANGE_RATES_API_KEY: z.preprocess(
+    (value) => value === '' ? undefined : value,
+    z.string().min(1).optional(),
+  ),
+  EXCHANGE_RATES_API_URL: z.string().url().default('https://api.exchangerate.host/latest'),
+  EXCHANGE_RATES_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  WEATHER_SERVICE_URL: z.string().url().optional(),
+  AIR_QUALITY_SERVICE_URL: z.string().url().optional(),
+  PRAYER_TIMES_SERVICE_URL: z.string().url().optional(),
 
   PAYMOB_SECRET_KEY: z.string().min(1),
   PAYMOB_PUBLIC_KEY: z.string().min(1),
