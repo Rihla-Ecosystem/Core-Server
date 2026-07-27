@@ -108,7 +108,7 @@ export async function loginUser(email: string, password: string, ipAddress?: str
   }
 
   const role = await prisma.role.findUniqueOrThrow({ where: { id: user.roleId } });
-  const accessToken = signAccessToken({ userId: user.id, role: role.name });
+  const accessToken = signAccessToken({ sub: user.id, role: role.name });
 
   const { raw, hash } = generateOpaqueToken();
   await prisma.refreshToken.create({
@@ -151,7 +151,7 @@ export async function refreshTokens(refreshToken: string) {
 
   const user = await prisma.user.findUniqueOrThrow({ where: { id: record.userId } });
   const role = await prisma.role.findUniqueOrThrow({ where: { id: user.roleId } });
-  const accessToken = signAccessToken({ userId: user.id, role: role.name });
+  const accessToken = signAccessToken({ sub: user.id, role: role.name });
 
   const { raw, hash: newHash } = generateOpaqueToken();
   await prisma.$transaction([
