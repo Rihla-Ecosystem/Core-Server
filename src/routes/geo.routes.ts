@@ -57,7 +57,7 @@ const searchQuerySchema = z.object({
 router.get('/pois', authenticate, validate(poisQuerySchema, 'query'), async (req, res, next) => {
   try {
     const { lat, lon, radius, categories } = req.query as unknown as { lat: number; lon: number; radius?: number; categories?: string };
-    const result = await fetchPois(lat, lon, radius, categories);
+    const result = await fetchPois(lat, lon, radius, categories, req.headers.authorization);
     res.json(result);
   } catch (err) {
     next(err);
@@ -98,7 +98,7 @@ router.get('/pois', authenticate, validate(poisQuerySchema, 'query'), async (req
 router.get('/search', authenticate, validate(searchQuerySchema, 'query'), async (req, res, next) => {
   try {
     const { q, lat, lon } = req.query as unknown as { q: string; lat?: number; lon?: number };
-    const result = await searchPlaces(q, lat, lon);
+    const result = await searchPlaces(q, lat, lon, req.headers.authorization);
     res.json(result);
   } catch (err) {
     next(err);
