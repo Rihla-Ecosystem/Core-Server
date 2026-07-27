@@ -76,7 +76,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
       },
     });
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const res = await fetch(`${baseUrl}/api/tokens/wallet`, {
@@ -110,7 +110,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
       },
     });
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const res = await fetch(`${baseUrl}/api/tokens/wallet`, {
@@ -143,7 +143,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
       },
     });
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const walletBefore = await prisma.tokenWallet.findUnique({
@@ -202,8 +202,8 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
       },
     });
 
-    const tokenA = signAccessToken({ userId: userA.id, role: 'USER' });
-    const tokenB = signAccessToken({ userId: userB.id, role: 'USER' });
+    const tokenA = signAccessToken({ sub: userA.id, role: 'USER' });
+    const tokenB = signAccessToken({ sub: userB.id, role: 'USER' });
 
     try {
       const resA = await fetch(`${baseUrl}/api/tokens/wallet`, {
@@ -254,7 +254,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
       data: { userId: userB.id, tokenBalance: 999, status: 'ACTIVE' },
     });
 
-    const tokenA = signAccessToken({ userId: userA.id, role: 'USER' });
+    const tokenA = signAccessToken({ sub: userA.id, role: 'USER' });
 
     try {
       // User A attempts to pass User B's ID in query parameter
@@ -304,7 +304,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
     const walletB = await prisma.tokenWallet.create({
       data: { userId: userB.id, tokenBalance: 777, status: 'ACTIVE' },
     });
-    const tokenA = signAccessToken({ userId: userA.id, role: 'USER' });
+    const tokenA = signAccessToken({ sub: userA.id, role: 'USER' });
 
     try {
       const bodyPayload = JSON.stringify({ userId: userB.id });
@@ -359,7 +359,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
       data: { userId: user.id, tokenBalance: 500, status: 'ACTIVE' },
     });
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const res = await fetch(`${baseUrl}/api/tokens/wallet`, {
@@ -399,7 +399,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
       data: { userId: user.id, tokenBalance: 600, status: 'ACTIVE' },
     });
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const walletBefore = await prisma.tokenWallet.findUnique({ where: { id: wallet.id } });
@@ -432,7 +432,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
       data: { userId: user.id, tokenBalance: 750, status: 'ACTIVE' },
     });
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       for (let i = 0; i < 3; i++) {

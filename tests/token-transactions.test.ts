@@ -103,7 +103,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
       },
     });
 
-    const tokenA = signAccessToken({ userId: userA.id, role: 'USER' });
+    const tokenA = signAccessToken({ sub: userA.id, role: 'USER' });
 
     try {
       const res = await fetch(`${baseUrl}/api/tokens/transactions`, {
@@ -168,7 +168,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
       },
     });
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const res = await fetch(`${baseUrl}/api/tokens/transactions`, {
@@ -225,7 +225,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
       },
     });
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const res = await fetch(`${baseUrl}/api/tokens/transactions`, {
@@ -259,7 +259,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
       },
     });
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const res = await fetch(`${baseUrl}/api/tokens/transactions`, {
@@ -308,7 +308,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
       createdIds.push(tx.id);
     }
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const res = await fetch(`${baseUrl}/api/tokens/transactions?page=2&limit=2`, {
@@ -342,7 +342,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
       },
     });
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const res = await fetch(`${baseUrl}/api/tokens/transactions`, {
@@ -370,7 +370,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
         nationality: 'Egyptian',
       },
     });
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     const invalidPages = ['0', '-1', '1.5', 'abc', ''];
 
@@ -399,7 +399,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
         nationality: 'Egyptian',
       },
     });
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     const invalidLimits = ['0', '-5', '2.5', 'xyz', ''];
 
@@ -428,7 +428,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
         nationality: 'Egyptian',
       },
     });
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const res = await fetch(`${baseUrl}/api/tokens/transactions?limit=101`, {
@@ -488,7 +488,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
       },
     });
 
-    const tokenA = signAccessToken({ userId: userA.id, role: 'USER' });
+    const tokenA = signAccessToken({ sub: userA.id, role: 'USER' });
 
     try {
       // Query param attack vector
@@ -567,7 +567,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
       },
     });
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const res = await fetch(`${baseUrl}/api/tokens/transactions`, {
@@ -618,7 +618,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
       },
     });
 
-    const token = signAccessToken({ userId: user.id, role: 'USER' });
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
 
     try {
       const txBefore = await prisma.tokenTransaction.findUnique({ where: { id: tx.id } });
