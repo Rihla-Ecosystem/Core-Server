@@ -1,0 +1,192 @@
+# ---------------------------------------------------------------
+# Rihla Platform — Root Orchestration
+# Phase 8: All services with shared network, health checks,
+# dependency ordering, and persistent volumes.
+#
+# Prerequisites:
+#   - Copy each service's .env.example to .env and fill real values
+#   - Services expected at sibling paths:
+#       ../Core-Server      (this repo)
+#       ../ai-service
+#       ../GeoContext        (GeoContext service — gis-service)
+#       ../context-service   (environmental context)
+#       ../Risk_Intelligence (risk / safety)
+#
+# Usage:
+#   cd Modules && docker compose up --build
+# ---------------------------------------------------------------
+
+name: rihla
+
+networks:
+  rihla-net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  qdrant_data:
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16
+    container_name: rihla-postgres
+    environment:
+      POSTGRES_USER: core_user
+      POSTGRES_PASSWORD: core_pass
+      POSTGRES_DB: core_server
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - rihla-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U core_user -d core_server"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Qdrant Vector DB (for AI service) ─────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rihla-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT_ALLOW_RECOVERY=true
+    networks:
+      - rihla-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Core Server ────────────────────────────────────────────
+  core-server:
+    build:
+      context: ../../Core-Server
+      dockerfile: Dockerfile
+    container_name: rihla-core-server
+    env_file:
+      - ../../Core-Server/.env
+    environment:
+      DATABASE_URL: postgresql://core_user:core_pass@postgres:5432/core_server
+      GIS_SERVICE_URL: http://gis-service:8000
+      CONTEXT_SERVICE_URL: http://context-service:3001
+      RISK_SERVICE_URL: http://risk-intelligence:3004
+      AI_SERVICE_URL: http://ai-service:3003
+    ports:
+      - "3000:3000"
+    networks:
+      - rihla-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── AI Service ─────────────────────────────────────────────
+  ai-service:
+    build:
+      context: ../../ai-service
+      dockerfile: Dockerfile
+    container_name: rihla-ai-service
+    env_file:
+      - ../../ai-service/.env
+    environment:
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: "6333"
+      GIS_SERVICE_URL: http://gis-service:8000
+      RISK_SERVICE_URL: http://risk-intelligence:3004
+      CORE_SERVER_URL: http://core-server:3000
+    ports:
+      - "3003:3003"
+    volumes:
+      - ../../ai-service/data:/app/data
+    networks:
+      - rihla-net
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      core-server:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── GeoContext Service (GIS) ───────────────────────────────
+  # Expected service exposing:
+  #   GET /api/v1/nearby-sites  (params: latitude, longitude, radius, categories)
+  #   GET /api/v1/context       (params: q, latitude, longitude)
+  gis-service:
+    build:
+      context: ../../GeoContext
+      dockerfile: Dockerfile
+    container_name: rihla-gis-service
+    env_file:
+      - ../../GeoContext/.env
+    ports:
+      - "8000:8000"
+    networks:
+      - rihla-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Context Service (Environmental) ───────────────────────
+  # Expected service exposing:
+  #   GET /weather       (params: lat, lon)
+  #   GET /air-quality   (params: lat, lon)
+  #   GET /prayer-times  (params: lat, lon)
+  #   GET /overview      (params: lat, lon)
+  context-service:
+    build:
+      context: ../../context-service
+      dockerfile: Dockerfile
+    container_name: rihla-context-service
+    env_file:
+      - ../../context-service/.env
+    ports:
+      - "3001:3001"
+    networks:
+      - rihla-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Risk Intelligence Service ──────────────────────────────
+  # Expected service exposing:
+  #   GET /api/v1/safety  (params: latitude, longitude)
+  risk-intelligence:
+    build:
+      context: ../../Risk_Intelligence
+      dockerfile: Dockerfile
+    container_name: rihla-risk-intelligence
+    env_file:
+      - ../../Risk_Intelligence/.env
+    ports:
+      - "3004:3004"
+    networks:
+      - rihla-net
+    environment:
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3004/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
