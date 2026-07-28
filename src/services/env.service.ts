@@ -1,6 +1,3 @@
-import { env } from '../config/env.js';
-import { get } from '../utils/http-client.js';
-
 export interface EnvContext {
   weather?: unknown;
   airQuality?: unknown;
@@ -10,16 +7,8 @@ export interface EnvContext {
   overview?: unknown;
 }
 
-export async function fetchEnvContext(lat: number, lon: number, authorization?: string): Promise<EnvContext> {
-  const base = env.CONTEXT_SERVICE_URL;
-  const headers = authorization ? { Authorization: authorization } : undefined;
-
-  const [weather, airQuality, prayerTimes, overview] = await Promise.all([
-    get(`${base}/weather`, { lat, lon }, headers).catch(() => null),
-    get(`${base}/air-quality`, { lat, lon }, headers).catch(() => null),
-    get(`${base}/prayer-times`, { lat, lon }, headers).catch(() => null),
-    get(`${base}/overview`, { lat, lon }, headers).catch(() => null),
-  ]);
-
-  return { weather, airQuality, prayerTimes, overview };
+export async function fetchEnvContext(_lat: number, _lon: number, _authorization?: string): Promise<EnvContext> {
+  // Environmental context service (weather, air quality, prayer times) is not yet implemented.
+  // See Task 6 in IMPLEMENTATION_PLAN.md for future work.
+  return {};
 }

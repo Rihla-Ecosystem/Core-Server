@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
-import { fetchPois, searchPlaces } from '../services/geo.service.js';
+import { fetchPois, searchPlaces, fetchSitesByGovernorate } from '../services/geo.service.js';
 
 const router = Router();
 
@@ -99,6 +99,21 @@ router.get('/search', authenticate, validate(searchQuerySchema, 'query'), async 
   try {
     const { q, lat, lon } = req.query as unknown as { q: string; lat?: number; lon?: number };
     const result = await searchPlaces(q, lat, lon, req.headers.authorization);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const governorateSchema = z.object({
+  governorate_name: z.string().min(1),
+  category: z.string().optional(),
+});
+
+router.get('/sites-by-governorate', authenticate, validate(governorateSchema, 'query'), async (req, res, next) => {
+  try {
+    const { governorate_name, category } = req.query as unknown as { governorate_name: string; category?: string };
+    const result = await fetchSitesByGovernorate(governorate_name, category, req.headers.authorization);
     res.json(result);
   } catch (err) {
     next(err);
