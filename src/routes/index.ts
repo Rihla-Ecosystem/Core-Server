@@ -6,6 +6,7 @@ import memoryRoutes from './memory.routes.js';
 import envRoutes from './env.routes.js';
 import geoRoutes from './geo.routes.js';
 import chatRoutes from './chat.routes.js';
+import riskRoutes from './risk.routes.js';
 import * as userController from '../controllers/user.controller.js';
 
 const router = Router();
@@ -17,6 +18,7 @@ router.use('/memory', memoryRoutes);
 router.use('/env', envRoutes);
 router.use('/geo', geoRoutes);
 router.use('/chat', chatRoutes);
+router.use('/risk', riskRoutes);
 
 router.get('/leaderboard', userController.getLeaderboard);
 
