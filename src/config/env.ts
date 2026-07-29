@@ -28,9 +28,12 @@ const envSchema = z.object({
   ADMIN_EMAIL: z.string().email().default('admin@itihub.com'),
   ADMIN_PASSWORD: z.string().min(8).default('Admin123!'),
 
-  CONTEXT_SERVICE_URL: z.string().url().default('http://context-service:3001'),
-  GIS_SERVICE_URL: z.string().url().default('http://gis-service:3002'),
+  // Context service (weather, air quality, prayer times) — not yet implemented
+  CONTEXT_SERVICE_URL: z.string().url().optional(),
+  GIS_SERVICE_URL: z.string().url().default('http://gis-service:8000'),
+  RISK_SERVICE_URL: z.string().url().default('http://risk-intelligence:3000'),
   AI_SERVICE_URL: z.string().url().default('http://ai-service:3003'),
+  INTERNAL_API_KEY: z.string().min(1).default('rihla-internal-dev-key'),
 });
 
 export const env = envSchema.parse(process.env);

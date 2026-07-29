@@ -12,6 +12,7 @@ export interface EnvContext {
 
 export async function fetchEnvContext(lat: number, lon: number): Promise<EnvContext> {
   const base = env.CONTEXT_SERVICE_URL;
+  if (!base) return {}; // Context service not configured
 
   const [weather, airQuality, prayerTimes, overview] = await Promise.all([
     get(`${base}/weather`, { lat, lon }).catch(() => null),
