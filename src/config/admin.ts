@@ -11,8 +11,16 @@ export async function getAdminRouter(): Promise<Router> {
   const { Database, Resource } = await import('@adminjs/prisma');
   AdminJS.registerAdapter({ Database, Resource } as any);
 
+  const { Prisma } = await import('@prisma/client');
+  // Patch prisma client for @adminjs/prisma v3 compatibility with Prisma v5+
+  if (!(prisma as any)._baseDmmf) {
+    (prisma as any)._baseDmmf = {
+      modelMap: Prisma.dmmf.datamodel.models,
+    };
+  }
+
   const admin = new AdminJS({
-    databases: [{ client: prisma }],
+    databases: [prisma],
     rootPath: '/admin-panel',
     loginPath: '/admin-panel/login',
     logoutPath: '/admin-panel/logout',
@@ -20,9 +28,10 @@ export async function getAdminRouter(): Promise<Router> {
     branding: { companyName: 'ITI Hub' },
   } as any);
 
-  const { default: AdminJSExpress } = await import('@adminjs/express');
+  const adminjsExpressModule = (await import('@adminjs/express')) as any;
+  const buildAuthRouter = adminjsExpressModule.buildAuthenticatedRouter || adminjsExpressModule.default?.buildAuthenticatedRouter;
 
-  adminRouter = AdminJSExpress.buildAuthenticatedRouter(
+  adminRouter = buildAuthRouter(
     admin,
     {
       authenticate: async (email: string, password: string) => {
@@ -36,6 +45,10 @@ export async function getAdminRouter(): Promise<Router> {
     undefined,
     { secret: env.ADMIN_SESSION_SECRET, resave: false, saveUninitialized: false } as any,
   );
+
+  if (!adminRouter) {
+    throw new Error('Failed to initialize admin router');
+  }
 
   return adminRouter;
 }

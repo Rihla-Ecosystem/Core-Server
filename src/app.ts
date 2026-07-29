@@ -23,7 +23,7 @@ app.get('/api/docs.json', (_req, res) => {
 });
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-app.get('/health', (_req, res) => {
+app.get('/healthz', (_req, res) => {
   res.json({ status: 'ok' });
 });
 

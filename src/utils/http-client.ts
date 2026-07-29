@@ -9,7 +9,11 @@ export class HttpClientError extends Error {
   }
 }
 
-export async function get<T = unknown>(url: string, params?: Record<string, string | number | undefined>): Promise<T> {
+export async function get<T = unknown>(
+  url: string,
+  params?: Record<string, string | number | undefined>,
+  headers?: Record<string, string>,
+): Promise<T> {
   const searchParams = new URLSearchParams();
   if (params) {
     for (const [key, value] of Object.entries(params)) {
@@ -17,17 +21,21 @@ export async function get<T = unknown>(url: string, params?: Record<string, stri
     }
   }
   const fullUrl = searchParams.toString() ? `${url}?${searchParams}` : url;
-  const res = await fetch(fullUrl);
+  const res = await fetch(fullUrl, { headers });
   if (!res.ok) {
     throw new HttpClientError(res.status, `GET ${fullUrl} failed with ${res.status}`);
   }
   return (await res.json()) as T;
 }
 
-export async function post<T = unknown>(url: string, body?: unknown): Promise<T> {
+export async function post<T = unknown>(
+  url: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
