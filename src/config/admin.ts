@@ -20,9 +20,10 @@ export async function getAdminRouter(): Promise<Router> {
     branding: { companyName: 'ITI Hub' },
   } as any);
 
-  const { default: AdminJSExpress } = await import('@adminjs/express');
+  const adminjsExpressModule = (await import('@adminjs/express')) as any;
+  const buildAuthRouter = adminjsExpressModule.buildAuthenticatedRouter || adminjsExpressModule.default?.buildAuthenticatedRouter;
 
-  adminRouter = AdminJSExpress.buildAuthenticatedRouter(
+  adminRouter = buildAuthRouter(
     admin,
     {
       authenticate: async (email: string, password: string) => {
@@ -36,6 +37,10 @@ export async function getAdminRouter(): Promise<Router> {
     undefined,
     { secret: env.ADMIN_SESSION_SECRET, resave: false, saveUninitialized: false } as any,
   );
+
+  if (!adminRouter) {
+    throw new Error('Failed to initialize admin router');
+  }
 
   return adminRouter;
 }
