@@ -2,7 +2,7 @@ import { prisma } from '../config/prisma.js';
 import { env } from '../config/env.js';
 import { post } from '../utils/http-client.js';
 import { fetchEnvContext } from './env.service.js';
-import { fetchPois } from './geo.service.js';
+import { fetchSpatialContext } from './geo.service.js';
 import { AppError } from '../middleware/errorHandler.js';
 
 export async function chat(
@@ -43,7 +43,7 @@ export async function chat(
   if (options?.lat !== undefined && options?.lon !== undefined) {
     [envContext, geoContext] = await Promise.all([
       fetchEnvContext(options.lat, options.lon).catch(() => null),
-      fetchPois(options.lat, options.lon).catch(() => null),
+      fetchSpatialContext(options.lat, options.lon).catch(() => null),
     ]);
   }
 
