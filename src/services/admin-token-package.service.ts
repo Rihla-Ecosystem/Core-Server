@@ -1,7 +1,11 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
-import type { AdminTokenPackageListQuery, AdminTokenPackageCreateBody } from '../schemas/admin-token-package.schema.js';
+import type {
+  AdminTokenPackageListQuery,
+  AdminTokenPackageCreateBody,
+  AdminTokenPackageUpdateBody,
+} from '../schemas/admin-token-package.schema.js';
 
 export interface AdminTokenPackage {
   id: number;
@@ -221,4 +225,87 @@ export async function createAdminTokenPackage(
     }
     throw err;
   }
+}
+
+export async function updateAdminTokenPackage(
+  id: number,
+  input: AdminTokenPackageUpdateBody,
+  actorId: string,
+): Promise<AdminTokenPackage> {
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.tokenPackage.findUnique({
+      where: { id },
+      select: adminTokenPackageSelectFields,
+    });
+
+    if (!existing) {
+      throw new AppError(404, 'Token package not found');
+    }
+
+    const updateData: Prisma.TokenPackageUpdateInput = {};
+
+    if (input.name !== undefined) {
+      updateData.name = input.name;
+    }
+    if (input.description !== undefined) {
+      updateData.description = input.description;
+    }
+    if (input.price !== undefined) {
+      updateData.price = input.price;
+    }
+    if (input.currency !== undefined) {
+      updateData.currency = input.currency;
+    }
+    if (input.tokens !== undefined) {
+      updateData.tokens = input.tokens;
+    }
+    if (input.sortOrder !== undefined) {
+      updateData.sortOrder = input.sortOrder;
+    }
+
+    const updated = await tx.tokenPackage.update({
+      where: { id },
+      data: updateData,
+      select: adminTokenPackageSelectFields,
+    });
+
+    const changedFields: string[] = [];
+
+    if (input.name !== undefined) changedFields.push('name');
+    if (input.description !== undefined) changedFields.push('description');
+    if (input.price !== undefined) changedFields.push('price');
+    if (input.currency !== undefined) changedFields.push('currency');
+    if (input.tokens !== undefined) changedFields.push('tokens');
+    if (input.sortOrder !== undefined) changedFields.push('sortOrder');
+
+    await tx.auditLog.create({
+      data: {
+        actorId,
+        action: 'token_package_updated',
+        metadata: {
+          tokenPackageId: updated.id,
+          code: updated.code,
+          changedFields,
+          before: {
+            name: existing.name,
+            description: existing.description,
+            price: existing.price.toString(),
+            currency: existing.currency,
+            tokens: existing.tokens,
+            sortOrder: existing.sortOrder,
+          },
+          after: {
+            name: updated.name,
+            description: updated.description,
+            price: updated.price.toString(),
+            currency: updated.currency,
+            tokens: updated.tokens,
+            sortOrder: updated.sortOrder,
+          },
+        },
+      },
+    });
+
+    return toAdminTokenPackage(updated);
+  });
 }

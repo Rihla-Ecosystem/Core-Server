@@ -46,7 +46,9 @@ async function cleanupTestData(): Promise<void> {
   });
   await prisma.auditLog.deleteMany({
     where: {
-      action: 'token_package_created',
+      action: {
+        in: ['token_package_created', 'token_package_updated'],
+      },
       actorId: { in: [ADMIN_USER_ID, MISSING_ADMIN_USER_ID] },
     },
   });
@@ -168,8 +170,22 @@ type TestTokenPackageOverrides = Partial<
     return { status: res.status, body: responseBody };
   }
 
+  async function patchPackage(id: number | string, body: Record<string, unknown>, token: string = ADMIN_TOKEN) {
+    const res = await fetch(`${baseUrl}/api/admin/token-packages/${id}`, {
+      method: 'PATCH',
+      headers: jsonHeaders(token),
+      body: JSON.stringify(body),
+    });
+    const responseBody = await res.json();
+    return { status: res.status, body: responseBody };
+  }
+
   function isJsonObject(val: unknown): val is Record<string, unknown> {
     return typeof val === 'object' && val !== null && !Array.isArray(val);
+  }
+
+  function isStringArray(value: unknown): value is string[] {
+    return Array.isArray(value) && value.every((item) => typeof item === 'string');
   }
 
   /* ---------- Auth & Authorization ---------- */
@@ -1046,6 +1062,537 @@ type TestTokenPackageOverrides = Partial<
     } finally {
       await prisma.tokenPackage.deleteMany({ where: { code: unrelatedCode } });
       await prisma.tokenPackage.deleteMany({ where: { code: `TEST_ADMIN_TP_UNREL_${suffix}` } });
+    }
+  });
+
+  /* ---------- PATCH /api/admin/token-packages/:id ---------- */
+
+  test('34. PATCH without JWT returns 401', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_PATCHNOAUTH_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: { name: 'Patch No Auth', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1 },
+    });
+
+    try {
+      const res = await fetch(`${baseUrl}/api/admin/token-packages/${pkg.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Hacked' }),
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 401);
+      assert.ok(body.error);
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.equal(dbPkg?.name, 'Patch No Auth');
+
+      const audit = await prisma.auditLog.findFirst({
+        where: { action: 'token_package_updated', metadata: { path: ['tokenPackageId'], equals: pkg.id } },
+      });
+      assert.equal(audit, null);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('35. PATCH with USER role returns 403', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_PATCHFORBID_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: { name: 'Patch Forbid', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1 },
+    });
+
+    try {
+      const { status, body } = await patchPackage(pkg.id, { name: 'Forbidden Update' }, USER_TOKEN);
+
+      assert.equal(status, 403);
+      assert.equal(body.error, 'Insufficient permissions');
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.equal(dbPkg?.name, 'Patch Forbid');
+
+      const audit = await prisma.auditLog.findFirst({
+        where: { action: 'token_package_updated', metadata: { path: ['tokenPackageId'], equals: pkg.id } },
+      });
+      assert.equal(audit, null);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('36. Successful partial update returns 200', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_PARTIAL_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: {
+        name: 'Original Name',
+        description: 'Original description',
+        code,
+        price: '25.00',
+        currency: 'EGP',
+        tokens: 100,
+        sortOrder: 5,
+        isActive: false,
+      },
+    });
+
+    try {
+      const { status, body } = await patchPackage(pkg.id, { name: '  Updated Package  ', tokens: 250 });
+
+      assert.equal(status, 200);
+      assert.equal(body.success, true);
+      assert.equal(body.data.id, pkg.id);
+      assert.equal(body.data.name, 'Updated Package');
+      assert.equal(body.data.tokens, 250);
+      assert.equal(body.data.code, code);
+      assert.equal(body.data.description, 'Original description');
+      assert.equal(typeof body.data.price, 'string');
+      assert.equal(body.data.currency, 'EGP');
+      assert.equal(body.data.sortOrder, 5);
+      assert.equal(body.data.isActive, false);
+      assert.equal(body.data.paymentCount, 0);
+      assert.ok(body.data.createdAt);
+      assert.ok(body.data.updatedAt);
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.equal(dbPkg?.name, 'Updated Package');
+      assert.equal(dbPkg?.tokens, 250);
+      assert.equal(dbPkg?.code, code);
+      assert.equal(dbPkg?.description, 'Original description');
+      assert.equal(dbPkg?.isActive, false);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('37. Description can be cleared using null', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_CLEARDESC_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: {
+        name: 'Clear Desc', description: 'Will be cleared', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1,
+      },
+    });
+
+    try {
+      const { status, body } = await patchPackage(pkg.id, { description: null });
+
+      assert.equal(status, 200);
+      assert.equal(body.data.description, null);
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.equal(dbPkg?.description, null);
+      assert.equal(dbPkg?.name, 'Clear Desc');
+      assert.equal(dbPkg?.tokens, 10);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('38. Whitespace-only description becomes null', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_WHITESPACEDESC_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: {
+        name: 'Whitespace Desc', description: 'Will be cleared', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1,
+      },
+    });
+
+    try {
+      const { status, body } = await patchPackage(pkg.id, { description: '   ' });
+
+      assert.equal(status, 200);
+      assert.equal(body.data.description, null);
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.equal(dbPkg?.description, null);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('39. sortOrder zero and multiple updates work', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_SORTZERO_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: {
+        name: 'Sort Zero', description: 'Original', code, price: '10.00', currency: 'EGP', tokens: 10, sortOrder: 5, isActive: true,
+      },
+    });
+
+    try {
+      const { status, body } = await patchPackage(pkg.id, {
+        price: '59.99',
+        currency: 'egp',
+        tokens: 500,
+        sortOrder: 0,
+      });
+
+      assert.equal(status, 200);
+      assert.equal(typeof body.data.price, 'string');
+      assert.equal(parseFloat(body.data.price), 59.99);
+      assert.equal(body.data.currency, 'EGP');
+      assert.equal(body.data.tokens, 500);
+      assert.equal(body.data.sortOrder, 0);
+      assert.equal(body.data.code, code);
+      assert.equal(body.data.isActive, true);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('40. Empty body returns 400', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_EMPTYBODY_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: { name: 'Empty Body', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1 },
+    });
+
+    try {
+      const { status, body } = await patchPackage(pkg.id, {});
+
+      assert.equal(status, 400);
+      assert.equal(body.error, 'Validation error');
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.equal(dbPkg?.name, 'Empty Body');
+
+      const audit = await prisma.auditLog.findFirst({
+        where: { action: 'token_package_updated', metadata: { path: ['tokenPackageId'], equals: pkg.id } },
+      });
+      assert.equal(audit, null);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('41. Forbidden fields are rejected', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_FORBIDDEN_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: { name: 'Forbidden Fields', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1 },
+    });
+
+    const forbiddenCases: { name: string; body: Record<string, unknown> }[] = [
+      { name: 'code', body: { code: 'NEW_CODE' } },
+      { name: 'isActive', body: { isActive: false } },
+      { name: 'id', body: { id: 1 } },
+      { name: 'createdAt', body: { createdAt: '2025-01-01' } },
+      { name: 'updatedAt', body: { updatedAt: '2025-01-01' } },
+      { name: 'unknownField', body: { unknownField: 'x' } },
+    ];
+
+    try {
+      for (const { name, body } of forbiddenCases) {
+        const res = await fetch(`${baseUrl}/api/admin/token-packages/${pkg.id}`, {
+          method: 'PATCH',
+          headers: jsonHeaders(),
+          body: JSON.stringify(body),
+        });
+        const responseBody = await res.json();
+        assert.equal(res.status, 400, `Expected 400 for: ${name}`);
+        assert.equal(responseBody.error, 'Validation error', `Expected Validation error for: ${name}`);
+      }
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.equal(dbPkg?.code, code);
+      assert.equal(dbPkg?.isActive, true);
+
+      const audit = await prisma.auditLog.findFirst({
+        where: { action: 'token_package_updated', metadata: { path: ['tokenPackageId'], equals: pkg.id } },
+      });
+      assert.equal(audit, null);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('42. Invalid update values return 400', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_INVALVALUES_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: { name: 'Invalid Values', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1 },
+    });
+
+    const invalidCases: { name: string; body: Record<string, unknown> }[] = [
+      { name: 'name with one character', body: { name: 'A' } },
+      { name: 'whitespace-only name', body: { name: '   ' } },
+      { name: 'description longer than 500', body: { description: 'x'.repeat(501) } },
+      { name: 'price zero', body: { price: 0 } },
+      { name: 'negative price', body: { price: -5 } },
+      { name: 'price with three decimal places', body: { price: 10.999 } },
+      { name: 'price string "1e3"', body: { price: '1e3' } },
+      { name: 'currency USD', body: { currency: 'USD' } },
+      { name: 'tokens zero', body: { tokens: 0 } },
+      { name: 'tokens fraction', body: { tokens: 1.5 } },
+      { name: 'negative sortOrder', body: { sortOrder: -1 } },
+    ];
+
+    const initialAuditCount = await prisma.auditLog.count({
+      where: { actorId: ADMIN_USER_ID, action: 'token_package_updated' },
+    });
+
+    try {
+      for (const { name, body } of invalidCases) {
+        const { status, body: responseBody } = await patchPackage(pkg.id, body);
+        assert.equal(status, 400, `Expected 400 for: ${name}`);
+        assert.equal(responseBody.error, 'Validation error', `Expected Validation error for: ${name}`);
+      }
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.equal(dbPkg?.name, 'Invalid Values');
+      assert.equal(dbPkg?.tokens, 10);
+      assert.equal(dbPkg?.sortOrder, 1);
+
+      const finalAuditCount = await prisma.auditLog.count({
+        where: { actorId: ADMIN_USER_ID, action: 'token_package_updated' },
+      });
+      assert.equal(finalAuditCount, initialAuditCount);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('43. Invalid IDs return 400', async () => {
+    const validBody = { name: 'Should Not Update' };
+
+    for (const id of ['abc', '0', '-1']) {
+      const { status, body } = await patchPackage(id, validBody);
+      assert.equal(status, 400, `Expected 400 for ID: ${id}`);
+      assert.equal(body.error, 'Validation error', `Expected Validation error for ID: ${id}`);
+    }
+  });
+
+  test('44. Missing package returns 404', async () => {
+    const { status, body } = await patchPackage(999999999, { name: 'Missing Package' });
+
+    assert.equal(status, 404);
+    assert.equal(body.error, 'Token package not found');
+
+    const audit = await prisma.auditLog.findFirst({
+      where: { action: 'token_package_updated', metadata: { path: ['tokenPackageId'], equals: 999999999 } },
+    });
+    assert.equal(audit, null);
+  });
+
+  test('45. Successful update writes exact AuditLog metadata', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_AUDITPATCH_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: {
+        name: 'Audit Patch Original',
+        description: 'Original audit description',
+        code,
+        price: '10.00',
+        currency: 'EGP',
+        tokens: 50,
+        sortOrder: 3,
+        isActive: true,
+      },
+    });
+
+    try {
+      const { status } = await patchPackage(pkg.id, {
+        name: 'Audit Updated',
+        description: null,
+        price: '75.25',
+        tokens: 750,
+        sortOrder: 0,
+      });
+
+      assert.equal(status, 200);
+
+      const audits = await prisma.auditLog.findMany({
+        where: { actorId: ADMIN_USER_ID, action: 'token_package_updated' },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const audit = audits.find((a) => {
+        if (!isJsonObject(a.metadata)) return false;
+        return a.metadata.tokenPackageId === pkg.id;
+      });
+
+      assert.ok(audit, 'AuditLog not found');
+
+      const metadata = audit.metadata;
+      assert.ok(isJsonObject(metadata));
+
+      assert.deepEqual(
+        Object.keys(metadata).sort(),
+        ['tokenPackageId', 'code', 'changedFields', 'before', 'after'].sort(),
+      );
+
+      assert.equal(metadata.tokenPackageId, pkg.id);
+      assert.equal(metadata.code, code);
+
+      const changedFields = metadata.changedFields;
+      assert.ok(isStringArray(changedFields));
+      assert.deepEqual(
+        changedFields.sort(),
+        ['name', 'description', 'price', 'tokens', 'sortOrder'].sort(),
+      );
+
+      const before = metadata.before;
+      const after = metadata.after;
+      assert.ok(isJsonObject(before));
+      assert.ok(isJsonObject(after));
+
+      assert.deepEqual(
+        Object.keys(before).sort(),
+        ['name', 'description', 'price', 'currency', 'tokens', 'sortOrder'].sort(),
+      );
+      assert.deepEqual(
+        Object.keys(after).sort(),
+        ['name', 'description', 'price', 'currency', 'tokens', 'sortOrder'].sort(),
+      );
+
+      assert.equal(before.name, 'Audit Patch Original');
+      assert.equal(before.description, 'Original audit description');
+      assert.equal(typeof before.price, 'string');
+      assert.equal(before.currency, 'EGP');
+      assert.equal(before.tokens, 50);
+      assert.equal(before.sortOrder, 3);
+
+      assert.equal(after.name, 'Audit Updated');
+      assert.equal(after.description, null);
+      assert.equal(typeof after.price, 'string');
+      assert.equal(after.currency, 'EGP');
+      assert.equal(after.tokens, 750);
+      assert.equal(after.sortOrder, 0);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('46. Same-value update still writes an AuditLog', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_SAMEVALUE_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: {
+        name: 'Same Value Package', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1,
+      },
+    });
+
+    try {
+      const { status, body } = await patchPackage(pkg.id, { name: 'Same Value Package' });
+
+      assert.equal(status, 200);
+      assert.equal(body.data.name, 'Same Value Package');
+
+      const audits = await prisma.auditLog.findMany({
+        where: { actorId: ADMIN_USER_ID, action: 'token_package_updated' },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const matching = audits.filter((a) => {
+        if (!isJsonObject(a.metadata)) return false;
+        return a.metadata.tokenPackageId === pkg.id;
+      });
+
+      assert.equal(matching.length, 1);
+
+      const m = matching[0];
+      const metadata = m.metadata;
+      assert.ok(isJsonObject(metadata));
+
+      const changedFields = metadata.changedFields;
+      assert.ok(isStringArray(changedFields));
+      assert.deepEqual(changedFields, ['name']);
+
+      const before = metadata.before;
+      const after = metadata.after;
+      assert.ok(isJsonObject(before));
+      assert.ok(isJsonObject(after));
+
+      assert.equal(before.name, 'Same Value Package');
+      assert.equal(after.name, 'Same Value Package');
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('47. Missing AuditLog actor rolls back the update', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_MISSACTOR_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: {
+        name: 'Rollback Original', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1,
+      },
+    });
+
+    try {
+      const { status, body } = await patchPackage(pkg.id, { name: 'Rollback Update' }, MISSING_ADMIN_USER_TOKEN);
+
+      assert.equal(status, 500);
+      assert.equal(body.error, 'Internal server error');
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.equal(dbPkg?.name, 'Rollback Original');
+
+      const audit = await prisma.auditLog.findFirst({
+        where: { actorId: MISSING_ADMIN_USER_ID, action: 'token_package_updated' },
+      });
+      assert.equal(audit, null);
+
+      const missingUser = await prisma.user.findUnique({ where: { id: MISSING_ADMIN_USER_ID } });
+      assert.equal(missingUser, null);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('48. Update does not modify unrelated records', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_UNREL2_${suffix}`;
+    const unrelatedSuffix = uniqueSuffix();
+    const unrelatedCode = `UNRELATED_PKG_${unrelatedSuffix}`;
+
+    const target = await prisma.tokenPackage.create({
+      data: {
+        name: 'Target Package', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1,
+      },
+    });
+
+    const unrelated = await prisma.tokenPackage.create({
+      data: {
+        name: 'Unrelated Package',
+        code: unrelatedCode,
+        price: '5.00',
+        currency: 'USD',
+        tokens: 5,
+        sortOrder: 99,
+        isActive: true,
+      },
+    });
+
+    try {
+      const unrelatedBefore = await prisma.tokenPackage.findUnique({ where: { id: unrelated.id } });
+
+      const globalPaymentCountBefore = await prisma.payment.count();
+      const globalWalletCountBefore = await prisma.tokenWallet.count();
+      const globalTxCountBefore = await prisma.tokenTransaction.count();
+
+      const { status, body } = await patchPackage(target.id, { name: 'Target Updated', tokens: 200 });
+
+      assert.equal(status, 200);
+      assert.equal(body.data.name, 'Target Updated');
+      assert.equal(body.data.tokens, 200);
+
+      const unrelatedAfter = await prisma.tokenPackage.findUnique({ where: { id: unrelated.id } });
+      assert.deepEqual(unrelatedBefore, unrelatedAfter);
+
+      const globalPaymentCountAfter = await prisma.payment.count();
+      const globalWalletCountAfter = await prisma.tokenWallet.count();
+      const globalTxCountAfter = await prisma.tokenTransaction.count();
+
+      assert.equal(globalPaymentCountAfter, globalPaymentCountBefore);
+      assert.equal(globalWalletCountAfter, globalWalletCountBefore);
+      assert.equal(globalTxCountAfter, globalTxCountBefore);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: unrelated.id } });
+      await prisma.tokenPackage.delete({ where: { id: target.id } });
     }
   });
 });

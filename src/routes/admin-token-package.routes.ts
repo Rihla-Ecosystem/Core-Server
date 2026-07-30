@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
-import { adminTokenPackageListQuerySchema, adminTokenPackageIdParamsSchema, adminTokenPackageCreateBodySchema } from '../schemas/admin-token-package.schema.js';
+import { adminTokenPackageListQuerySchema, adminTokenPackageIdParamsSchema, adminTokenPackageCreateBodySchema, adminTokenPackageUpdateBodySchema } from '../schemas/admin-token-package.schema.js';
 import * as adminTokenPackageController from '../controllers/admin-token-package.controller.js';
 
 const router = Router();
@@ -149,6 +149,69 @@ router.get(
   '/:id',
   validate(adminTokenPackageIdParamsSchema, 'params'),
   adminTokenPackageController.getAdminTokenPackageById,
+);
+
+/**
+ * @openapi
+ * /admin/token-packages/{id}:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Update token package
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 minLength: 2
+ *                 maxLength: 100
+ *               description:
+ *                 type: string
+ *                 maxLength: 500
+ *                 nullable: true
+ *                 description: Use null or a whitespace-only string to clear the description
+ *               price:
+ *                 oneOf:
+ *                   - type: number
+ *                   - type: string
+ *                 example: '59.99'
+ *               currency:
+ *                 type: string
+ *                 enum: [EGP]
+ *               tokens:
+ *                 type: integer
+ *                 minimum: 1
+ *               sortOrder:
+ *                 type: integer
+ *                 minimum: 0
+ *           description: At least one allowed field is required
+ *     responses:
+ *       200:
+ *         description: Token package updated successfully
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Authentication required
+ *       403:
+ *         description: Insufficient permissions
+ *       404:
+ *         description: Token package not found
+ */
+router.patch(
+  '/:id',
+  validate(adminTokenPackageIdParamsSchema, 'params'),
+  validate(adminTokenPackageUpdateBodySchema),
+  adminTokenPackageController.updateAdminTokenPackage,
 );
 
 export default router;

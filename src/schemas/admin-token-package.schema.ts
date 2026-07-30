@@ -29,6 +29,27 @@ export type AdminTokenPackageIdParams = z.infer<typeof adminTokenPackageIdParams
 const whitespaceToUndefined = (val: unknown) =>
   typeof val === 'string' && val.trim().length === 0 ? undefined : val;
 
+const priceSchema = z.preprocess(
+  (val) => {
+    if (typeof val === 'number' && Number.isFinite(val)) {
+      return String(val);
+    }
+    return val;
+  },
+  z.string()
+    .refine((val) => /^\d+(\.\d{1,2})?$/.test(val), {
+      message: 'Price must be a positive number with at most 2 decimal places',
+    })
+    .refine((val) => parseFloat(val) > 0, {
+      message: 'Price must be greater than zero',
+    }),
+);
+
+const currencySchema = z.preprocess(
+  (val) => (typeof val === 'string' ? val.trim().toUpperCase() : val),
+  z.literal('EGP'),
+);
+
 export const adminTokenPackageCreateBodySchema = z.object({
   name: z.string().trim().min(2).max(100),
   description: z.preprocess(
@@ -39,28 +60,35 @@ export const adminTokenPackageCreateBodySchema = z.object({
     (val) => /^[A-Z0-9_]+$/.test(val),
     { message: 'Code must contain only uppercase letters, digits, and underscores' },
   ),
-  price: z.preprocess(
-    (val) => {
-      if (typeof val === 'number' && Number.isFinite(val)) {
-        return String(val);
-      }
-      return val;
-    },
-    z.string()
-      .refine((val) => /^\d+(\.\d{1,2})?$/.test(val), {
-        message: 'Price must be a positive number with at most 2 decimal places',
-      })
-      .refine((val) => parseFloat(val) > 0, {
-        message: 'Price must be greater than zero',
-      }),
-  ),
-  currency: z.preprocess(
-    (val) => (typeof val === 'string' ? val.trim().toUpperCase() : val),
-    z.literal('EGP'),
-  ),
+  price: priceSchema,
+  currency: currencySchema,
   tokens: z.number().int().positive(),
   sortOrder: z.number().int().nonnegative(),
   isActive: z.boolean().optional().default(true),
 }).strict();
 
 export type AdminTokenPackageCreateBody = z.infer<typeof adminTokenPackageCreateBodySchema>;
+
+export const adminTokenPackageUpdateBodySchema = z.object({
+  name: z.string().trim().min(2).max(100).optional(),
+  description: z.preprocess(
+    (val) => {
+      if (val === undefined) return undefined;
+      if (val === null) return null;
+      if (typeof val === 'string' && val.trim().length === 0) return null;
+      return val;
+    },
+    z.union([z.literal(null), z.string().trim().max(500)]).optional(),
+  ),
+  price: priceSchema.optional(),
+  currency: currencySchema.optional(),
+  tokens: z.number().int().positive().optional(),
+  sortOrder: z.number().int().nonnegative().optional(),
+}).strict().refine(
+  (data) => data.name !== undefined || data.description !== undefined
+    || data.price !== undefined || data.currency !== undefined
+    || data.tokens !== undefined || data.sortOrder !== undefined,
+  { message: 'At least one field must be provided' },
+);
+
+export type AdminTokenPackageUpdateBody = z.infer<typeof adminTokenPackageUpdateBodySchema>;
