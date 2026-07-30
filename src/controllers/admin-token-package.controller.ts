@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import * as adminTokenPackageService from '../services/admin-token-package.service.js';
-import type { AdminTokenPackageListQuery, AdminTokenPackageIdParams } from '../schemas/admin-token-package.schema.js';
+import { AppError } from '../middleware/errorHandler.js';
+import type { AdminTokenPackageListQuery, AdminTokenPackageIdParams, AdminTokenPackageCreateBody } from '../schemas/admin-token-package.schema.js';
 
 export async function getAdminTokenPackages(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -22,6 +23,24 @@ export async function getAdminTokenPackageById(req: Request, res: Response, next
     const result = await adminTokenPackageService.getAdminTokenPackageById(id);
 
     res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function createAdminTokenPackage(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user) {
+      throw new AppError(401, 'Authentication required');
+    }
+
+    const input = req.body as AdminTokenPackageCreateBody;
+    const result = await adminTokenPackageService.createAdminTokenPackage(input, req.user.userId);
+
+    res.status(201).json({
       success: true,
       data: result,
     });

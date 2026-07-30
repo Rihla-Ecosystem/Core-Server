@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
-import type { AdminTokenPackageListQuery } from '../schemas/admin-token-package.schema.js';
+import type { AdminTokenPackageListQuery, AdminTokenPackageCreateBody } from '../schemas/admin-token-package.schema.js';
 
 export interface AdminTokenPackage {
   id: number;
@@ -154,4 +154,71 @@ export async function getAdminTokenPackageById(
   }
 
   return toAdminTokenPackage(pkg);
+}
+
+function isTokenPackageCodeUniqueViolation(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (error.code !== 'P2002') return false;
+
+  const target = error.meta?.target;
+
+  if (Array.isArray(target)) {
+    return target.some((item) => typeof item === 'string' && (item === 'code' || item.endsWith('.code')));
+  }
+
+  if (typeof target === 'string') {
+    return target.includes('code');
+  }
+
+  return false;
+}
+
+export async function createAdminTokenPackage(
+  input: AdminTokenPackageCreateBody,
+  actorId: string,
+): Promise<AdminTokenPackage> {
+  try {
+    const createdPackage = await prisma.$transaction(async (tx) => {
+      const pkg = await tx.tokenPackage.create({
+        data: {
+          name: input.name,
+          description: input.description ?? null,
+          code: input.code,
+          price: input.price,
+          currency: input.currency,
+          tokens: input.tokens,
+          sortOrder: input.sortOrder,
+          isActive: input.isActive,
+        },
+        select: adminTokenPackageSelectFields,
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          action: 'token_package_created',
+          metadata: {
+            tokenPackageId: pkg.id,
+            name: pkg.name,
+            code: pkg.code,
+            description: pkg.description,
+            price: pkg.price.toString(),
+            currency: pkg.currency,
+            tokens: pkg.tokens,
+            sortOrder: pkg.sortOrder,
+            isActive: pkg.isActive,
+          },
+        },
+      });
+
+      return pkg;
+    });
+
+    return toAdminTokenPackage(createdPackage);
+  } catch (err) {
+    if (isTokenPackageCodeUniqueViolation(err)) {
+      throw new AppError(409, 'Token package code already exists');
+    }
+    throw err;
+  }
 }

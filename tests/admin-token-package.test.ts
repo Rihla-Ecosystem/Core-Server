@@ -18,8 +18,13 @@ import { prisma } from '../src/config/prisma.js';
 import { signAccessToken } from '../src/utils/token.js';
 import { Gender, Prisma } from '@prisma/client';
 
-const ADMIN_TOKEN = signAccessToken({ sub: '11111111-1111-4111-8111-111111111111', role: 'admin' });
-const USER_TOKEN = signAccessToken({ sub: '22222222-2222-4222-8222-222222222222', role: 'USER' });
+const ADMIN_USER_ID = '11111111-1111-4111-8111-111111111111';
+const USER_TOKEN_SUB = '22222222-2222-4222-8222-222222222222';
+const MISSING_ADMIN_USER_ID = '33333333-3333-4333-8333-333333333333';
+
+const ADMIN_TOKEN = signAccessToken({ sub: ADMIN_USER_ID, role: 'admin' });
+const USER_TOKEN = signAccessToken({ sub: USER_TOKEN_SUB, role: 'USER' });
+const MISSING_ADMIN_USER_TOKEN = signAccessToken({ sub: MISSING_ADMIN_USER_ID, role: 'admin' });
 
 function adminHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${ADMIN_TOKEN}` };
@@ -39,20 +44,53 @@ async function cleanupTestData(): Promise<void> {
   await prisma.payment.deleteMany({
     where: { tokenPackage: { code: { startsWith: 'TEST_ADMIN_TP_' } } },
   });
+  await prisma.auditLog.deleteMany({
+    where: {
+      action: 'token_package_created',
+      actorId: { in: [ADMIN_USER_ID, MISSING_ADMIN_USER_ID] },
+    },
+  });
   await prisma.user.deleteMany({
-    where: { email: { startsWith: 'test_admin_tp_' } },
+    where: {
+      OR: [
+        { id: { in: [ADMIN_USER_ID, MISSING_ADMIN_USER_ID] } },
+        { email: { startsWith: 'test_admin_tp_' } },
+      ],
+    },
   });
   await prisma.tokenPackage.deleteMany({
     where: { code: { startsWith: 'TEST_ADMIN_TP_' } },
   });
 }
 
-describe('GET /api/admin/token-packages — Admin Token Package API', () => {
+describe('Admin Token Package API', () => {
   let server: Server;
   let baseUrl: string;
 
   before(async () => {
     await cleanupTestData();
+
+    const adminRole = await prisma.role.upsert({
+      where: { name: 'admin' },
+      update: {},
+      create: { id: 9999, name: 'admin', permissions: [] },
+    });
+
+    await prisma.user.upsert({
+      where: { id: ADMIN_USER_ID },
+      update: {},
+      create: {
+        id: ADMIN_USER_ID,
+        email: 'test_admin_tp_admin@example.com',
+        passwordHash: 'hash',
+        displayName: 'Admin Token Package Test User',
+        gender: Gender.MALE,
+        nationality: 'Egyptian',
+        roleId: adminRole.id,
+        isEmailVerified: true,
+      },
+    });
+
     await new Promise<void>((resolve) => {
       server = app.listen(0, () => {
         const address = server.address() as AddressInfo;
@@ -111,6 +149,27 @@ type TestTokenPackageOverrides = Partial<
     const res = await fetch(url, opts);
     const body = await res.json();
     return { status: res.status, body };
+  }
+
+  function jsonHeaders(token: string = ADMIN_TOKEN): Record<string, string> {
+    return {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    };
+  }
+
+  async function postPackage(body: Record<string, unknown>, token: string = ADMIN_TOKEN) {
+    const res = await fetch(`${baseUrl}/api/admin/token-packages`, {
+      method: 'POST',
+      headers: jsonHeaders(token),
+      body: JSON.stringify(body),
+    });
+    const responseBody = await res.json();
+    return { status: res.status, body: responseBody };
+  }
+
+  function isJsonObject(val: unknown): val is Record<string, unknown> {
+    return typeof val === 'object' && val !== null && !Array.isArray(val);
   }
 
   /* ---------- Auth & Authorization ---------- */
@@ -646,6 +705,347 @@ type TestTokenPackageOverrides = Partial<
       assert.equal(finalPaymentCount, initialPaymentCount);
     } finally {
       await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  /* ---------- POST /api/admin/token-packages ---------- */
+
+  test('25. POST without JWT returns 401', async () => {
+    const code = `TEST_ADMIN_TP_NOAUTH_${uniqueSuffix()}`;
+    const res = await fetch(`${baseUrl}/api/admin/token-packages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1,
+      }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 401);
+    assert.ok(body.error);
+
+    const pkg = await prisma.tokenPackage.findUnique({ where: { code } });
+    assert.equal(pkg, null);
+
+    const audit = await prisma.auditLog.findFirst({
+      where: { action: 'token_package_created', metadata: { path: ['code'], equals: code } },
+    });
+    assert.equal(audit, null);
+  });
+
+  test('26. POST with USER role returns 403', async () => {
+    const code = `TEST_ADMIN_TP_USERFORBID_${uniqueSuffix()}`;
+    const { status, body } = await postPackage(
+      { name: 'Test', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1 },
+      USER_TOKEN,
+    );
+    assert.equal(status, 403);
+    assert.equal(body.error, 'Insufficient permissions');
+
+    const pkg = await prisma.tokenPackage.findUnique({ where: { code } });
+    assert.equal(pkg, null);
+  });
+
+  test('27. Successful creation returns 201 and persists normalized data', async () => {
+    const suffix = uniqueSuffix();
+    const lowercaseCode = `test_admin_tp_create_${suffix}`;
+    const uppercaseCode = lowercaseCode.toUpperCase();
+
+    const { status, body } = await postPackage({
+      name: '  Starter Package  ',
+      description: '  Starter description  ',
+      code: lowercaseCode,
+      price: '49.99',
+      currency: 'egp',
+      tokens: 100,
+      sortOrder: 0,
+      isActive: false,
+    });
+
+    try {
+      assert.equal(status, 201);
+      assert.equal(body.success, true);
+      assert.ok(Number.isInteger(body.data.id) && body.data.id > 0);
+      assert.equal(body.data.name, 'Starter Package');
+      assert.equal(body.data.description, 'Starter description');
+      assert.equal(body.data.code, uppercaseCode);
+      assert.equal(typeof body.data.price, 'string');
+      assert.equal(body.data.price, '49.99');
+      assert.equal(body.data.currency, 'EGP');
+      assert.equal(body.data.tokens, 100);
+      assert.equal(body.data.sortOrder, 0);
+      assert.equal(body.data.isActive, false);
+      assert.equal(body.data.paymentCount, 0);
+      assert.ok(body.data.createdAt);
+      assert.ok(body.data.updatedAt);
+
+      const expectedKeys = [
+        'id', 'name', 'description', 'code', 'price', 'currency',
+        'tokens', 'sortOrder', 'isActive', 'paymentCount', 'createdAt', 'updatedAt',
+      ].sort();
+      assert.deepEqual(Object.keys(body.data).sort(), expectedKeys);
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { code: uppercaseCode } });
+      assert.ok(dbPkg);
+      assert.equal(dbPkg.name, 'Starter Package');
+      assert.equal(dbPkg.description, 'Starter description');
+      assert.equal(dbPkg.isActive, false);
+      assert.equal(dbPkg.sortOrder, 0);
+    } finally {
+      await prisma.tokenPackage.deleteMany({ where: { code: uppercaseCode } });
+    }
+  });
+
+  test('28. Defaults and optional description work', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_DEFAULTS_${suffix}`;
+
+    const { status, body } = await postPackage({
+      name: 'Defaults Test',
+      description: '   ',
+      code,
+      price: 25.5,
+      currency: 'EGP',
+      tokens: 50,
+      sortOrder: 0,
+    });
+
+    try {
+      assert.equal(status, 201);
+      assert.equal(body.data.isActive, true);
+      assert.equal(body.data.description, null);
+      assert.equal(body.data.price, '25.5');
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { code } });
+      assert.ok(dbPkg);
+      assert.equal(dbPkg.isActive, true);
+      assert.equal(dbPkg.description, null);
+    } finally {
+      await prisma.tokenPackage.deleteMany({ where: { code } });
+    }
+  });
+
+  test('29. Successful creation writes the expected AuditLog', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_AUDIT_${suffix}`;
+
+    const { status, body } = await postPackage({
+      name: 'Audit Test',
+      code,
+      price: '30.00',
+      currency: 'EGP',
+      tokens: 30,
+      sortOrder: 5,
+    });
+
+    try {
+      assert.equal(status, 201);
+      const packageId = body.data.id;
+
+      const audits = await prisma.auditLog.findMany({
+        where: { actorId: ADMIN_USER_ID, action: 'token_package_created' },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const audit = audits.find((a) => {
+        if (!isJsonObject(a.metadata)) return false;
+        return a.metadata.tokenPackageId === packageId;
+      });
+
+      assert.ok(audit, 'AuditLog not found');
+      assert.equal(audit.actorId, ADMIN_USER_ID);
+      assert.equal(audit.targetUserId, null);
+      assert.equal(audit.action, 'token_package_created');
+      assert.ok(isJsonObject(audit.metadata));
+
+      const metadata = audit.metadata;
+      assert.ok(isJsonObject(metadata));
+
+      assert.equal(metadata.tokenPackageId, packageId);
+      assert.equal(metadata.name, 'Audit Test');
+      assert.equal(metadata.code, code);
+      assert.equal(metadata.description, null);
+      assert.equal(metadata.price, '30');
+      assert.equal(typeof metadata.price, 'string');
+      assert.equal(metadata.currency, 'EGP');
+      assert.equal(metadata.tokens, 30);
+      assert.equal(metadata.sortOrder, 5);
+      assert.equal(metadata.isActive, true);
+
+      assert.deepEqual(
+        Object.keys(metadata).sort(),
+        [
+          'tokenPackageId',
+          'name',
+          'code',
+          'description',
+          'price',
+          'currency',
+          'tokens',
+          'sortOrder',
+          'isActive',
+        ].sort(),
+      );
+    } finally {
+      await prisma.tokenPackage.deleteMany({ where: { code } });
+      await prisma.auditLog.deleteMany({
+        where: { actorId: ADMIN_USER_ID, action: 'token_package_created', metadata: { path: ['code'], equals: code } },
+      });
+    }
+  });
+
+  test('30. Duplicate normalized code returns 409', async () => {
+    const suffix = uniqueSuffix();
+    const lowercaseCode = `test_admin_tp_dup_${suffix}`;
+    const uppercaseCode = lowercaseCode.toUpperCase();
+
+    await postPackage({
+      name: 'First', code: lowercaseCode, price: '10', currency: 'EGP', tokens: 10, sortOrder: 0,
+    });
+
+    const auditCountBefore = await prisma.auditLog.count({
+      where: { actorId: ADMIN_USER_ID, action: 'token_package_created' },
+    });
+
+    const { status, body } = await postPackage({
+      name: 'Second', code: uppercaseCode, price: '20', currency: 'EGP', tokens: 20, sortOrder: 1,
+    });
+
+    try {
+      assert.equal(status, 409);
+      assert.equal(body.error, 'Token package code already exists');
+
+      const pkgs = await prisma.tokenPackage.findMany({ where: { code: uppercaseCode } });
+      assert.equal(pkgs.length, 1);
+
+      const auditCountAfter = await prisma.auditLog.count({
+        where: { actorId: ADMIN_USER_ID, action: 'token_package_created' },
+      });
+      assert.equal(auditCountAfter, auditCountBefore);
+    } finally {
+      await prisma.tokenPackage.deleteMany({ where: { code: uppercaseCode } });
+    }
+  });
+
+  test('31. Invalid request bodies return 400 and create no records', async () => {
+    const prefix = `TEST_ADMIN_TP_INV_${uniqueSuffix()}`;
+
+    const cases: { name: string; body: Record<string, unknown> }[] = [
+      { name: 'missing name', body: { code: `${prefix}_1`, price: '10', currency: 'EGP', tokens: 10, sortOrder: 0 } },
+      { name: 'name with one character', body: { name: 'A', code: `${prefix}_2`, price: '10', currency: 'EGP', tokens: 10, sortOrder: 0 } },
+      { name: 'code containing a hyphen', body: { name: 'Test', code: `${prefix}-WITH-HYPHEN`, price: '10', currency: 'EGP', tokens: 10, sortOrder: 0 } },
+      { name: 'code containing a space', body: { name: 'Test', code: `${prefix} SPACE`, price: '10', currency: 'EGP', tokens: 10, sortOrder: 0 } },
+      { name: 'price zero', body: { name: 'Test', code: `${prefix}_3`, price: 0, currency: 'EGP', tokens: 10, sortOrder: 0 } },
+      { name: 'negative price', body: { name: 'Test', code: `${prefix}_4`, price: -5, currency: 'EGP', tokens: 10, sortOrder: 0 } },
+      { name: 'price with three decimal places', body: { name: 'Test', code: `${prefix}_5`, price: 10.999, currency: 'EGP', tokens: 10, sortOrder: 0 } },
+      { name: 'string scientific notation "1e3"', body: { name: 'Test', code: `${prefix}_6`, price: '1e3', currency: 'EGP', tokens: 10, sortOrder: 0 } },
+      { name: 'currency USD', body: { name: 'Test', code: `${prefix}_7`, price: '10', currency: 'USD', tokens: 10, sortOrder: 0 } },
+      { name: 'tokens zero', body: { name: 'Test', code: `${prefix}_8`, price: '10', currency: 'EGP', tokens: 0, sortOrder: 0 } },
+      { name: 'tokens fraction', body: { name: 'Test', code: `${prefix}_9`, price: '10', currency: 'EGP', tokens: 1.5, sortOrder: 0 } },
+      { name: 'negative sortOrder', body: { name: 'Test', code: `${prefix}_10`, price: '10', currency: 'EGP', tokens: 10, sortOrder: -1 } },
+      { name: 'unknown body field', body: { name: 'Test', code: `${prefix}_11`, price: '10', currency: 'EGP', tokens: 10, sortOrder: 0, unknownField: 'x' } },
+    ];
+
+    const initialPkgCount = await prisma.tokenPackage.count({
+      where: { code: { startsWith: prefix } },
+    });
+    const initialAuditCount = await prisma.auditLog.count({
+      where: { actorId: ADMIN_USER_ID, action: 'token_package_created' },
+    });
+
+    for (const { name, body } of cases) {
+      const res = await fetch(`${baseUrl}/api/admin/token-packages`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify(body),
+      });
+      const responseBody = await res.json();
+      assert.equal(res.status, 400, `Expected 400 for: ${name}`);
+      assert.equal(responseBody.error, 'Validation error', `Expected Validation error for: ${name}`);
+    }
+
+    const finalPkgCount = await prisma.tokenPackage.count({
+      where: { code: { startsWith: prefix } },
+    });
+    const finalAuditCount = await prisma.auditLog.count({
+      where: { actorId: ADMIN_USER_ID, action: 'token_package_created' },
+    });
+
+    assert.equal(finalPkgCount, initialPkgCount);
+    assert.equal(finalAuditCount, initialAuditCount);
+  });
+
+  test('32. Missing AuditLog actor causes transaction rollback', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_ROLLBACK_${suffix}`;
+
+    const { status, body } = await postPackage(
+      { name: 'Rollback Test', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 0 },
+      MISSING_ADMIN_USER_TOKEN,
+    );
+
+    assert.equal(status, 500);
+    assert.equal(body.error, 'Internal server error');
+
+    const pkg = await prisma.tokenPackage.findUnique({ where: { code } });
+    assert.equal(pkg, null);
+
+    const audit = await prisma.auditLog.findFirst({
+      where: { actorId: MISSING_ADMIN_USER_ID, action: 'token_package_created' },
+    });
+    assert.equal(audit, null);
+
+    const missingUser = await prisma.user.findUnique({ where: { id: MISSING_ADMIN_USER_ID } });
+    assert.equal(missingUser, null);
+  });
+
+  test('33. Creating a package does not modify unrelated records', async () => {
+    const suffix = uniqueSuffix();
+    const unrelatedCode = `UNRELATED_ADMIN_PACKAGE_${suffix}`;
+
+    const unrelated = await prisma.tokenPackage.create({
+      data: {
+        name: 'Unrelated Package',
+        code: unrelatedCode,
+        price: '5.00',
+        currency: 'USD',
+        tokens: 5,
+        sortOrder: 99,
+        isActive: true,
+      },
+    });
+
+    try {
+      const unrelatedBefore = await prisma.tokenPackage.findUnique({ where: { id: unrelated.id } });
+
+      const globalPaymentCountBefore = await prisma.payment.count();
+      const globalWalletCountBefore = await prisma.tokenWallet.count();
+      const globalTxCountBefore = await prisma.tokenTransaction.count();
+
+      const testCode = `TEST_ADMIN_TP_UNREL_${suffix}`;
+      const { status, body } = await postPackage({
+        name: 'Test unrelated', code: testCode, price: '10', currency: 'EGP', tokens: 10, sortOrder: 0,
+      });
+
+      assert.equal(status, 201);
+      assert.equal(body.success, true);
+      assert.equal(body.data.code, testCode);
+
+      const newPkg = await prisma.tokenPackage.findUnique({ where: { code: testCode } });
+      assert.ok(newPkg);
+
+      const unrelatedAfter = await prisma.tokenPackage.findUnique({ where: { id: unrelated.id } });
+      assert.deepEqual(unrelatedBefore, unrelatedAfter);
+
+      const globalPaymentCountAfter = await prisma.payment.count();
+      const globalWalletCountAfter = await prisma.tokenWallet.count();
+      const globalTxCountAfter = await prisma.tokenTransaction.count();
+
+      assert.equal(globalPaymentCountAfter, globalPaymentCountBefore);
+      assert.equal(globalWalletCountAfter, globalWalletCountBefore);
+      assert.equal(globalTxCountAfter, globalTxCountBefore);
+    } finally {
+      await prisma.tokenPackage.deleteMany({ where: { code: unrelatedCode } });
+      await prisma.tokenPackage.deleteMany({ where: { code: `TEST_ADMIN_TP_UNREL_${suffix}` } });
     }
   });
 });

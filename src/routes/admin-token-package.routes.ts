@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
-import { adminTokenPackageListQuerySchema, adminTokenPackageIdParamsSchema } from '../schemas/admin-token-package.schema.js';
+import { adminTokenPackageListQuerySchema, adminTokenPackageIdParamsSchema, adminTokenPackageCreateBodySchema } from '../schemas/admin-token-package.schema.js';
 import * as adminTokenPackageController from '../controllers/admin-token-package.controller.js';
 
 const router = Router();
@@ -49,6 +49,75 @@ router.get(
   '/',
   validate(adminTokenPackageListQuerySchema, 'query'),
   adminTokenPackageController.getAdminTokenPackages,
+);
+
+/**
+ * @openapi
+ * /admin/token-packages:
+ *   post:
+ *     tags: [Admin]
+ *     summary: Create token package
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - code
+ *               - price
+ *               - currency
+ *               - tokens
+ *               - sortOrder
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 minLength: 2
+ *                 maxLength: 100
+ *               description:
+ *                 type: string
+ *                 maxLength: 500
+ *                 nullable: true
+ *               code:
+ *                 type: string
+ *                 pattern: '^[A-Z0-9_]+$'
+ *                 example: STARTER_100
+ *               price:
+ *                 oneOf:
+ *                   - type: number
+ *                   - type: string
+ *                 example: '49.99'
+ *               currency:
+ *                 type: string
+ *                 enum: [EGP]
+ *               tokens:
+ *                 type: integer
+ *                 minimum: 1
+ *               sortOrder:
+ *                 type: integer
+ *                 minimum: 0
+ *               isActive:
+ *                 type: boolean
+ *                 default: true
+ *     responses:
+ *       201:
+ *         description: Token package created successfully
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Authentication required
+ *       403:
+ *         description: Insufficient permissions
+ *       409:
+ *         description: Token package code already exists
+ */
+router.post(
+  '/',
+  validate(adminTokenPackageCreateBodySchema),
+  adminTokenPackageController.createAdminTokenPackage,
 );
 
 /**
