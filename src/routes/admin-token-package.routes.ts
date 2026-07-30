@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
-import { adminTokenPackageListQuerySchema, adminTokenPackageIdParamsSchema, adminTokenPackageCreateBodySchema, adminTokenPackageUpdateBodySchema } from '../schemas/admin-token-package.schema.js';
+import { adminTokenPackageListQuerySchema, adminTokenPackageIdParamsSchema, adminTokenPackageCreateBodySchema, adminTokenPackageUpdateBodySchema, adminTokenPackageStatusBodySchema } from '../schemas/admin-token-package.schema.js';
 import * as adminTokenPackageController from '../controllers/admin-token-package.controller.js';
 
 const router = Router();
@@ -212,6 +212,55 @@ router.patch(
   validate(adminTokenPackageIdParamsSchema, 'params'),
   validate(adminTokenPackageUpdateBodySchema),
   adminTokenPackageController.updateAdminTokenPackage,
+);
+
+/**
+ * @openapi
+ * /admin/token-packages/{id}/status:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Activate or deactivate token package
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - isActive
+ *             additionalProperties: false
+ *             properties:
+ *               isActive:
+ *                 type: boolean
+ *                 description: true activates the package; false deactivates it
+ *           example:
+ *             isActive: false
+ *     responses:
+ *       200:
+ *         description: Token package status updated successfully
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Authentication required
+ *       403:
+ *         description: Insufficient permissions
+ *       404:
+ *         description: Token package not found
+ */
+router.patch(
+  '/:id/status',
+  validate(adminTokenPackageIdParamsSchema, 'params'),
+  validate(adminTokenPackageStatusBodySchema),
+  adminTokenPackageController.updateAdminTokenPackageStatus,
 );
 
 export default router;

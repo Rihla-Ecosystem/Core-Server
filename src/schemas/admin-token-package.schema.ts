@@ -92,3 +92,9 @@ export const adminTokenPackageUpdateBodySchema = z.object({
 );
 
 export type AdminTokenPackageUpdateBody = z.infer<typeof adminTokenPackageUpdateBodySchema>;
+
+export const adminTokenPackageStatusBodySchema = z.object({
+  isActive: z.boolean(),
+}).strict();
+
+export type AdminTokenPackageStatusBody = z.infer<typeof adminTokenPackageStatusBodySchema>;

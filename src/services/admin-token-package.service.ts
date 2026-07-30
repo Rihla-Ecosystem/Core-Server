@@ -5,6 +5,7 @@ import type {
   AdminTokenPackageListQuery,
   AdminTokenPackageCreateBody,
   AdminTokenPackageUpdateBody,
+  AdminTokenPackageStatusBody,
 } from '../schemas/admin-token-package.schema.js';
 
 export interface AdminTokenPackage {
@@ -301,6 +302,50 @@ export async function updateAdminTokenPackage(
             currency: updated.currency,
             tokens: updated.tokens,
             sortOrder: updated.sortOrder,
+          },
+        },
+      },
+    });
+
+    return toAdminTokenPackage(updated);
+  });
+}
+
+export async function updateAdminTokenPackageStatus(
+  id: number,
+  input: AdminTokenPackageStatusBody,
+  actorId: string,
+): Promise<AdminTokenPackage> {
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.tokenPackage.findUnique({
+      where: { id },
+      select: adminTokenPackageSelectFields,
+    });
+
+    if (!existing) {
+      throw new AppError(404, 'Token package not found');
+    }
+
+    const updated = await tx.tokenPackage.update({
+      where: { id },
+      data: {
+        isActive: input.isActive,
+      },
+      select: adminTokenPackageSelectFields,
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorId,
+        action: 'token_package_status_changed',
+        metadata: {
+          tokenPackageId: updated.id,
+          code: updated.code,
+          before: {
+            isActive: existing.isActive,
+          },
+          after: {
+            isActive: updated.isActive,
           },
         },
       },
