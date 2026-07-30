@@ -47,7 +47,7 @@ async function cleanupTestData(): Promise<void> {
   await prisma.auditLog.deleteMany({
     where: {
       action: {
-        in: ['token_package_created', 'token_package_updated', 'token_package_status_changed'],
+        in: ['token_package_created', 'token_package_updated', 'token_package_status_changed', 'token_package_deleted'],
       },
       actorId: { in: [ADMIN_USER_ID, MISSING_ADMIN_USER_ID] },
     },
@@ -185,6 +185,15 @@ type TestTokenPackageOverrides = Partial<
       method: 'PATCH',
       headers: jsonHeaders(token),
       body: JSON.stringify(body),
+    });
+    const responseBody = await res.json();
+    return { status: res.status, body: responseBody };
+  }
+
+  async function deletePackage(id: number | string, token: string = ADMIN_TOKEN) {
+    const res = await fetch(`${baseUrl}/api/admin/token-packages/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
     });
     const responseBody = await res.json();
     return { status: res.status, body: responseBody };
@@ -2078,6 +2087,334 @@ type TestTokenPackageOverrides = Partial<
       assert.equal(updateAudit, null);
     } finally {
       await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  /* ---------- Delete ---------- */
+
+  test('63. DELETE without JWT returns 401', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_DEL401_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: { name: 'Delete 401', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1, isActive: true },
+    });
+
+    try {
+      const res = await fetch(`${baseUrl}/api/admin/token-packages/${pkg.id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const body = await res.json();
+
+      assert.equal(res.status, 401);
+      assert.ok(body.error);
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.ok(dbPkg);
+      assert.equal(dbPkg.isActive, true);
+
+      const audit = await prisma.auditLog.findFirst({
+        where: { action: 'token_package_deleted', metadata: { path: ['tokenPackageId'], equals: pkg.id } },
+      });
+      assert.equal(audit, null);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('64. DELETE with USER role returns 403', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_DEL403_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: { name: 'Delete 403', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1, isActive: true },
+    });
+
+    try {
+      const { status, body } = await deletePackage(pkg.id, USER_TOKEN);
+
+      assert.equal(status, 403);
+      assert.equal(body.error, 'Insufficient permissions');
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.ok(dbPkg);
+      assert.equal(dbPkg.isActive, true);
+
+      const audit = await prisma.auditLog.findFirst({
+        where: { action: 'token_package_deleted', metadata: { path: ['tokenPackageId'], equals: pkg.id } },
+      });
+      assert.equal(audit, null);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('65. Admin can delete a package without Payments', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_DELOK_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: {
+        name: 'Delete Me', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1, isActive: true,
+      },
+    });
+
+    try {
+      const { status, body } = await deletePackage(pkg.id);
+
+      assert.equal(status, 200);
+      assert.equal(body.success, true);
+
+      assert.deepEqual(Object.keys(body).sort(), ['data', 'success']);
+      assert.deepEqual(Object.keys(body.data).sort(), ['code', 'deleted', 'id']);
+
+      assert.equal(body.data.id, pkg.id);
+      assert.equal(body.data.code, code);
+      assert.equal(body.data.deleted, true);
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.equal(dbPkg, null);
+    } finally {
+      await prisma.tokenPackage.deleteMany({ where: { id: pkg.id } });
+    }
+  });
+
+  test('66. Invalid IDs return 400', async () => {
+    for (const id of ['abc', '0', '-1']) {
+      const { status, body } = await deletePackage(id);
+      assert.equal(status, 400, `Expected 400 for ID: ${id}`);
+      assert.equal(body.error, 'Validation error');
+    }
+  });
+
+  test('67. Missing package returns 404', async () => {
+    const { status, body } = await deletePackage(999999999);
+
+    assert.equal(status, 404);
+    assert.equal(body.error, 'Token package not found');
+
+    const audit = await prisma.auditLog.findFirst({
+      where: { action: 'token_package_deleted', metadata: { path: ['tokenPackageId'], equals: 999999999 } },
+    });
+    assert.equal(audit, null);
+  });
+
+  test('68. Package with a related Payment returns 409', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_DEL409_${suffix}`;
+
+    const pkg = await prisma.tokenPackage.create({
+      data: {
+        name: 'Protected from delete', code, price: '50.00', currency: 'EGP', tokens: 100, sortOrder: 2, isActive: true,
+      },
+    });
+
+    const user = await prisma.user.create({
+      data: {
+        email: `test_del409_${suffix}@example.com`,
+        passwordHash: 'hash',
+        displayName: 'Delete 409 User',
+        gender: Gender.MALE,
+        nationality: 'Egyptian',
+      },
+    });
+
+    const payment = await prisma.payment.create({
+      data: {
+        userId: user.id,
+        tokenPackageId: pkg.id,
+        amount: '50.00',
+        currency: 'EGP',
+        packageNameSnapshot: pkg.name,
+        tokensSnapshot: pkg.tokens,
+        priceSnapshot: pkg.price.toString(),
+        currencySnapshot: 'EGP',
+      },
+    });
+
+    try {
+      const pkgBefore = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      const paymentBefore = await prisma.payment.findUnique({ where: { id: payment.id } });
+
+      const { status, body } = await deletePackage(pkg.id);
+
+      assert.equal(status, 409);
+      assert.equal(body.error, 'Token package has related payments; deactivate it instead');
+
+      const pkgAfter = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      const paymentAfter = await prisma.payment.findUnique({ where: { id: payment.id } });
+
+      assert.deepEqual(pkgBefore, pkgAfter);
+      assert.deepEqual(paymentBefore, paymentAfter);
+
+      assert.equal(pkgAfter?.isActive, true);
+
+      const audit = await prisma.auditLog.findFirst({
+        where: { action: 'token_package_deleted', metadata: { path: ['tokenPackageId'], equals: pkg.id } },
+      });
+      assert.equal(audit, null);
+    } finally {
+      await prisma.payment.delete({ where: { id: payment.id } });
+      await prisma.auditLog.deleteMany({ where: { actorId: ADMIN_USER_ID, action: 'token_package_deleted', metadata: { path: ['tokenPackageId'], equals: pkg.id } } });
+      await prisma.user.delete({ where: { id: user.id } });
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('69. Successful deletion writes exact AuditLog metadata', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_DELMETA_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: {
+        name: 'Audit Delete Meta',
+        description: 'Checking metadata',
+        code,
+        price: '35.50',
+        currency: 'EGP',
+        tokens: 75,
+        sortOrder: 4,
+        isActive: false,
+      },
+    });
+
+    try {
+      const { status } = await deletePackage(pkg.id);
+      assert.equal(status, 200);
+
+      const audits = await prisma.auditLog.findMany({
+        where: { actorId: ADMIN_USER_ID, action: 'token_package_deleted' },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const audit = audits.find((a) => {
+        if (!isJsonObject(a.metadata)) return false;
+        return a.metadata.tokenPackageId === pkg.id;
+      });
+
+      assert.ok(audit, 'AuditLog not found');
+      assert.equal(audit.actorId, ADMIN_USER_ID);
+      assert.equal(audit.targetUserId, null);
+      assert.equal(audit.action, 'token_package_deleted');
+
+      const metadata = audit.metadata;
+      assert.ok(isJsonObject(metadata));
+
+      const expectedMetaKeys = [
+        'tokenPackageId', 'name', 'description', 'code', 'price',
+        'currency', 'tokens', 'sortOrder', 'isActive',
+      ].sort();
+      assert.deepEqual(Object.keys(metadata).sort(), expectedMetaKeys);
+
+      assert.equal(metadata.tokenPackageId, pkg.id);
+      assert.equal(metadata.name, 'Audit Delete Meta');
+      assert.equal(metadata.description, 'Checking metadata');
+      assert.equal(metadata.code, code);
+      assert.equal(metadata.currency, 'EGP');
+      assert.equal(metadata.tokens, 75);
+      assert.equal(metadata.sortOrder, 4);
+      assert.equal(metadata.isActive, false);
+
+      {
+        const price = metadata.price;
+        if (typeof price !== 'string') throw new Error('metadata price not string');
+        if (parseFloat(price) !== 35.5) throw new Error('metadata price wrong');
+      }
+
+      assert.equal(Object.prototype.hasOwnProperty.call(metadata, 'paymentCount'), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(metadata, '_count'), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(metadata, 'createdAt'), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(metadata, 'updatedAt'), false);
+      assert.equal(Object.prototype.hasOwnProperty.call(metadata, 'deleted'), false);
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.equal(dbPkg, null);
+    } finally {
+      await prisma.auditLog.deleteMany({ where: { actorId: ADMIN_USER_ID, action: 'token_package_deleted', metadata: { path: ['tokenPackageId'], equals: pkg.id } } });
+      await prisma.tokenPackage.deleteMany({ where: { id: pkg.id } });
+    }
+  });
+
+  test('70. Missing AuditLog actor rolls back deletion', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_DELROLL_${suffix}`;
+    const pkg = await prisma.tokenPackage.create({
+      data: { name: 'Delete Rollback', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1, isActive: true },
+    });
+
+    try {
+      const { status, body } = await deletePackage(pkg.id, MISSING_ADMIN_USER_TOKEN);
+
+      assert.equal(status, 500);
+      assert.equal(body.error, 'Internal server error');
+
+      const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
+      assert.ok(dbPkg);
+      assert.equal(dbPkg.name, 'Delete Rollback');
+      assert.equal(dbPkg.isActive, true);
+
+      const audit = await prisma.auditLog.findFirst({
+        where: { actorId: MISSING_ADMIN_USER_ID, action: 'token_package_deleted' },
+      });
+      assert.equal(audit, null);
+
+      const missingUser = await prisma.user.findUnique({ where: { id: MISSING_ADMIN_USER_ID } });
+      assert.equal(missingUser, null);
+    } finally {
+      await prisma.tokenPackage.delete({ where: { id: pkg.id } });
+    }
+  });
+
+  test('71. Deletion does not modify unrelated records', async () => {
+    const suffix = uniqueSuffix();
+    const code = `TEST_ADMIN_TP_DELUNREL_${suffix}`;
+    const unrelatedSuffix = uniqueSuffix();
+    const unrelatedCode = `UNRELATED_PKG_${unrelatedSuffix}`;
+
+    const target = await prisma.tokenPackage.create({
+      data: {
+        name: 'Delete Target', code, price: '10', currency: 'EGP', tokens: 10, sortOrder: 1, isActive: true,
+      },
+    });
+
+    const unrelated = await prisma.tokenPackage.create({
+      data: {
+        name: 'Unrelated Package',
+        code: unrelatedCode,
+        price: '5.00',
+        currency: 'USD',
+        tokens: 5,
+        sortOrder: 99,
+        isActive: true,
+      },
+    });
+
+    try {
+      const unrelatedBefore = await prisma.tokenPackage.findUnique({ where: { id: unrelated.id } });
+
+      const globalPaymentCountBefore = await prisma.payment.count();
+      const globalWalletCountBefore = await prisma.tokenWallet.count();
+      const globalTxCountBefore = await prisma.tokenTransaction.count();
+
+      const { status, body } = await deletePackage(target.id);
+
+      assert.equal(status, 200);
+      assert.equal(body.data.deleted, true);
+
+      const targetAfter = await prisma.tokenPackage.findUnique({ where: { id: target.id } });
+      assert.equal(targetAfter, null);
+
+      const unrelatedAfter = await prisma.tokenPackage.findUnique({ where: { id: unrelated.id } });
+      assert.deepEqual(unrelatedBefore, unrelatedAfter);
+
+      const globalPaymentCountAfter = await prisma.payment.count();
+      const globalWalletCountAfter = await prisma.tokenWallet.count();
+      const globalTxCountAfter = await prisma.tokenTransaction.count();
+
+      assert.equal(globalPaymentCountAfter, globalPaymentCountBefore);
+      assert.equal(globalWalletCountAfter, globalWalletCountBefore);
+      assert.equal(globalTxCountAfter, globalTxCountBefore);
+    } finally {
+      await prisma.auditLog.deleteMany({ where: { actorId: ADMIN_USER_ID, action: 'token_package_deleted', metadata: { path: ['tokenPackageId'], equals: target.id } } });
+      await prisma.tokenPackage.delete({ where: { id: unrelated.id } });
+      await prisma.tokenPackage.deleteMany({ where: { id: target.id } });
     }
   });
 });

@@ -86,3 +86,21 @@ export async function updateAdminTokenPackageStatus(req: Request, res: Response,
     next(err);
   }
 }
+
+export async function deleteAdminTokenPackage(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user) {
+      throw new AppError(401, 'Authentication required');
+    }
+
+    const { id } = req.params as unknown as AdminTokenPackageIdParams;
+    const result = await adminTokenPackageService.deleteAdminTokenPackage(id, req.user.userId);
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+}

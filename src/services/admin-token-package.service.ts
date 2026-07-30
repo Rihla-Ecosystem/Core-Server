@@ -33,6 +33,12 @@ export interface PaginatedAdminTokenPackagesResult {
   };
 }
 
+export interface DeletedAdminTokenPackage {
+  id: number;
+  code: string;
+  deleted: true;
+}
+
 const adminTokenPackageSelectFields = {
   id: true,
   name: true,
@@ -352,5 +358,53 @@ export async function updateAdminTokenPackageStatus(
     });
 
     return toAdminTokenPackage(updated);
+  });
+}
+
+export async function deleteAdminTokenPackage(
+  id: number,
+  actorId: string,
+): Promise<DeletedAdminTokenPackage> {
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.tokenPackage.findUnique({
+      where: { id },
+      select: adminTokenPackageSelectFields,
+    });
+
+    if (!existing) {
+      throw new AppError(404, 'Token package not found');
+    }
+
+    if (existing._count.payments > 0) {
+      throw new AppError(409, 'Token package has related payments; deactivate it instead');
+    }
+
+    await tx.tokenPackage.delete({
+      where: { id },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorId,
+        action: 'token_package_deleted',
+        metadata: {
+          tokenPackageId: existing.id,
+          name: existing.name,
+          description: existing.description,
+          code: existing.code,
+          price: existing.price.toString(),
+          currency: existing.currency,
+          tokens: existing.tokens,
+          sortOrder: existing.sortOrder,
+          isActive: existing.isActive,
+        },
+      },
+    });
+
+    return {
+      id: existing.id,
+      code: existing.code,
+      deleted: true,
+    };
   });
 }

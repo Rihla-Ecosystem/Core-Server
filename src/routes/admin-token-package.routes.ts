@@ -263,4 +263,67 @@ router.patch(
   adminTokenPackageController.updateAdminTokenPackageStatus,
 );
 
+/**
+ * @openapi
+ * /admin/token-packages/{id}:
+ *   delete:
+ *     tags: [Admin]
+ *     summary: Delete token package
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *     responses:
+ *       200:
+ *         description: Token package deleted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required:
+ *                 - success
+ *                 - data
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   required:
+ *                     - id
+ *                     - code
+ *                     - deleted
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                       example: 1
+ *                     code:
+ *                       type: string
+ *                       example: STARTER
+ *                     deleted:
+ *                       type: boolean
+ *                       enum: [true]
+ *                       example: true
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Authentication required
+ *       403:
+ *         description: Insufficient permissions
+ *       404:
+ *         description: Token package not found
+ *       409:
+ *         description: Token package has related payments; deactivate it instead
+ */
+router.delete(
+  '/:id',
+  validate(adminTokenPackageIdParamsSchema, 'params'),
+  adminTokenPackageController.deleteAdminTokenPackage,
+);
+
 export default router;
