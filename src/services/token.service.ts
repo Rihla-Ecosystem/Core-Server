@@ -25,6 +25,15 @@ export interface PaginatedTransactionsResult {
   };
 }
 
+export interface TokenSummaryResult {
+  remainingTokens: number;
+  purchasedTokens: number;
+  consumedTokens: number;
+  refundedTokens: number;
+  netConsumedTokens: number;
+  bonusTokens: number;
+}
+
 /**
  * Retrieves the Token Wallet balance and status for a given user.
  * If the user has no TokenWallet record, returns a safe default balance (0)
@@ -111,3 +120,55 @@ export async function getTokenTransactions(
     },
   };
 }
+
+/**
+ * Retrieves token usage summary metrics for a given user.
+ * Read-only database aggregations.
+ *
+ * @param userId - Verified user UUID from JWT
+ */
+export async function getTokenSummary(userId: string): Promise<TokenSummaryResult> {
+  const [wallet, grouped] = await Promise.all([
+    prisma.tokenWallet.findUnique({
+      where: { userId },
+      select: { tokenBalance: true },
+    }),
+    prisma.tokenTransaction.groupBy({
+      by: ['type', 'source'],
+      where: { userId },
+      _sum: { tokens: true },
+    }),
+  ]);
+
+  const remainingTokens = wallet ? wallet.tokenBalance : 0;
+
+  let purchasedTokens = 0;
+  let consumedTokens = 0;
+  let refundedTokens = 0;
+  let bonusTokens = 0;
+
+  for (const item of grouped) {
+    const amount = item._sum.tokens ?? 0;
+    if (item.type === 'GRANT' && item.source === 'PURCHASE') {
+      purchasedTokens += amount;
+    } else if (item.type === 'CONSUME') {
+      consumedTokens += amount;
+    } else if (item.type === 'REFUND') {
+      refundedTokens += amount;
+    } else if (item.type === 'BONUS') {
+      bonusTokens += amount;
+    }
+  }
+
+  const netConsumedTokens = consumedTokens - refundedTokens;
+
+  return {
+    remainingTokens,
+    purchasedTokens,
+    consumedTokens,
+    refundedTokens,
+    netConsumedTokens,
+    bonusTokens,
+  };
+}
+

@@ -6,5 +6,7 @@ const router = Router();
 
 router.get('/wallet', authenticate, tokenController.getWalletBalance);
 router.get('/transactions', authenticate, tokenController.getTokenTransactions);
+router.get('/summary', authenticate, tokenController.getTokenSummary);
 
 export default router;
+

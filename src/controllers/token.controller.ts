@@ -67,3 +67,27 @@ export async function getTokenTransactions(req: Request, res: Response, next: Ne
     next(err);
   }
 }
+
+/**
+ * GET /api/tokens/summary
+ * Authenticated endpoint to retrieve token usage summary for the authenticated user.
+ */
+export async function getTokenSummary(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    if (!req.user) {
+      throw new AppError(401, 'Authentication required');
+    }
+
+    const userId = req.user.userId;
+
+    const summary = await tokenService.getTokenSummary(userId);
+
+    res.status(200).json({
+      success: true,
+      data: summary,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
