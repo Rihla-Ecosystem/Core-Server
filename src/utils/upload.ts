@@ -25,14 +25,23 @@ export const uploadAudio = multer({
   },
 });
 
+export const IDENTIFICATION_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+export class UnsupportedIdentificationMimeError extends Error {
+  constructor() {
+    super('Only JPEG and PNG image files are allowed');
+    this.name = 'UnsupportedIdentificationMimeError';
+  }
+}
+
 export const uploadIdentificationImage = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: IDENTIFICATION_IMAGE_MAX_BYTES },
   fileFilter: (_req, file, cb) => {
     if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/png') {
       cb(null, true);
     } else {
-      cb(new Error('Only JPEG and PNG images are allowed'));
+      cb(new UnsupportedIdentificationMimeError());
     }
   },
 });
