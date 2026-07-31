@@ -1,5 +1,9 @@
 import { env } from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
+import {
+  consumeBusinessTokens,
+  reverseBusinessTokens,
+} from './business-token-consumption.service.js';
 
 export interface IdentifyResponse {
   name: string;
@@ -46,4 +50,68 @@ export async function identifyLandmark(
   }
 
   return response.json() as Promise<IdentifyResponse>;
+}
+
+export interface IdentifyLandmarkWithTokensInput {
+  userId: string;
+  businessRequestId: string;
+  image: Buffer;
+  mimeType: string;
+  lat?: number;
+  lon?: number;
+  radius?: number;
+  authorization?: string;
+}
+
+async function revertAndRethrow(
+  userId: string,
+  businessRequestId: string,
+  originalError: unknown,
+): Promise<never> {
+  try {
+    await reverseBusinessTokens({
+      userId,
+      feature: 'AI_IMAGE_ANALYSIS',
+      source: 'IMAGE',
+      businessRequestId,
+    });
+  } catch (refundError) {
+    console.error(
+      'Failed to restore consumed tokens',
+      {
+        userId,
+        businessRequestId,
+        originalError: originalError instanceof Error ? originalError.message : String(originalError),
+        refundError: refundError instanceof Error ? refundError.message : String(refundError),
+      },
+    );
+    throw new AppError(500, 'Unable to restore consumed tokens');
+  }
+  throw originalError;
+}
+
+export async function identifyLandmarkWithTokens(
+  input: IdentifyLandmarkWithTokensInput,
+): Promise<IdentifyResponse> {
+  const consumption = await consumeBusinessTokens({
+    userId: input.userId,
+    feature: 'AI_IMAGE_ANALYSIS',
+    source: 'IMAGE',
+    businessRequestId: input.businessRequestId,
+  });
+
+  if (consumption.idempotentReplay) {
+    throw new AppError(409, 'Image analysis request already processed');
+  }
+
+  try {
+    return await identifyLandmark(input.image, input.mimeType, {
+      lat: input.lat,
+      lon: input.lon,
+      radius: input.radius,
+      authorization: input.authorization,
+    });
+  } catch (err) {
+    return revertAndRethrow(input.userId, input.businessRequestId, err);
+  }
 }

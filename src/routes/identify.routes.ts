@@ -8,7 +8,7 @@ import {
   UnsupportedIdentificationMimeError,
   uploadIdentificationImage,
 } from '../utils/upload.js';
-import { identifyLandmark } from '../services/identify.service.js';
+import { identifyLandmarkWithTokens } from '../services/identify.service.js';
 
 const router = Router();
 
@@ -105,7 +105,18 @@ router.post(
         return;
       }
 
-      const result = await identifyLandmark(req.file.buffer, req.file.mimetype, {
+      const userId = req.user?.userId;
+      if (!userId) {
+        throw new AppError(401, 'Unauthorized');
+      }
+
+      const businessRequestId = readIdempotencyKey(req);
+
+      const result = await identifyLandmarkWithTokens({
+        userId,
+        businessRequestId,
+        image: req.file.buffer,
+        mimeType: req.file.mimetype,
         lat,
         lon,
         radius,

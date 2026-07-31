@@ -19,7 +19,7 @@ import app from '../src/app.js';
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/config/prisma.js';
 import { signAccessToken } from '../src/utils/token.js';
-import { Gender } from '@prisma/client';
+import { Gender, TokenTransactionType, WalletStatus } from '@prisma/client';
 
 const JPEG_SIGNATURE = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00]);
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
@@ -104,7 +104,7 @@ describe('Identify validation - pre-charge request identity and image validation
     await prisma.user.deleteMany({ where: emailFilter });
   }
 
-  async function createUser(): Promise<{ userId: string; token: string }> {
+  async function createUser(walletBalance?: number): Promise<{ userId: string; token: string }> {
     const user = await prisma.user.create({
       data: {
         email: `${EMAIL_PREFIX}${crypto.randomUUID()}@example.com`,
@@ -114,8 +114,29 @@ describe('Identify validation - pre-charge request identity and image validation
         nationality: 'Egyptian',
       },
     });
+    if (walletBalance !== undefined) {
+      await prisma.tokenWallet.create({
+        data: { userId: user.id, tokenBalance: walletBalance, status: WalletStatus.ACTIVE },
+      });
+    }
     const token = signAccessToken({ sub: user.id, role: 'USER' });
     return { userId: user.id, token };
+  }
+
+  async function deleteUserWithRelated(userId: string): Promise<void> {
+    await prisma.tokenTransaction.deleteMany({ where: { userId } });
+    await prisma.tokenWallet.deleteMany({ where: { userId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+  }
+
+  async function getBalance(userId: string): Promise<number | null> {
+    const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+    return wallet ? wallet.tokenBalance : null;
+  }
+
+  async function assertNoCharge(userId: string, expectedBalance: number): Promise<void> {
+    assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
+    assert.equal(await getBalance(userId), expectedBalance);
   }
 
   function buildForm(
@@ -146,8 +167,8 @@ describe('Identify validation - pre-charge request identity and image validation
     return new Blob([PNG_SIGNATURE], { type: 'image/png' });
   }
 
-  test('1. Valid JPEG request succeeds and the response shape is preserved', async () => {
-    const { userId, token } = await createUser();
+  test('1. Valid JPEG request succeeds, charges the wallet, and preserves the response shape', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const res = await fetch(`${baseUrl}/api/identify`, {
@@ -168,13 +189,14 @@ describe('Identify validation - pre-charge request identity and image validation
       assert.equal(body.cached, false);
       assert.deepEqual(body.nearby_sites, mockIdentifyResponse.nearby_sites);
       assert.equal(aiCallCount, callsBefore + 1);
+      assert.equal(await getBalance(userId), 5);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
   test('2. Valid PNG request succeeds and calls the AI provider once', async () => {
-    const { userId, token } = await createUser();
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const res = await fetch(`${baseUrl}/api/identify`, {
@@ -184,13 +206,14 @@ describe('Identify validation - pre-charge request identity and image validation
       });
       assert.equal(res.status, 200);
       assert.equal(aiCallCount, callsBefore + 1);
+      assert.equal(await getBalance(userId), 5);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('3. Missing Idempotency-Key returns 400 and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('3. Missing Idempotency-Key returns 400, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const res = await fetch(`${baseUrl}/api/identify`, {
@@ -202,13 +225,14 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Idempotency-Key header is required');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('4. Blank Idempotency-Key returns 400 and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('4. Blank Idempotency-Key returns 400, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const res = await fetch(`${baseUrl}/api/identify`, {
@@ -220,13 +244,14 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Idempotency-Key header is required');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('5. Invalid Idempotency-Key returns 400 and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('5. Invalid Idempotency-Key returns 400, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const res = await fetch(`${baseUrl}/api/identify`, {
@@ -238,13 +263,14 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Idempotency-Key header must be a valid UUID');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('6. Missing image returns 400 and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('6. Missing image returns 400, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const res = await fetch(`${baseUrl}/api/identify`, {
@@ -256,13 +282,14 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Image file is required');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('7. Unsupported MIME type returns 400 and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('7. Unsupported MIME type returns 400, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const webp = new Blob([Buffer.from([0x52, 0x49, 0x46, 0x46])], { type: 'image/webp' });
@@ -275,13 +302,14 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Only JPEG and PNG image files are allowed');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('8. Image larger than 5 MB returns 400 and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('8. Image larger than 5 MB returns 400, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const oversized = new Blob([Buffer.alloc(IDENTIFICATION_IMAGE_MAX_BYTES + 1)], {
@@ -296,13 +324,14 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Image file must not exceed 5 MB');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('9. Fake JPEG MIME with arbitrary content returns 400 and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('9. Fake JPEG MIME with arbitrary content returns 400, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const fakeJpeg = new Blob(['this is not an image at all'], { type: 'image/jpeg' });
@@ -315,13 +344,14 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Invalid image file');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('10. Fake PNG MIME with arbitrary content returns 400 and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('10. Fake PNG MIME with arbitrary content returns 400, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const fakePng = new Blob(['this is not an image at all'], { type: 'image/png' });
@@ -334,13 +364,14 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Invalid image file');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('11. JPEG bytes declared as PNG returns 400 and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('11. JPEG bytes declared as PNG returns 400, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const jpegAsPng = new Blob([JPEG_SIGNATURE], { type: 'image/png' });
@@ -353,13 +384,14 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Invalid image file');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('12. PNG bytes declared as JPEG returns 400 and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('12. PNG bytes declared as JPEG returns 400, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const pngAsJpeg = new Blob([PNG_SIGNATURE], { type: 'image/jpeg' });
@@ -372,13 +404,14 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Invalid image file');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('13. Invalid latitude returns the existing 400 message and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('13. Invalid latitude returns the existing 400 message, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const res = await fetch(`${baseUrl}/api/identify`, {
@@ -390,13 +423,14 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Invalid latitude');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('14. Invalid longitude returns the existing 400 message and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('14. Invalid longitude returns the existing 400 message, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const res = await fetch(`${baseUrl}/api/identify`, {
@@ -408,13 +442,14 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Invalid longitude');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('15. Invalid radius returns the existing 400 message and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser();
+  test('15. Invalid radius returns the existing 400 message, does not reach the AI provider, and charges nothing', async () => {
+    const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
       const res = await fetch(`${baseUrl}/api/identify`, {
@@ -426,31 +461,40 @@ describe('Identify validation - pre-charge request identity and image validation
       const body = await res.json();
       assert.equal(body.error, 'Invalid radius');
       assert.equal(aiCallCount, callsBefore);
+      await assertNoCharge(userId, 10);
     } finally {
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await deleteUserWithRelated(userId);
     }
   });
 
-  test('16. The validation step creates no token or conversation records', async () => {
-    const { token } = await createUser();
+  test('16. An invalid pre-charge request charges nothing and persists nothing', async () => {
+    const { userId, token } = await createUser(10);
+    const callsBefore = aiCallCount;
     try {
+      const fakeJpeg = new Blob(['this is not an image at all'], { type: 'image/jpeg' });
       const res = await fetch(`${baseUrl}/api/identify`, {
         method: 'POST',
         headers: authHeaders(token, crypto.randomUUID()),
-        body: buildForm('image', validJpegBlob(), 'test.jpg'),
+        body: buildForm('image', fakeJpeg, 'fake.jpg'),
       });
-      assert.equal(res.status, 200);
+      assert.equal(res.status, 400);
+      const body = await res.json();
+      assert.equal(body.error, 'Invalid image file');
+      assert.equal(aiCallCount, callsBefore);
 
-      const emailFilter = { email: { startsWith: EMAIL_PREFIX } };
-      assert.equal(await prisma.tokenTransaction.count({ where: { user: emailFilter } }), 0);
-      assert.equal(await prisma.tokenWallet.count({ where: { user: emailFilter } }), 0);
-      assert.equal(await prisma.conversation.count({ where: { user: emailFilter } }), 0);
+      assert.equal(await getBalance(userId), 10);
       assert.equal(
-        await prisma.message.count({ where: { conversation: { user: emailFilter } } }),
+        await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.CONSUME } }),
         0,
       );
+      assert.equal(
+        await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.REFUND } }),
+        0,
+      );
+      assert.equal(await prisma.conversation.count({ where: { userId } }), 0);
+      assert.equal(await prisma.message.count({ where: { conversation: { userId } } }), 0);
     } finally {
-      await prisma.user.deleteMany({ where: { email: { startsWith: EMAIL_PREFIX } } });
+      await deleteUserWithRelated(userId);
     }
   });
 });
