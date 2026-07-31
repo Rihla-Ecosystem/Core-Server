@@ -6,6 +6,7 @@ import { requireRole } from '../middleware/rbac.js';
 import * as adminController from '../controllers/admin.controller.js';
 import adminTokenPackageRoutes from './admin-token-package.routes.js';
 import adminPaymentRoutes from './admin-payment.routes.js';
+import adminTokenWalletRoutes from './admin-token-wallet.routes.js';
 
 const router = Router();
 
@@ -21,6 +22,12 @@ router.use(
   '/payments',
   requireRole('admin'),
   adminPaymentRoutes,
+);
+
+router.use(
+  '/token-wallets',
+  requireRole('admin'),
+  adminTokenWalletRoutes,
 );
 
 const roleUpdateSchema = z.object({
