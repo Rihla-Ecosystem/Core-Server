@@ -18,10 +18,12 @@ import { Gender, TokenTransactionType, TokenTransactionSource, WalletStatus } fr
 import {
   consumeBusinessTokens,
   isBusinessConsumptionSource,
+  reverseBusinessTokens,
 } from '../src/services/business-token-consumption.service.js';
 import type {
   ConsumeBusinessTokensInput,
   BusinessConsumptionSource,
+  ReverseBusinessTokensInput,
 } from '../src/services/business-token-consumption.service.js';
 
 describe('Business Token Consumption Service', () => {
@@ -82,6 +84,12 @@ describe('Business Token Consumption Service', () => {
   async function countConsumeTransactions(userId: string): Promise<number> {
     return prisma.tokenTransaction.count({
       where: { userId, type: TokenTransactionType.CONSUME },
+    });
+  }
+
+  async function countRefundTransactions(userId: string): Promise<number> {
+    return prisma.tokenTransaction.count({
+      where: { userId, type: TokenTransactionType.REFUND },
     });
   }
 
@@ -471,6 +479,284 @@ describe('Business Token Consumption Service', () => {
         where: { userId, type: { not: TokenTransactionType.CONSUME } },
       });
       assert.equal(nonConsumeCount, 0);
+    } finally {
+      await prisma.tokenTransaction.deleteMany({ where: { userId } });
+      await prisma.tokenWallet.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('16. reverseBusinessTokens restores balance after a consume', async () => {
+    const { userId, walletId } = await createUserWithWallet(10);
+    const businessRequestId = crypto.randomUUID();
+
+    try {
+      const consumed = await consumeBusinessTokens(
+        buildInput(userId, { businessRequestId }),
+      );
+      assert.equal(consumed.walletBalance, 8);
+
+      const refunded = await reverseBusinessTokens({
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        businessRequestId,
+      });
+
+      assert.equal(refunded.walletId, walletId);
+      assert.equal(refunded.feature, 'AI_CHAT_QUERY');
+      assert.equal(refunded.source, 'CHAT');
+      assert.equal(refunded.tokensRefunded, 2);
+      assert.equal(refunded.walletBalance, 10);
+      assert.equal(refunded.idempotentReplay, false);
+
+      const transaction = await prisma.tokenTransaction.findUnique({
+        where: { id: refunded.transactionId },
+      });
+      assert.ok(transaction);
+      assert.equal(transaction.walletId, walletId);
+      assert.equal(transaction.userId, userId);
+      assert.equal(transaction.type, TokenTransactionType.REFUND);
+      assert.equal(transaction.tokens, 2);
+      assert.equal(transaction.source, TokenTransactionSource.CHAT);
+      assert.equal(transaction.paymentId, null);
+      assert.equal(
+        transaction.referenceId,
+        `${userId}:AI_CHAT_QUERY:${businessRequestId}:refund`,
+      );
+      assert.deepEqual(transaction.metadata, {
+        feature: 'AI_CHAT_QUERY',
+        businessRequestId,
+        refundedTransactionId: consumed.transactionId,
+      });
+
+      const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
+      assert.ok(wallet);
+      assert.equal(wallet.tokenBalance, 10);
+      assert.equal(await countRefundTransactions(userId), 1);
+    } finally {
+      await prisma.tokenTransaction.deleteMany({ where: { userId } });
+      await prisma.tokenWallet.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('17. Sequential duplicate refunds are idempotent', async () => {
+    const { userId } = await createUserWithWallet(10);
+    const businessRequestId = crypto.randomUUID();
+
+    try {
+      await consumeBusinessTokens(buildInput(userId, { businessRequestId }));
+
+      const input: ReverseBusinessTokensInput = {
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        businessRequestId,
+      };
+
+      const first = await reverseBusinessTokens(input);
+      const second = await reverseBusinessTokens(input);
+
+      assert.equal(first.idempotentReplay, false);
+      assert.equal(second.idempotentReplay, true);
+      assert.equal(second.transactionId, first.transactionId);
+      assert.equal(second.walletId, first.walletId);
+      assert.equal(second.tokensRefunded, first.tokensRefunded);
+      assert.equal(second.walletBalance, 10);
+      assert.equal(await countRefundTransactions(userId), 1);
+
+      const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+      assert.ok(wallet);
+      assert.equal(wallet.tokenBalance, 10);
+    } finally {
+      await prisma.tokenTransaction.deleteMany({ where: { userId } });
+      await prisma.tokenWallet.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('18. Refund without a prior consume is rejected with 409', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      await expectAppError(
+        reverseBusinessTokens({
+          userId,
+          feature: 'AI_CHAT_QUERY',
+          source: 'CHAT',
+          businessRequestId: crypto.randomUUID(),
+        }),
+        409,
+        'Token refund conflict',
+      );
+
+      const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+      assert.ok(wallet);
+      assert.equal(wallet.tokenBalance, 10);
+      assert.equal(await countRefundTransactions(userId), 0);
+    } finally {
+      await prisma.tokenWallet.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('19. Refund credits INACTIVE and BLOCKED wallets', async () => {
+    for (const status of [WalletStatus.INACTIVE, WalletStatus.BLOCKED]) {
+      const { userId, walletId } = await createUserWithWallet(10);
+      const businessRequestId = crypto.randomUUID();
+
+      try {
+        await consumeBusinessTokens(buildInput(userId, { businessRequestId }));
+
+        await prisma.tokenWallet.update({
+          where: { id: walletId },
+          data: { status },
+        });
+
+        const refunded = await reverseBusinessTokens({
+          userId,
+          feature: 'AI_CHAT_QUERY',
+          source: 'CHAT',
+          businessRequestId,
+        });
+
+        assert.equal(refunded.tokensRefunded, 2);
+        assert.equal(refunded.walletBalance, 10);
+
+        const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
+        assert.ok(wallet);
+        assert.equal(wallet.tokenBalance, 10);
+      } finally {
+        await prisma.tokenTransaction.deleteMany({ where: { userId } });
+        await prisma.tokenWallet.deleteMany({ where: { userId } });
+        await prisma.user.deleteMany({ where: { id: userId } });
+      }
+    }
+  });
+
+  test('20. Concurrent duplicate refunds are idempotent', async () => {
+    const { userId } = await createUserWithWallet(10);
+    const businessRequestId = crypto.randomUUID();
+
+    try {
+      await consumeBusinessTokens(buildInput(userId, { businessRequestId }));
+
+      const input: ReverseBusinessTokensInput = {
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        businessRequestId,
+      };
+
+      const [first, second] = await Promise.all([
+        reverseBusinessTokens(input),
+        reverseBusinessTokens(input),
+      ]);
+
+      assert.equal(first.transactionId, second.transactionId);
+      assert.equal(first.walletId, second.walletId);
+
+      const replays = [first, second].filter((r) => r.idempotentReplay === true);
+      const originals = [first, second].filter((r) => r.idempotentReplay === false);
+      assert.equal(replays.length, 1);
+      assert.equal(originals.length, 1);
+
+      const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+      assert.ok(wallet);
+      assert.equal(wallet.tokenBalance, 10);
+      assert.equal(await countRefundTransactions(userId), 1);
+    } finally {
+      await prisma.tokenTransaction.deleteMany({ where: { userId } });
+      await prisma.tokenWallet.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('21. Empty or whitespace inputs are rejected with status 400', async () => {
+    const { userId } = await createUserWithWallet(10);
+    const businessRequestId = crypto.randomUUID();
+
+    try {
+      await expectAppError(
+        reverseBusinessTokens({
+          userId: '   ',
+          feature: 'AI_CHAT_QUERY',
+          source: 'CHAT',
+          businessRequestId,
+        }),
+        400,
+        'userId must not be empty',
+      );
+
+      await expectAppError(
+        reverseBusinessTokens({
+          userId,
+          feature: 'AI_CHAT_QUERY',
+          source: 'CHAT',
+          businessRequestId: '   ',
+        }),
+        400,
+        'businessRequestId must not be empty',
+      );
+
+      await expectAppError(
+        reverseBusinessTokens({
+          userId,
+          feature: 'AI_CHAT_QUERY',
+          source: 'ADMIN' as BusinessConsumptionSource,
+          businessRequestId,
+        }),
+        400,
+        'Invalid business consumption source',
+      );
+
+      assert.equal(await countRefundTransactions(userId), 0);
+    } finally {
+      await prisma.tokenWallet.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('22. Refund uses the original CONSUME tokens, not the current catalogue cost', async () => {
+    const { userId, walletId } = await createUserWithWallet(10);
+    const businessRequestId = crypto.randomUUID();
+    const referenceId = `${userId}:AI_CHAT_QUERY:${businessRequestId}`;
+
+    try {
+      await prisma.tokenTransaction.create({
+        data: {
+          walletId,
+          userId,
+          type: TokenTransactionType.CONSUME,
+          tokens: 5,
+          source: TokenTransactionSource.CHAT,
+          paymentId: null,
+          referenceId,
+          metadata: { feature: 'AI_CHAT_QUERY', businessRequestId },
+        },
+      });
+
+      const refunded = await reverseBusinessTokens({
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        businessRequestId,
+      });
+
+      assert.equal(refunded.tokensRefunded, 5);
+      assert.equal(refunded.walletBalance, 15);
+
+      const transaction = await prisma.tokenTransaction.findUnique({
+        where: { id: refunded.transactionId },
+      });
+      assert.ok(transaction);
+      assert.equal(transaction.type, TokenTransactionType.REFUND);
+      assert.equal(transaction.tokens, 5);
+
+      const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
+      assert.ok(wallet);
+      assert.equal(wallet.tokenBalance, 15);
     } finally {
       await prisma.tokenTransaction.deleteMany({ where: { userId } });
       await prisma.tokenWallet.deleteMany({ where: { userId } });
