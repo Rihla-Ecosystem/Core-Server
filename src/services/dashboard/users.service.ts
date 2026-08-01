@@ -1994,11 +1994,12 @@ export async function getGrowthAnalytics(): Promise<DashboardGrowthAnalyticsResu
   const monthlyStart = addMonths(now, -11);
   const yearlyStart = addYears(now, -4);
 
-  const countByTruncatedPeriod = async (column: string, step: 'day' | 'week' | 'month' | 'year'): Promise<Array<{ created_at: Date; count: bigint }>> => {
+  const countByTruncatedPeriod = async (column: 'created_at', step: 'day' | 'week' | 'month' | 'year'): Promise<Array<{ created_at: Date; count: bigint }>> => {
+    const start = step === 'day' ? dailyStart : step === 'week' ? weeklyStart : step === 'month' ? monthlyStart : yearlyStart;
     return prisma.$queryRaw`
-      SELECT date_trunc(${step}, ${column}::timestamptz) AS created_at, COUNT(*)::bigint AS count
-      FROM ${column === 'created_at' ? 'users' : 'payments'}
-      WHERE ${column}::timestamptz >= ${step === 'day' ? dailyStart : step === 'week' ? weeklyStart : step === 'month' ? monthlyStart : yearlyStart}
+      SELECT date_trunc(${Prisma.raw(`'${step}'`)}, ${Prisma.raw(column)}::timestamptz) AS created_at, COUNT(*)::bigint AS count
+      FROM ${Prisma.raw('users')}
+      WHERE ${Prisma.raw(column)}::timestamptz >= ${start}
       GROUP BY 1
     `;
   };
@@ -2065,10 +2066,11 @@ export async function getRevenueAnalytics(): Promise<DashboardRevenueAnalyticsRe
   const yearlyStart = addYears(now, -4);
 
   const revenueByTruncatedPeriod = async (step: 'day' | 'week' | 'month' | 'year'): Promise<Array<{ paid_at: Date; revenue: Prisma.Decimal }>> => {
+    const start = step === 'day' ? dailyStart : step === 'week' ? weeklyStart : step === 'month' ? monthlyStart : yearlyStart;
     return prisma.$queryRaw`
-      SELECT COALESCE(date_trunc(${step}, paid_at::timestamptz), date_trunc(${step}, created_at::timestamptz)) AS paid_at, COALESCE(SUM(amount), 0) AS revenue
-      FROM payments
-      WHERE status = 'COMPLETED' AND created_at::timestamptz >= ${step === 'day' ? dailyStart : step === 'week' ? weeklyStart : step === 'month' ? monthlyStart : yearlyStart}
+      SELECT COALESCE(date_trunc(${Prisma.raw(`'${step}'`)}, "paidAt"::timestamptz), date_trunc(${Prisma.raw(`'${step}'`)}, "createdAt"::timestamptz)) AS paid_at, COALESCE(SUM(amount), 0) AS revenue
+      FROM ${Prisma.raw('"Payment"')}
+      WHERE status = 'COMPLETED' AND "createdAt"::timestamptz >= ${start}
       GROUP BY 1
     `;
   };
