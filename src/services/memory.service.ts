@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 
@@ -5,6 +6,16 @@ export async function listTrips(userId: string) {
   return prisma.tripHistory.findMany({
     where: { userId },
     orderBy: { startDate: 'desc' },
+    select: {
+      id: true,
+      title: true,
+      destination: true,
+      startDate: true,
+      endDate: true,
+      notes: true,
+      createdAt: true,
+      updatedAt: true,
+    },
   });
 }
 
@@ -95,28 +106,33 @@ export async function upsertSummary(
     periodEnd: string;
   },
 ) {
-  const existing = await prisma.interactionSummary.findFirst({
-    where: { userId },
-    orderBy: { periodEnd: 'desc' },
-  });
+  return prisma.$transaction(
+    async (tx) => {
+      const existing = await tx.interactionSummary.findFirst({
+        where: { userId },
+        orderBy: { periodEnd: 'desc' },
+      });
 
-  if (existing) {
-    return prisma.interactionSummary.update({
-      where: { id: existing.id },
-      data: {
-        summary: data.summary,
-        periodStart: new Date(data.periodStart),
-        periodEnd: new Date(data.periodEnd),
-      },
-    });
-  }
+      if (existing) {
+        return tx.interactionSummary.update({
+          where: { id: existing.id },
+          data: {
+            summary: data.summary,
+            periodStart: new Date(data.periodStart),
+            periodEnd: new Date(data.periodEnd),
+          },
+        });
+      }
 
-  return prisma.interactionSummary.create({
-    data: {
-      userId,
-      summary: data.summary,
-      periodStart: new Date(data.periodStart),
-      periodEnd: new Date(data.periodEnd),
+      return tx.interactionSummary.create({
+        data: {
+          userId,
+          summary: data.summary,
+          periodStart: new Date(data.periodStart),
+          periodEnd: new Date(data.periodEnd),
+        },
+      });
     },
-  });
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
 }

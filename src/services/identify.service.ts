@@ -43,6 +43,7 @@ export async function identifyLandmark(
     method: 'POST',
     headers,
     body: formData,
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (!response.ok) {

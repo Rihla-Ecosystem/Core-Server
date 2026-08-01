@@ -22,11 +22,15 @@ function requireActorId(req: Request): string {
 type QueryParameter = string | ParsedQs | Array<string | ParsedQs> | undefined;
 
 function parsePositiveInteger(value: QueryParameter): number | undefined {
-  if (typeof value !== 'string') {
+  let normalized: string;
+  if (typeof value === 'string') {
+    normalized = value.trim();
+  } else if (typeof value === 'number') {
+    normalized = String(value);
+  } else {
     return undefined;
   }
 
-  const normalized = value.trim();
   if (!/^[1-9]\d*$/.test(normalized)) {
     return undefined;
   }
@@ -45,7 +49,7 @@ function getSingleParam(value: string | string[] | undefined, name: string): str
 
 export async function listUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const actorId = requireActorId(req);
+    requireActorId(req);
     const result = await usersService.listUsers({
       page: parsePositiveInteger(req.query.page) ?? 1,
       limit: parsePositiveInteger(req.query.limit) ?? 20,
@@ -77,7 +81,6 @@ export async function listUsers(req: Request, res: Response, next: NextFunction)
     });
 
     sendSuccess(res, result, '');
-    console.info('[dashboard/users] list_users', { actorId, page: req.query.page, limit: req.query.limit });
   } catch (err) {
     next(err);
   }

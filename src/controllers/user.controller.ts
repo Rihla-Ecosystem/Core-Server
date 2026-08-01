@@ -75,7 +75,8 @@ export async function getUserBadges(req: Request, res: Response, next: NextFunct
 
 export async function getLeaderboard(req: Request, res: Response, next: NextFunction) {
   try {
-    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const rawLimit = Number.parseInt(String(req.query.limit ?? ''), 10);
+    const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : 50;
     const leaderboard = await userService.getLeaderboard(limit);
     res.json(leaderboard);
   } catch (err) {

@@ -176,32 +176,49 @@ export async function getLeaderboard(limit = 50) {
   });
 }
 
-export async function getAllUsers() {
-  return prisma.user.findMany({
-    select: {
-      id: true,
-      email: true,
-      displayName: true,
-      gender: true,
-      nationality: true,
-      language: true,
-      budgetLevel: true,
-      arrivalDate: true,
-      departureDate: true,
-      travelStyle: true,
-      interests: true,
-      accommodationType: true,
-      roleId: true,
-      isActive: true,
-      isBanned: true,
-      isEmailVerified: true,
-      xp: true,
-      level: true,
-      createdAt: true,
-      role: { select: { name: true } },
+export async function getAllUsers(page = 1, limit = 50) {
+  const skip = (page - 1) * limit;
+  const [total, users] = await Promise.all([
+    prisma.user.count({ where: { isDeleted: false } }),
+    prisma.user.findMany({
+      where: { isDeleted: false },
+      skip,
+      take: limit,
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        gender: true,
+        nationality: true,
+        language: true,
+        budgetLevel: true,
+        arrivalDate: true,
+        departureDate: true,
+        travelStyle: true,
+        interests: true,
+        accommodationType: true,
+        roleId: true,
+        isActive: true,
+        isBanned: true,
+        isEmailVerified: true,
+        xp: true,
+        level: true,
+        createdAt: true,
+        role: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ]);
+
+  return {
+    users,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
     },
-    orderBy: { createdAt: 'desc' },
-  });
+  };
 }
 
 export async function updateUserRole(targetUserId: string, roleId: number, actorId: string) {
@@ -256,13 +273,28 @@ export async function banUser(targetUserId: string, actorId: string) {
   return updated;
 }
 
-export async function getAuditLogs() {
-  return prisma.auditLog.findMany({
-    orderBy: { createdAt: 'desc' },
-    take: 100,
-    include: {
-      actor: { select: { displayName: true, email: true } },
-      target: { select: { displayName: true, email: true } },
+export async function getAuditLogs(page = 1, limit = 50) {
+  const skip = (page - 1) * limit;
+  const [total, logs] = await Promise.all([
+    prisma.auditLog.count(),
+    prisma.auditLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limit,
+      include: {
+        actor: { select: { displayName: true, email: true } },
+        target: { select: { displayName: true, email: true } },
+      },
+    }),
+  ]);
+
+  return {
+    logs,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
     },
-  });
+  };
 }

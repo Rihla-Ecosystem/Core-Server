@@ -8,32 +8,36 @@ import * as authController from '../controllers/auth.controller.js';
 const router = Router();
 
 const registerSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().email(),
   password: z.string().min(8).regex(/[A-Z]/, 'Must contain at least 1 uppercase letter').regex(/[0-9]/, 'Must contain at least 1 number'),
-  display_name: z.string().min(1).max(100),
+  display_name: z.string().trim().min(1).max(100),
   gender: z.enum(['MALE', 'FEMALE']),
-  nationality: z.string().min(1).max(100),
-  language: z.array(z.string().min(2).max(10)).min(1),
+  nationality: z.string().trim().min(1).max(100),
+  language: z.array(z.string().trim().min(2).max(10)).min(1).max(20),
   budget_level: z.string().max(50).optional(),
   arrival_date: z.string().datetime().optional(),
   departure_date: z.string().datetime().optional(),
   travel_style: z.string().max(50).optional(),
-  interests: z.array(z.string()).optional(),
+  interests: z.array(z.string().max(100)).max(50).optional(),
   accommodation_type: z.string().max(50).optional(),
 });
 
 const loginSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().email(),
   password: z.string().min(1),
 });
 
 const emailSchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().email(),
 });
 
 const resetPasswordSchema = z.object({
-  token: z.string().min(1),
+  token: z.string().trim().min(1),
   new_password: z.string().min(8).regex(/[A-Z]/).regex(/[0-9]/),
+});
+
+const verifyEmailQuerySchema = z.object({
+  token: z.string().trim().min(1),
 });
 
 const registerLimiter = rateLimit({
@@ -68,6 +72,30 @@ const resendVerificationLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => req.body.email,
+});
+
+const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many reset attempts, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: { error: 'Too many refresh attempts, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const verifyEmailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: 'Too many verification attempts, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 /**
@@ -122,7 +150,7 @@ router.post('/register', registerLimiter, validate(registerSchema), authControll
  *       400:
  *         description: Invalid or expired token
  */
-router.get('/verify-email', authController.verifyEmail);
+router.get('/verify-email', verifyEmailLimiter, validate(verifyEmailQuerySchema, 'query'), authController.verifyEmail);
 
 /**
  * @openapi
@@ -217,7 +245,7 @@ router.post('/logout-all', authenticate, authController.logoutAll);
  *       401:
  *         description: Invalid or expired refresh token
  */
-router.post('/refresh', authController.refresh);
+router.post('/refresh', refreshLimiter, authController.refresh);
 
 /**
  * @openapi
@@ -255,6 +283,6 @@ router.post('/forgot-password', forgotPasswordLimiter, validate(emailSchema), au
  *       400:
  *         description: Invalid or expired token
  */
-router.post('/reset-password', validate(resetPasswordSchema), authController.resetPassword);
+router.post('/reset-password', resetPasswordLimiter, validate(resetPasswordSchema), authController.resetPassword);
 
 export default router;
