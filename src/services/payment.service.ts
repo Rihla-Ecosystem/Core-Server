@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { env } from '../config/env.js';
 import { createPaymobIntention } from './paymob.service.js';
 import type { PaymobBillingData, PaymobIntentionResult } from './paymob.service.js';
 
@@ -30,6 +31,8 @@ export interface CreatePaymentIntentionResult {
   paymentId: string;
   intentionId: string;
   clientSecret: string;
+  /** Paymob hosted Unified Checkout URL the client redirects the user to. */
+  checkoutUrl: string;
   /** Amount in major currency units as stored in the database (e.g. "100.00" EGP) */
   amount: string;
   currency: string;
@@ -190,6 +193,7 @@ export async function createPaymentIntention(
     paymentId: payment.id,
     intentionId: paymobResult.intentionId,
     clientSecret: paymobResult.clientSecret,
+    checkoutUrl: `${env.PAYMOB_API_BASE_URL}/unifiedcheckout/?publicKey=${encodeURIComponent(env.PAYMOB_PUBLIC_KEY)}&clientSecret=${encodeURIComponent(paymobResult.clientSecret)}`,
     amount: price.toFixed(2),
     currency: tokenPackage.currency,
     tokens: tokenPackage.tokens,

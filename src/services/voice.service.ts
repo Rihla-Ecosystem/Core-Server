@@ -6,6 +6,7 @@ import { upstreamError } from '../utils/http-client.js';
 export interface VoiceResponse {
   text_response: string;
   audio_response?: string | null;
+  audio_url?: string | null;
   conversation_id?: string | null;
   usage?: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
 }
