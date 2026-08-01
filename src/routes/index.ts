@@ -16,6 +16,7 @@ import tokenPackageRoutes from './token-package.routes.js';
 import tokenRoutes from './token.routes.js';
 import identifyRoutes from './identify.routes.js';
 import voiceRoutes from './voice.routes.js';
+import dashboardUsersRoutes from './dashboard/users.routes.js';
 import * as userController from '../controllers/user.controller.js';
 
 const router = Router();
@@ -37,6 +38,7 @@ router.use('/token-packages', tokenPackageRoutes);
 router.use('/tokens', tokenRoutes);
 router.use('/identify', identifyRoutes);
 router.use('/voice', voiceRoutes);
+router.use('/dashboard/users', dashboardUsersRoutes);
 
 router.get('/leaderboard', userController.getLeaderboard);
 
