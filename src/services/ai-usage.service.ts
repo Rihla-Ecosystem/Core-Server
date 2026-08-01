@@ -125,17 +125,7 @@ export async function getAiUsageSummary() {
       totalTokens: m._sum.totalTokens ?? 0,
       cost: Number(m._sum.cost ?? 0),
     })),
-    recent: recent.map((r: {
-      id: string;
-      user: { displayName: string | null; email: string | null } | null;
-      source: string;
-      model: string | null;
-      inputTokens: number;
-      outputTokens: number;
-      totalTokens: number;
-      cost: number;
-      createdAt: Date;
-    }) => ({
+    recent: recent.map((r) => ({
       id: r.id,
       user: r.user ? { displayName: r.user.displayName, email: r.user.email } : null,
       source: r.source,
