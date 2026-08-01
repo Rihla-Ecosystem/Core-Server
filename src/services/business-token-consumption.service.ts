@@ -18,6 +18,7 @@ export interface ConsumeBusinessTokensInput {
 
 export interface ConsumeBusinessTokensResult {
   transactionId: string;
+  referenceId: string;
   walletId: string;
   feature: BusinessTokenFeature;
   source: BusinessConsumptionSource;
@@ -105,6 +106,7 @@ export async function consumeBusinessTokens(
 
     return {
       transactionId: existing.id,
+      referenceId: existing.referenceId ?? referenceId,
       walletId: existing.walletId,
       feature: input.feature,
       source: input.source,
@@ -169,6 +171,7 @@ export async function consumeBusinessTokens(
 
       return {
         transactionId: transaction.id,
+        referenceId,
         walletId: transaction.walletId,
         feature: input.feature,
         source: input.source,
@@ -196,6 +199,7 @@ export async function consumeBusinessTokens(
         if (wallet) {
           return {
             transactionId: existing.id,
+            referenceId: existing.referenceId ?? referenceId,
             walletId: existing.walletId,
             feature: input.feature,
             source: input.source,

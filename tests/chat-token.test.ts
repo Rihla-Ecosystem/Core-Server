@@ -696,7 +696,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
       }
 
       const refundFailureLogged = capturedLogs.some(
-        (args) => args[0] === 'Failed to restore consumed tokens',
+        (args) => args[0] === '[tokens] compensation_failed',
       );
       assert.equal(refundFailureLogged, true);
       assert.equal(

@@ -7,39 +7,9 @@ import { fetchSafetyContext } from './risk.service.js';
 import { getExchangeRates, isSupportedCurrency } from './currency.service.js';
 import { getJourneyProgress } from './internal.service.js';
 import { AppError } from '../middleware/errorHandler.js';
-import {
-  consumeBusinessTokens,
-  reverseBusinessTokens,
-} from './business-token-consumption.service.js';
+import { executeWithBusinessTokenCharge } from './tokenized-service-execution.service.js';
 
 export type ChatPersona = 'auto' | 'tour_guide' | 'local_expert' | 'safety_guru';
-
-async function revertAndRethrow(
-  userId: string,
-  businessRequestId: string,
-  originalError: unknown,
-): Promise<never> {
-  try {
-    await reverseBusinessTokens({
-      userId,
-      feature: 'AI_CHAT_QUERY',
-      source: 'CHAT',
-      businessRequestId,
-    });
-  } catch (refundError) {
-    console.error(
-      'Failed to restore consumed tokens',
-      {
-        userId,
-        businessRequestId,
-        originalError: originalError instanceof Error ? originalError.message : String(originalError),
-        refundError: refundError instanceof Error ? refundError.message : String(refundError),
-      },
-    );
-    throw new AppError(500, 'Unable to restore consumed tokens');
-  }
-  throw originalError;
-}
 
 export async function chat(
   userId: string,
@@ -70,18 +40,13 @@ export async function chat(
   });
   if (!user) throw new AppError(404, 'User not found');
 
-  const consumption = await consumeBusinessTokens({
+  return executeWithBusinessTokenCharge({
     userId,
     feature: 'AI_CHAT_QUERY',
     source: 'CHAT',
-    businessRequestId: options.businessRequestId,
-  });
-
-  if (consumption.idempotentReplay) {
-    throw new AppError(409, 'Chat request already processed');
-  }
-
-  try {
+    idempotencyKey: options.businessRequestId,
+    idempotentReplayMessage: 'Chat request already processed',
+    execute: async () => {
     const preferences = await prisma.userPreference.findMany({
       where: { userId },
       select: { key: true, value: true },
@@ -182,8 +147,7 @@ export async function chat(
     if (currencyContext) result.currency = currencyContext;
     if (journeyProgress) result.user_journeys = journeyProgress;
 
-    return result;
-  } catch (err) {
-    return revertAndRethrow(userId, options.businessRequestId, err);
-  }
+      return result;
+    },
+  });
 }

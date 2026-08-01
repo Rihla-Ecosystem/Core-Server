@@ -25,6 +25,7 @@ import type {
   BusinessConsumptionSource,
   ReverseBusinessTokensInput,
 } from '../src/services/business-token-consumption.service.js';
+import { executeWithBusinessTokenCharge } from '../src/services/tokenized-service-execution.service.js';
 
 describe('Business Token Consumption Service', () => {
   before(async () => {
@@ -758,6 +759,61 @@ describe('Business Token Consumption Service', () => {
       assert.ok(wallet);
       assert.equal(wallet.tokenBalance, 15);
     } finally {
+      await prisma.tokenTransaction.deleteMany({ where: { userId } });
+      await prisma.tokenWallet.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('23. Central execution charges once after successful callback execution', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const result = await executeWithBusinessTokenCharge({
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        idempotencyKey: crypto.randomUUID(),
+        idempotentReplayMessage: 'Chat request already processed',
+        execute: async () => 'completed',
+      });
+
+      assert.equal(result, 'completed');
+      assert.equal(await countConsumeTransactions(userId), 1);
+      assert.equal(await countRefundTransactions(userId), 0);
+    } finally {
+      await prisma.tokenTransaction.deleteMany({ where: { userId } });
+      await prisma.tokenWallet.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('24. Central execution preserves the provider error and logs a failed refund', async () => {
+    const { userId } = await createUserWithWallet(10);
+    const originalError = new AppError(502, 'Provider failed');
+    const originalConsoleError = console.error;
+    const logs: unknown[][] = [];
+
+    try {
+      console.error = (...args: unknown[]) => { logs.push(args); };
+      await assert.rejects(
+        executeWithBusinessTokenCharge({
+          userId,
+          feature: 'AI_CHAT_QUERY',
+          source: 'CHAT',
+          idempotencyKey: crypto.randomUUID(),
+          idempotentReplayMessage: 'Chat request already processed',
+          execute: async () => {
+            await prisma.tokenTransaction.deleteMany({ where: { userId, type: 'CONSUME' } });
+            throw originalError;
+          },
+        }),
+        (error: unknown) => error === originalError,
+      );
+      assert.equal(logs.length, 1);
+      assert.equal(logs[0][0], '[tokens] compensation_failed');
+    } finally {
+      console.error = originalConsoleError;
       await prisma.tokenTransaction.deleteMany({ where: { userId } });
       await prisma.tokenWallet.deleteMany({ where: { userId } });
       await prisma.user.deleteMany({ where: { id: userId } });

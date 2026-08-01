@@ -16,6 +16,10 @@ export type BusinessTokenFeature = keyof typeof BUSINESS_TOKEN_FEATURE_COSTS;
 
 export type BusinessTokenCost = (typeof BUSINESS_TOKEN_FEATURE_COSTS)[BusinessTokenFeature];
 
+export function isBusinessTokenFeature(value: string): value is BusinessTokenFeature {
+  return Object.hasOwn(BUSINESS_TOKEN_FEATURE_COSTS, value);
+}
+
 // Object.keys on the as-const catalogue returns exactly its own keys, so
 // narrowing to BusinessTokenFeature[] is the smallest safe assertion here.
 export const BUSINESS_TOKEN_FEATURES: readonly BusinessTokenFeature[] =
