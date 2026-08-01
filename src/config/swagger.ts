@@ -186,12 +186,13 @@ const options: swaggerJsdoc.Options = {
       { name: 'Auth', description: 'Authentication endpoints' },
       { name: 'Users', description: 'User profile & badges' },
       { name: 'Admin', description: 'Admin & moderator endpoints' },
+      { name: 'Dashboard Users', description: 'Dashboard user management and analytics' },
       { name: 'Environment', description: 'Environment endpoints' },
       { name: 'Geo', description: 'Geo endpoints' },
       { name: 'System', description: 'Health & documentation' },
     ],
   },
-  apis: ['./src/routes/*.ts'],
+  apis: ['./src/routes/**/*.ts'],
 };
 
 export const swaggerSpec = swaggerJsdoc(options);

@@ -91,6 +91,9 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
         refundedTokens: 0,
         netConsumedTokens: 0,
         bonusTokens: 0,
+        adjustmentCredits: 0,
+        adjustmentDebits: 0,
+        netAdjustments: 0,
       });
     } finally {
       await prisma.user.delete({ where: { id: user.id } });
@@ -606,8 +609,11 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
 
       const keys = Object.keys(body.data).sort();
       assert.deepEqual(keys, [
+        'adjustmentCredits',
+        'adjustmentDebits',
         'bonusTokens',
         'consumedTokens',
+        'netAdjustments',
         'netConsumedTokens',
         'purchasedTokens',
         'refundedTokens',
@@ -703,6 +709,9 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
           refundedTokens: 0,
           netConsumedTokens: 0,
           bonusTokens: 0,
+          adjustmentCredits: 0,
+          adjustmentDebits: 0,
+          netAdjustments: 0,
         });
       }
 
@@ -713,6 +722,110 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
       assert.deepEqual(txBefore, txAfter);
     } finally {
       await prisma.tokenTransaction.delete({ where: { id: tx.id } });
+      await prisma.tokenWallet.delete({ where: { id: wallet.id } });
+      await prisma.user.delete({ where: { id: user.id } });
+    }
+  });
+
+  test('17. adjustmentCredits and adjustmentDebits are derived from ADJUSTMENT metadata operation', async () => {
+    const user = await prisma.user.create({
+      data: {
+        email: `test_summary_adjmetrics_${Date.now()}@example.com`,
+        passwordHash: 'hash',
+        displayName: 'User Adjustment Metrics',
+        gender: Gender.MALE,
+        nationality: 'Egyptian',
+      },
+    });
+    const wallet = await prisma.tokenWallet.create({
+      data: { userId: user.id, tokenBalance: 250, status: 'ACTIVE' },
+    });
+
+    const txCredit = await prisma.tokenTransaction.create({
+      data: {
+        userId: user.id,
+        walletId: wallet.id,
+        type: TokenTransactionType.ADJUSTMENT,
+        source: TokenTransactionSource.ADMIN,
+        tokens: 300,
+        metadata: { operation: 'CREDIT', reason: 'Manual credit' },
+      },
+    });
+    const txDebit = await prisma.tokenTransaction.create({
+      data: {
+        userId: user.id,
+        walletId: wallet.id,
+        type: TokenTransactionType.ADJUSTMENT,
+        source: TokenTransactionSource.ADMIN,
+        tokens: 100,
+        metadata: { operation: 'DEBIT', reason: 'Manual debit' },
+      },
+    });
+
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
+
+    try {
+      const res = await fetch(`${baseUrl}/api/tokens/summary`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(res.status, 200);
+
+      const body = await res.json();
+      assert.equal(body.data.adjustmentCredits, 300);
+      assert.equal(body.data.adjustmentDebits, 100);
+      assert.equal(body.data.netAdjustments, 200);
+      assert.equal(body.data.purchasedTokens, 0);
+      assert.equal(body.data.consumedTokens, 0);
+      assert.equal(body.data.refundedTokens, 0);
+      assert.equal(body.data.netConsumedTokens, 0);
+      assert.equal(body.data.bonusTokens, 0);
+    } finally {
+      await prisma.tokenTransaction.deleteMany({
+        where: { id: { in: [txCredit.id, txDebit.id] } },
+      });
+      await prisma.tokenWallet.delete({ where: { id: wallet.id } });
+      await prisma.user.delete({ where: { id: user.id } });
+    }
+  });
+
+  test('18. ADJUSTMENT transactions without an operation metadata are not counted in adjustment metrics', async () => {
+    const user = await prisma.user.create({
+      data: {
+        email: `test_summary_adjnoop_${Date.now()}@example.com`,
+        passwordHash: 'hash',
+        displayName: 'User Adjustment No Operation',
+        gender: Gender.FEMALE,
+        nationality: 'Egyptian',
+      },
+    });
+    const wallet = await prisma.tokenWallet.create({
+      data: { userId: user.id, tokenBalance: 500, status: 'ACTIVE' },
+    });
+
+    const txAdj = await prisma.tokenTransaction.create({
+      data: {
+        userId: user.id,
+        walletId: wallet.id,
+        type: TokenTransactionType.ADJUSTMENT,
+        source: TokenTransactionSource.ADMIN,
+        tokens: 500,
+      },
+    });
+
+    const token = signAccessToken({ sub: user.id, role: 'USER' });
+
+    try {
+      const res = await fetch(`${baseUrl}/api/tokens/summary`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(res.status, 200);
+
+      const body = await res.json();
+      assert.equal(body.data.adjustmentCredits, 0);
+      assert.equal(body.data.adjustmentDebits, 0);
+      assert.equal(body.data.netAdjustments, 0);
+    } finally {
+      await prisma.tokenTransaction.delete({ where: { id: txAdj.id } });
       await prisma.tokenWallet.delete({ where: { id: wallet.id } });
       await prisma.user.delete({ where: { id: user.id } });
     }

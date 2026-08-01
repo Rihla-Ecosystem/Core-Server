@@ -32,6 +32,9 @@ export interface TokenSummaryResult {
   refundedTokens: number;
   netConsumedTokens: number;
   bonusTokens: number;
+  adjustmentCredits: number;
+  adjustmentDebits: number;
+  netAdjustments: number;
 }
 
 /**
@@ -128,7 +131,7 @@ export async function getTokenTransactions(
  * @param userId - Verified user UUID from JWT
  */
 export async function getTokenSummary(userId: string): Promise<TokenSummaryResult> {
-  const [wallet, grouped] = await Promise.all([
+  const [wallet, grouped, adjustments] = await Promise.all([
     prisma.tokenWallet.findUnique({
       where: { userId },
       select: { tokenBalance: true },
@@ -138,6 +141,16 @@ export async function getTokenSummary(userId: string): Promise<TokenSummaryResul
       where: { userId },
       _sum: { tokens: true },
     }),
+    prisma.tokenTransaction.findMany({
+      where: {
+        userId,
+        type: 'ADJUSTMENT',
+      },
+      select: {
+        tokens: true,
+        metadata: true,
+      },
+    }),
   ]);
 
   const remainingTokens = wallet ? wallet.tokenBalance : 0;
@@ -146,6 +159,8 @@ export async function getTokenSummary(userId: string): Promise<TokenSummaryResul
   let consumedTokens = 0;
   let refundedTokens = 0;
   let bonusTokens = 0;
+  let adjustmentCredits = 0;
+  let adjustmentDebits = 0;
 
   for (const item of grouped) {
     const amount = item._sum.tokens ?? 0;
@@ -160,7 +175,24 @@ export async function getTokenSummary(userId: string): Promise<TokenSummaryResul
     }
   }
 
+  for (const adjustment of adjustments) {
+    const operation =
+      adjustment.metadata !== null &&
+      typeof adjustment.metadata === 'object' &&
+      !Array.isArray(adjustment.metadata) &&
+      typeof (adjustment.metadata as { operation?: unknown }).operation === 'string'
+        ? (adjustment.metadata as { operation: string }).operation
+        : undefined;
+
+    if (operation === 'CREDIT') {
+      adjustmentCredits += adjustment.tokens;
+    } else if (operation === 'DEBIT') {
+      adjustmentDebits += adjustment.tokens;
+    }
+  }
+
   const netConsumedTokens = consumedTokens - refundedTokens;
+  const netAdjustments = adjustmentCredits - adjustmentDebits;
 
   return {
     remainingTokens,
@@ -169,6 +201,9 @@ export async function getTokenSummary(userId: string): Promise<TokenSummaryResul
     refundedTokens,
     netConsumedTokens,
     bonusTokens,
+    adjustmentCredits,
+    adjustmentDebits,
+    netAdjustments,
   };
 }
 

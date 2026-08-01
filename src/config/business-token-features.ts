@@ -10,6 +10,8 @@ export const BUSINESS_TOKEN_FEATURE_COSTS = {
   BOOKING_PRICE_COMPARISON: 4,
 } as const;
 
+export const MAX_TOKEN_BALANCE = 2_147_483_647;
+
 export type BusinessTokenFeature = keyof typeof BUSINESS_TOKEN_FEATURE_COSTS;
 
 export type BusinessTokenCost = (typeof BUSINESS_TOKEN_FEATURE_COSTS)[BusinessTokenFeature];

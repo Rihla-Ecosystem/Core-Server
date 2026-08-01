@@ -1,9 +1,31 @@
 import { Request, Response, NextFunction } from 'express';
 import * as authService from '../services/auth.service.js';
 
+const REFRESH_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'strict' as const,
+  maxAge: 30 * 24 * 60 * 60 * 1000,
+  path: '/api/auth',
+};
+
 export async function register(req: Request, res: Response, next: NextFunction) {
   try {
-    const { email, password, display_name, gender, nationality, language, budget_level, arrival_date, departure_date, travel_style, interests, accommodation_type } = req.body;
+    const {
+      email,
+      password,
+      display_name,
+      gender,
+      nationality,
+      language,
+      budget_level,
+      arrival_date,
+      departure_date,
+      travel_style,
+      interests,
+      accommodation_type,
+    } = req.body;
+
     const user = await authService.registerUser({
       email,
       password,
@@ -18,8 +40,12 @@ export async function register(req: Request, res: Response, next: NextFunction) 
       interests,
       accommodationType: accommodation_type,
     });
+
     res.status(201).json(user);
   } catch (err) {
+    // ملاحظة: next(err) فقط - الـ error handler المركزي هو المسؤول عن
+    // تحديد status code والرسالة المناسبة. إرسال response هنا وبعدين
+    // استدعاء next(err) كان بيسبب "Cannot set headers after they are sent".
     next(err);
   }
 }
@@ -51,16 +77,12 @@ export async function login(req: Request, res: Response, next: NextFunction) {
     const deviceInfo = req.headers['user-agent'];
     const result = await authService.loginUser(email, password, ipAddress, deviceInfo);
 
-    res.cookie('refreshToken', result.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-      path: '/api/auth',
-    });
-
+    res.cookie('refreshToken', result.refreshToken, REFRESH_COOKIE_OPTIONS);
     res.json({ accessToken: result.accessToken, user: result.user });
   } catch (err) {
+    // ملاحظة: فشل تسجيل الدخول (بيانات خاطئة) هو سيناريو متوقع وليس عطلًا في
+    // السيرفر، لكن تسجيله هنا مفيد لمراقبة محاولات الدخول الفاشلة أو الهجمات.
+    console.error('Login error:', err);
     next(err);
   }
 }
@@ -75,14 +97,7 @@ export async function refresh(req: Request, res: Response, next: NextFunction) {
 
     const result = await authService.refreshTokens(refreshToken);
 
-    res.cookie('refreshToken', result.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-      path: '/api/auth',
-    });
-
+    res.cookie('refreshToken', result.refreshToken, REFRESH_COOKIE_OPTIONS);
     res.json({ accessToken: result.accessToken });
   } catch (err) {
     next(err);
