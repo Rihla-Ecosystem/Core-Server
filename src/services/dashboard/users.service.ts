@@ -186,6 +186,9 @@ export interface DashboardStatisticsResult {
   failedPayments: number;
   cancelledPayments: number;
   refundedPayments: number;
+  totalTrips: number;
+  totalBadges: number;
+  totalConversations: number;
 }
 
 export interface DashboardActivityItem {
@@ -1736,6 +1739,9 @@ export async function getDashboardStatistics(filters: Omit<DashboardListFilters,
     failedPayments: paymentStatusMap.get('FAILED') ?? 0,
     cancelledPayments: paymentStatusMap.get('CANCELLED') ?? 0,
     refundedPayments: paymentStatusMap.get('REFUNDED') ?? 0,
+    totalTrips,
+    totalBadges,
+    totalConversations,
   };
 }
 
