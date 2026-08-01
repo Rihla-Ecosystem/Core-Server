@@ -26,6 +26,7 @@ router.post('/', authenticate, uploadAudio.single('audio'), async (req, res, nex
     }
 
     const result = await processVoice(req.file.buffer, req.file.mimetype, {
+      userId: req.user!.userId,
       lat,
       lon,
       conversationId,

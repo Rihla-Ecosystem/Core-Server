@@ -12,7 +12,25 @@ import routes from './routes/index.js';
 const app = express();
 
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
-app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
+const corsOrigins = env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean);
+const isLocalhostOrigin = (origin: string | undefined): boolean => {
+  if (!origin) return false;
+  return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin);
+};
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // "null" origin is sent by privacy-focused browsers, sandboxed contexts,
+      // and local tooling — allow it for this localhost dev environment.
+      if (!origin || origin === 'null' || corsOrigins.includes(origin) || isLocalhostOrigin(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`Origin ${origin} not allowed by CORS`));
+      }
+    },
+    credentials: true,
+  })
+);
 app.use(cookieParser());
 app.use(express.json());
 

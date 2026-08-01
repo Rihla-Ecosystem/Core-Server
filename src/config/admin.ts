@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from './prisma.js';
 import { env } from './env.js';
+import { verifyAdminLogin } from '../services/internal.service.js';
 
 let adminRouter: Router | null = null;
 
@@ -26,6 +27,10 @@ export async function getAdminRouter(): Promise<Router> {
     admin,
     {
       authenticate: async (email: string, password: string) => {
+        const result = await verifyAdminLogin(email, password);
+        if (result.ok) {
+          return { email, title: result.displayName || 'Admin' };
+        }
         if (email === env.ADMIN_EMAIL && password === env.ADMIN_PASSWORD) {
           return { email, title: 'Admin' };
         }

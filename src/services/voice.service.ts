@@ -1,16 +1,20 @@
 import { env } from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { recordAiUsage } from './ai-usage.service.js';
+import { upstreamError } from '../utils/http-client.js';
 
 export interface VoiceResponse {
   text_response: string;
   audio_response?: string | null;
   conversation_id?: string | null;
+  usage?: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
 }
 
 export async function processVoice(
   audioBuffer: Buffer,
   audioMimeType: string,
   options?: {
+    userId: string;
     lat?: number;
     lon?: number;
     conversationId?: string;
@@ -37,8 +41,17 @@ export async function processVoice(
   });
 
   if (!response.ok) {
-    throw new AppError(502, 'AI voice service unavailable');
+    throw new AppError(502, await upstreamError('AI voice service unavailable', response));
   }
 
-  return response.json() as Promise<VoiceResponse>;
+  const result = (await response.json()) as VoiceResponse;
+
+  await recordAiUsage({
+    userId: options!.userId,
+    conversationId: options?.conversationId,
+    source: 'voice',
+    usage: result.usage,
+  });
+
+  return result;
 }

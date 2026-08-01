@@ -6,6 +6,7 @@ import { fetchPois } from './geo.service.js';
 import { fetchSafetyContext } from './risk.service.js';
 import { getExchangeRates, isSupportedCurrency } from './currency.service.js';
 import { getJourneyProgress } from './internal.service.js';
+import { recordAiUsage } from './ai-usage.service.js';
 import { AppError } from '../middleware/errorHandler.js';
 
 export type ChatPersona = 'auto' | 'tour_guide' | 'local_expert' | 'safety_guru';
@@ -85,6 +86,7 @@ export async function chat(
     message,
     conversation_id: cid,
     persona: options?.persona ?? 'auto',
+    user_id: userId,
     user: {
       display_name: user.displayName,
       gender: user.gender,
@@ -106,7 +108,7 @@ export async function chat(
   if (currencyContext) aiPayload.currency = currencyContext;
   if (journeyProgress) aiPayload.user_journeys = journeyProgress;
 
-  const aiResponse = await post<{ response: string; context?: unknown; persona?: string; blocked?: boolean; reason?: string | null }>(
+  const aiResponse = await post<{ response: string; context?: unknown; persona?: string; blocked?: boolean; reason?: string | null; usage?: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null }>(
     `${env.AI_SERVICE_URL}/chat`,
     aiPayload,
     {
@@ -125,6 +127,13 @@ export async function chat(
     },
   });
 
+  await recordAiUsage({
+    userId,
+    conversationId: cid,
+    source: 'chat',
+    usage: aiResponse.usage,
+  });
+
   const result: Record<string, unknown> = {
     response: aiResponse.response,
     conversation_id: cid,
@@ -139,4 +148,33 @@ export async function chat(
   if (journeyProgress) result.user_journeys = journeyProgress;
 
   return result;
+}
+
+export async function getConversations(userId: string) {
+  return prisma.conversation.findMany({
+    where: { userId },
+    orderBy: { updatedAt: 'desc' },
+    include: { _count: { select: { messages: true } } },
+  });
+}
+
+export async function getMessages(userId: string, conversationId: string) {
+  const conv = await prisma.conversation.findFirst({
+    where: { id: conversationId, userId },
+    select: { id: true },
+  });
+  if (!conv) throw new AppError(404, 'Conversation not found');
+  return prisma.message.findMany({
+    where: { conversationId },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, role: true, content: true, createdAt: true },
+  });
+}
+
+export async function deleteConversation(userId: string, id: string) {
+  const conv = await prisma.conversation.findFirst({
+    where: { id, userId },
+  });
+  if (!conv) throw new AppError(404, 'Conversation not found');
+  await prisma.conversation.delete({ where: { id } });
 }

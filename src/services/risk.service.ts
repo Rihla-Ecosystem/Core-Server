@@ -14,3 +14,33 @@ export async function fetchSafetyContext(lat: number, lon: number, authorization
     headers,
   ).catch(() => null);
 }
+
+export async function fetchCitySafety(city: string, authorization?: string): Promise<unknown | null> {
+  const headers: Record<string, string> = { 'X-Internal-Api-Key': env.INTERNAL_API_KEY };
+  if (authorization) headers['Authorization'] = authorization;
+  return get<unknown>(
+    `${env.RISK_SERVICE_URL}/safety/current`,
+    { city },
+    headers,
+  ).catch(() => null);
+}
+
+export async function fetchAllSafety(authorization?: string): Promise<Record<string, unknown> | null> {
+  const headers: Record<string, string> = { 'X-Internal-Api-Key': env.INTERNAL_API_KEY };
+  if (authorization) headers['Authorization'] = authorization;
+  return get<Record<string, unknown>>(
+    `${env.RISK_SERVICE_URL}/safety/current`,
+    undefined,
+    headers,
+  ).catch(() => null);
+}
+
+export async function fetchSafetyHealth(authorization?: string): Promise<unknown | null> {
+  const headers: Record<string, string> = { 'X-Internal-Api-Key': env.INTERNAL_API_KEY };
+  if (authorization) headers['Authorization'] = authorization;
+  return get<unknown>(
+    `${env.RISK_SERVICE_URL}/safety/health`,
+    undefined,
+    headers,
+  ).catch(() => null);
+}

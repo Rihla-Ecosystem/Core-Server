@@ -30,6 +30,7 @@ router.post('/', authenticate, uploadIdentificationImage.single('image'), async 
     }
 
     const result = await identifyLandmark(req.file.buffer, req.file.mimetype, {
+      userId: req.user!.userId,
       lat,
       lon,
       radius,

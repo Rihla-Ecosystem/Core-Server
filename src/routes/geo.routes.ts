@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
-import { fetchPois, searchPlaces, fetchSitesByGovernorate } from '../services/geo.service.js';
+import { fetchPois, searchPlaces, fetchSitesByGovernorate, fetchGovernorates, fetchCountryBoundary, fetchSiteById } from '../services/geo.service.js';
 
 const router = Router();
 
@@ -15,8 +15,9 @@ const poisQuerySchema = z.object({
 
 const searchQuerySchema = z.object({
   q: z.string().min(1),
-  lat: z.coerce.number().min(-90).max(90).optional(),
-  lon: z.coerce.number().min(-180).max(180).optional(),
+  category: z.string().optional(),
+  governorate: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 
 /**
@@ -97,8 +98,8 @@ router.get('/pois', authenticate, validate(poisQuerySchema, 'query'), async (req
  */
 router.get('/search', authenticate, validate(searchQuerySchema, 'query'), async (req, res, next) => {
   try {
-    const { q, lat, lon } = req.query as unknown as { q: string; lat?: number; lon?: number };
-    const result = await searchPlaces(q, lat, lon, req.headers.authorization);
+    const { q, category, governorate, limit } = req.query as unknown as { q: string; category?: string; governorate?: string; limit?: number };
+    const result = await searchPlaces(q, category, governorate, limit, req.headers.authorization);
     res.json(result);
   } catch (err) {
     next(err);
@@ -108,12 +109,40 @@ router.get('/search', authenticate, validate(searchQuerySchema, 'query'), async 
 const governorateSchema = z.object({
   governorate_name: z.string().min(1),
   category: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
 });
 
 router.get('/sites-by-governorate', authenticate, validate(governorateSchema, 'query'), async (req, res, next) => {
   try {
-    const { governorate_name, category } = req.query as unknown as { governorate_name: string; category?: string };
-    const result = await fetchSitesByGovernorate(governorate_name, category, req.headers.authorization);
+    const { governorate_name, category, limit } = req.query as unknown as { governorate_name: string; category?: string; limit?: number };
+    const result = await fetchSitesByGovernorate(governorate_name, category, limit, req.headers.authorization);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/governorates', authenticate, async (req, res, next) => {
+  try {
+    const result = await fetchGovernorates(req.headers.authorization);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/country', authenticate, async (req, res, next) => {
+  try {
+    const result = await fetchCountryBoundary(req.headers.authorization);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/sites/:id', authenticate, async (req, res, next) => {
+  try {
+    const result = await fetchSiteById(req.params.id as string, req.headers.authorization);
     res.json(result);
   } catch (err) {
     next(err);

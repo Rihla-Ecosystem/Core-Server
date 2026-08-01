@@ -23,7 +23,10 @@ async function fetchNearbySites(lat: number, lon: number, radius?: number, categ
   const base = env.GIS_SERVICE_URL;
   const headers: Record<string, string> = { 'X-Internal-Api-Key': env.INTERNAL_API_KEY };
   if (authorization) headers['Authorization'] = authorization;
-  const pois = await get(`${base}/api/v1/nearby-sites`, { latitude: lat, longitude: lon, radius, categories }, headers).catch(() => null);
+  const params: Record<string, string | number> = { lat, lon };
+  if (radius !== undefined) params.radius = radius;
+  if (categories) params.category = categories;
+  const pois = await get(`${base}/api/v1/nearby-sites`, params, headers).catch(() => null);
 
   return { pois } as GeoContext;
 }
@@ -37,20 +40,54 @@ export async function fetchFullGeoContext(lat: number, lon: number, radius?: num
   return fetchNearbySites(lat, lon, radius, categories, authorization);
 }
 
-export async function searchPlaces(query: string, lat?: number, lon?: number, authorization?: string): Promise<GeoContext> {
+export async function searchPlaces(
+  query: string,
+  category?: string,
+  governorate?: string,
+  limit?: number,
+  authorization?: string
+): Promise<GeoContext> {
   const base = env.GIS_SERVICE_URL;
   const headers: Record<string, string> = { 'X-Internal-Api-Key': env.INTERNAL_API_KEY };
   if (authorization) headers['Authorization'] = authorization;
-  const geocode = await get(`${base}/api/v1/context`, { q: query, latitude: lat, longitude: lon }, headers).catch(() => null);
-
-  return { geocode } as GeoContext;
-}
-
-export async function fetchSitesByGovernorate(governorateName: string, category?: string, authorization?: string): Promise<GeoContext> {
-  const base = env.GIS_SERVICE_URL;
-  const headers: Record<string, string> = { 'X-Internal-Api-Key': env.INTERNAL_API_KEY };
-  if (authorization) headers['Authorization'] = authorization;
-  const pois = await get(`${base}/api/v1/nearby-sites/by-governorate`, { governorate_name: governorateName, category }, headers).catch(() => null);
+  const params: Record<string, string | number> = { q: query };
+  if (category) params.category = category;
+  if (governorate) params.governorate = governorate;
+  if (limit !== undefined) params.limit = limit;
+  const pois = await get(`${base}/api/v1/search`, params, headers).catch(() => null);
 
   return { pois } as GeoContext;
+}
+
+export async function fetchSitesByGovernorate(governorateName: string, category?: string, limit?: number, authorization?: string): Promise<GeoContext> {
+  const base = env.GIS_SERVICE_URL;
+  const headers: Record<string, string> = { 'X-Internal-Api-Key': env.INTERNAL_API_KEY };
+  if (authorization) headers['Authorization'] = authorization;
+  const params: Record<string, string | number> = { governorate_name: governorateName };
+  if (category) params.category = category;
+  if (limit !== undefined) params.limit = limit;
+  const pois = await get(`${base}/api/v1/nearby-sites/by-governorate`, params, headers).catch(() => null);
+
+  return { pois } as GeoContext;
+}
+
+export async function fetchGovernorates(authorization?: string): Promise<unknown> {
+  const base = env.GIS_SERVICE_URL;
+  const headers: Record<string, string> = { 'X-Internal-Api-Key': env.INTERNAL_API_KEY };
+  if (authorization) headers['Authorization'] = authorization;
+  return get(`${base}/api/v1/boundaries`, { level: 'governorate' }, headers);
+}
+
+export async function fetchCountryBoundary(authorization?: string): Promise<unknown> {
+  const base = env.GIS_SERVICE_URL;
+  const headers: Record<string, string> = { 'X-Internal-Api-Key': env.INTERNAL_API_KEY };
+  if (authorization) headers['Authorization'] = authorization;
+  return get(`${base}/api/v1/boundaries`, { level: 'country' }, headers);
+}
+
+export async function fetchSiteById(id: string, authorization?: string): Promise<unknown> {
+  const base = env.GIS_SERVICE_URL;
+  const headers: Record<string, string> = { 'X-Internal-Api-Key': env.INTERNAL_API_KEY };
+  if (authorization) headers['Authorization'] = authorization;
+  return get(`${base}/api/v1/sites/${id}`, undefined, headers);
 }

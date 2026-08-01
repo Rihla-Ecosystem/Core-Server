@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
 import { streamChat } from '../services/chat-stream.service.js';
+import { recordAiUsage } from '../services/ai-usage.service.js';
+import { prisma } from '../config/prisma.js';
 import { Readable } from 'stream';
 
 const router = Router();
@@ -18,7 +20,7 @@ const streamSchema = z.object({
 router.post('/stream', authenticate, validate(streamSchema), async (req, res, next) => {
   try {
     const { message, lat, lon, conversation_id, persona } = req.body;
-    const aiResponse = await streamChat(req.user!.userId, message, {
+    const { response: aiResponse, conversationId } = await streamChat(req.user!.userId, message, {
       lat,
       lon,
       conversationId: conversation_id,
@@ -31,8 +33,62 @@ router.post('/stream', authenticate, validate(streamSchema), async (req, res, ne
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
 
+    res.write(`data: ${JSON.stringify({ conversation_id: conversationId })}\n\n`);
+
     const readable = Readable.fromWeb(aiResponse.body! as never as import('stream/web').ReadableStream);
-    readable.pipe(res);
+
+    let fullResponse = '';
+    let usage: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null = null;
+    let buffer = '';
+
+    readable.on('data', (chunk: Buffer) => {
+      res.write(chunk);
+      buffer += chunk.toString();
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';
+      for (const evt of events) {
+        for (const line of evt.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (raw === '[DONE]') continue;
+          try {
+            const payload = JSON.parse(raw);
+            if (payload.done && typeof payload.full_response === 'string') {
+              fullResponse = payload.full_response;
+            }
+            if (payload.usage && typeof payload.usage === 'object') {
+              usage = payload.usage;
+            }
+          } catch {
+            // ignore malformed event
+          }
+        }
+      }
+    });
+
+    readable.on('end', async () => {
+      try {
+        if (fullResponse) {
+          await prisma.message.create({
+            data: { conversationId, role: 'assistant', content: fullResponse },
+          });
+        }
+        await recordAiUsage({
+          userId: req.user!.userId,
+          conversationId,
+          source: 'stream',
+          usage,
+        });
+      } catch (err) {
+        console.error('Failed to persist stream output', err);
+      }
+      res.end();
+    });
+
+    readable.on('error', (err) => {
+      console.error('Chat stream error', err);
+      res.end();
+    });
   } catch (err) {
     next(err);
   }

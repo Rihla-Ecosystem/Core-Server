@@ -14,7 +14,7 @@ export async function streamChat(
     authorization?: string;
     persona?: string;
   },
-): Promise<Response> {
+): Promise<{ response: Response; conversationId: string }> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: {
@@ -49,6 +49,13 @@ export async function streamChat(
   }
 
   let conversationId = options?.conversationId;
+  if (conversationId) {
+    const existing = await prisma.conversation.findFirst({
+      where: { id: conversationId, userId },
+      select: { id: true },
+    });
+    if (!existing) conversationId = undefined;
+  }
   if (!conversationId) {
     const conv = await prisma.conversation.create({
       data: { userId, title: message.slice(0, 100) },
@@ -64,6 +71,7 @@ export async function streamChat(
     message,
     conversation_id: conversationId,
     persona: options?.persona ?? 'auto',
+    user_id: userId,
     user: {
       display_name: user.displayName,
       gender: user.gender,
@@ -95,5 +103,5 @@ export async function streamChat(
     throw new AppError(502, 'AI service unavailable');
   }
 
-  return aiResponse;
+  return { response: aiResponse, conversationId: conversationId! };
 }
