@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
 import { AppError } from '../middleware/errorHandler.js';
-import { chat } from '../services/chat.service.js';
+import { chat, getConversations, getMessages, deleteConversation } from '../services/chat.service.js';
 
 const router = Router();
 
@@ -45,6 +45,33 @@ router.post('/', authenticate, validate(chatSchema), async (req, res, next) => {
       persona,
     });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/conversations', authenticate, async (req, res, next) => {
+  try {
+    const convs = await getConversations(req.user!.userId);
+    res.json({ conversations: convs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/conversations/:id/messages', authenticate, async (req, res, next) => {
+  try {
+    const msgs = await getMessages(req.user!.userId, req.params.id as string);
+    res.json({ messages: msgs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/conversations/:id', authenticate, async (req, res, next) => {
+  try {
+    await deleteConversation(req.user!.userId, req.params.id as string);
+    res.status(204).end();
   } catch (err) {
     next(err);
   }
