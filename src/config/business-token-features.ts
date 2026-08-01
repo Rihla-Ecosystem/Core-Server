@@ -12,6 +12,8 @@ export const BUSINESS_TOKEN_FEATURE_COSTS = {
 
 export const MAX_TOKEN_BALANCE = 2_147_483_647;
 
+export const BUSINESS_TOKEN_PRICING_VERSION = 1;
+
 export type BusinessTokenFeature = keyof typeof BUSINESS_TOKEN_FEATURE_COSTS;
 
 export type BusinessTokenCost = (typeof BUSINESS_TOKEN_FEATURE_COSTS)[BusinessTokenFeature];

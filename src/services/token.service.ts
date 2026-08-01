@@ -2,6 +2,9 @@ import { prisma } from '../config/prisma.js';
 
 export interface WalletBalanceResult {
   balance: number;
+  availableBalance: number;
+  reservedBalance: number;
+  totalBalance: number;
   status: string;
 }
 
@@ -51,6 +54,7 @@ export async function getTokenWalletBalance(userId: string): Promise<WalletBalan
     },
     select: {
       tokenBalance: true,
+      reservedBalance: true,
       status: true,
     },
   });
@@ -58,12 +62,21 @@ export async function getTokenWalletBalance(userId: string): Promise<WalletBalan
   if (!wallet) {
     return {
       balance: 0,
+      availableBalance: 0,
+      reservedBalance: 0,
+      totalBalance: 0,
       status: 'ACTIVE',
     };
   }
 
+  const availableBalance = wallet.tokenBalance;
+  const reservedBalance = wallet.reservedBalance;
+
   return {
-    balance: wallet.tokenBalance,
+    balance: availableBalance,
+    availableBalance,
+    reservedBalance,
+    totalBalance: availableBalance + reservedBalance,
     status: wallet.status,
   };
 }

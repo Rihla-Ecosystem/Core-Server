@@ -91,6 +91,9 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
       assert.equal(body.success, true);
       assert.deepEqual(body.data, {
         balance: 400,
+        availableBalance: 400,
+        reservedBalance: 0,
+        totalBalance: 400,
         status: 'ACTIVE',
       });
     } finally {
@@ -125,6 +128,9 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
       assert.equal(body.success, true);
       assert.deepEqual(body.data, {
         balance: 0,
+        availableBalance: 0,
+        reservedBalance: 0,
+        totalBalance: 0,
         status: 'ACTIVE',
       });
     } finally {
@@ -372,7 +378,13 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
       assert.equal(body.success, true);
 
       const keys = Object.keys(body.data).sort();
-      assert.deepEqual(keys, ['balance', 'status']);
+      assert.deepEqual(keys, [
+        'availableBalance',
+        'balance',
+        'reservedBalance',
+        'status',
+        'totalBalance',
+      ]);
       assert.equal(body.data.userId, undefined);
       assert.equal(body.data.id, undefined);
       assert.equal(body.data.createdAt, undefined);
@@ -444,6 +456,9 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
         const body = await res.json();
         assert.deepEqual(body.data, {
           balance: 750,
+          availableBalance: 750,
+          reservedBalance: 0,
+          totalBalance: 750,
           status: 'ACTIVE',
         });
       }
