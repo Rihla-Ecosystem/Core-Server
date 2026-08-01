@@ -23,7 +23,7 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
   });
 
   if (!user || user.isDeleted) {
-    return next(new AppError(401, 'Invalid or expired token'));
+    return next(new AppError(401, 'Authenticated user not found'));
   }
 
   if (!user.isActive || user.isBanned) {

@@ -93,6 +93,23 @@ describe('Admin Token Package API', () => {
       },
     });
 
+    const userRole = await prisma.role.findUnique({ where: { name: 'user' } });
+
+    await prisma.user.upsert({
+      where: { id: USER_TOKEN_SUB },
+      update: {},
+      create: {
+        id: USER_TOKEN_SUB,
+        email: 'test_admin_tp_user@example.com',
+        passwordHash: 'hash',
+        displayName: 'Admin Token Package USER Test User',
+        gender: Gender.MALE,
+        nationality: 'Egyptian',
+        roleId: userRole.id,
+        isEmailVerified: true,
+      },
+    });
+
     await new Promise<void>((resolve) => {
       server = app.listen(0, () => {
         const address = server.address() as AddressInfo;
@@ -627,12 +644,6 @@ type TestTokenPackageOverrides = Partial<
     const suffix = uniqueSuffix();
     const code = `TEST_ADMIN_TP_PAYCNT_${suffix}`;
 
-    await prisma.role.upsert({
-      where: { id: 1 },
-      update: { name: 'USER' },
-      create: { id: 1, name: 'USER', permissions: [] },
-    });
-
     const user = await prisma.user.create({
       data: {
         email: `test_admin_tp_paycnt_${suffix}@example.com`,
@@ -1018,8 +1029,8 @@ type TestTokenPackageOverrides = Partial<
       MISSING_ADMIN_USER_TOKEN,
     );
 
-    assert.equal(status, 500);
-    assert.equal(body.error, 'Internal server error');
+    assert.equal(status, 401);
+    assert.equal(body.error, 'Authenticated user not found');
 
     const pkg = await prisma.tokenPackage.findUnique({ where: { code } });
     assert.equal(pkg, null);
@@ -1544,8 +1555,8 @@ type TestTokenPackageOverrides = Partial<
     try {
       const { status, body } = await patchPackage(pkg.id, { name: 'Rollback Update' }, MISSING_ADMIN_USER_TOKEN);
 
-      assert.equal(status, 500);
-      assert.equal(body.error, 'Internal server error');
+      assert.equal(status, 401);
+      assert.equal(body.error, 'Authenticated user not found');
 
       const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
       assert.equal(dbPkg?.name, 'Rollback Original');
@@ -1984,8 +1995,8 @@ type TestTokenPackageOverrides = Partial<
     try {
       const { status, body } = await patchPackageStatus(pkg.id, { isActive: false }, MISSING_ADMIN_USER_TOKEN);
 
-      assert.equal(status, 500);
-      assert.equal(body.error, 'Internal server error');
+      assert.equal(status, 401);
+      assert.equal(body.error, 'Authenticated user not found');
 
       const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
       assert.equal(dbPkg?.isActive, true);
@@ -2342,8 +2353,8 @@ type TestTokenPackageOverrides = Partial<
     try {
       const { status, body } = await deletePackage(pkg.id, MISSING_ADMIN_USER_TOKEN);
 
-      assert.equal(status, 500);
-      assert.equal(body.error, 'Internal server error');
+      assert.equal(status, 401);
+      assert.equal(body.error, 'Authenticated user not found');
 
       const dbPkg = await prisma.tokenPackage.findUnique({ where: { id: pkg.id } });
       assert.ok(dbPkg);
