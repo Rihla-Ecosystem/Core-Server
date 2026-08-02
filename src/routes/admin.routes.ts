@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
@@ -7,10 +8,26 @@ import * as adminController from '../controllers/admin.controller.js';
 import adminTokenPackageRoutes from './admin-token-package.routes.js';
 import adminPaymentRoutes from './admin-payment.routes.js';
 import adminTokenWalletRoutes from './admin-token-wallet.routes.js';
+import adminEnterpriseRoutes from './admin-enterprise.routes.js';
 
 const router = Router();
 
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many admin requests, please try again later' },
+});
+
 router.use(authenticate);
+router.use(adminLimiter);
+
+router.use(
+  '/enterprise',
+  requireRole('admin'),
+  adminEnterpriseRoutes,
+);
 
 router.use(
   '/token-packages',

@@ -22,6 +22,14 @@ enum PaymentStatus {
   REFUNDED
 }
 
+enum NotificationType {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+  SYSTEM
+}
+
 model TokenPackage {
   id Int @id @default(autoincrement())
 
@@ -166,6 +174,25 @@ model Role {
   @@map("roles")
 }
 
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  type      NotificationType @map("type")
+  title     String           @db.VarChar(200)
+  message   String           @db.Text
+  data      Json?
+  isRead    Boolean          @default(false) @map("is_read")
+  readAt    DateTime?        @map("read_at") @db.Timestamptz
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@index([type])
+  @@map("notifications")
+}
+
 model User {
   id                String    @id @default(uuid()) @db.Uuid
   email             String    @unique @db.VarChar(255)
@@ -214,6 +241,7 @@ model User {
   tokenWallet             TokenWallet?
   tokenTransactions       TokenTransaction[]
   journeyProgress         UserJourney[]
+  notifications           Notification[]
 
   @@map("users")
 }
@@ -312,6 +340,10 @@ model AuditLog {
   actor  User? @relation("ActorAuditLogs", fields: [actorId], references: [id])
   target User? @relation("TargetAuditLogs", fields: [targetUserId], references: [id])
 
+  @@index([actorId])
+  @@index([targetUserId])
+  @@index([action])
+  @@index([createdAt])
   @@map("audit_logs")
 }
 
@@ -326,6 +358,7 @@ model Conversation {
   messages Message[]
 
   @@index([userId])
+  @@index([updatedAt])
   @@map("conversations")
 }
 
@@ -339,6 +372,7 @@ model Message {
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId])
+  @@index([conversationId, createdAt])
   @@map("messages")
 }
 
@@ -357,6 +391,8 @@ model TripHistory {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([startDate])
+  @@index([destination])
   @@map("trip_histories")
 }
 
