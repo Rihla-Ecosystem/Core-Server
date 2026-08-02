@@ -16,9 +16,9 @@ import type {
   AIBillingOrchestratorDependencies,
   AIBillingOrchestratorInput,
   AIBillingOrchestrationResult,
-  AIBillingOrchestratorResult,
   AIBillingOrchestratorRecoveryResult,
   AIBillingOrchestratorReleasedResult,
+  AIBillingOrchestratorResult,
   AIBillingReservationMetadata,
 } from '../src/types/ai-billing-orchestrator.js';
 import type {
@@ -120,17 +120,6 @@ function successOutcome(
 
 function defaultExecute(): Promise<unknown> {
   return Promise.resolve(successOutcome());
-}
-
-function recordExecute(
-  calls: FakeCalls,
-  fn: () => Promise<unknown> = defaultExecute,
-): (context: { operationId: string; reservationId: string }) => Promise<unknown> {
-  return async (context) => {
-    calls.order.push('execute');
-    calls.executeContexts.push(context);
-    return fn();
-  };
 }
 
 function buildInput(
@@ -645,49 +634,929 @@ function expectRecovery(
   return result as AIBillingOrchestratorRecoveryResult;
 }
 
-// --- Success and ordering ---------------------------------------------------
+function recordExecute(
+  calls: FakeCalls,
+  fn: () => Promise<unknown> = defaultExecute,
+): (context: { operationId: string; reservationId: string }) => Promise<unknown> {
+  return async (context) => {
+    calls.order.push('execute');
+    calls.executeContexts.push(context);
+    return fn();
+  };
+}
 
-test('1. Durable preflight completes before quote', async () => {
+// --- Preflight / replay -----------------------------------------------------
+
+test('1. New operation proceeds', async () => {
   const { deps, calls } = makeDeps();
   const input = buildInput({ execute: recordExecute(calls) });
   const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.ok(result.outcome === 'SETTLED');
-  assert.equal(calls.order[0], 'preflight');
-  assert.ok(calls.order.indexOf('preflight') < calls.order.indexOf('quote'));
+  assert.equal(result.operationId, OPERATION_ID);
+  assert.equal(result.reservationId, RESERVATION_ID);
 });
 
-test('2. Quote is calculated before reservation', async () => {
+test('2. Existing RESERVED operation blocks execution', async () => {
+  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.RESERVED });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'PREFLIGHT');
+  assert.equal(rec.reasonCode, 'OPERATION_REPLAY_REQUIRES_RECOVERY');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.RESERVED);
+  assert.deepEqual(calls.order, ['preflight']);
+});
+
+test('3. Existing EXECUTION_SUCCEEDED blocks execution', async () => {
+  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.EXECUTION_SUCCEEDED });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.EXECUTION_SUCCEEDED);
+  assert.deepEqual(calls.order, ['preflight']);
+});
+
+test('4. Existing PRICED blocks execution', async () => {
+  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.PRICED });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.PRICED);
+  assert.deepEqual(calls.order, ['preflight']);
+});
+
+test('5. Existing SETTLED blocks execution', async () => {
+  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.SETTLED });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.SETTLED);
+  assert.deepEqual(calls.order, ['preflight']);
+});
+
+test('6. Existing RELEASED blocks execution', async () => {
+  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.RELEASED });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.RELEASED);
+  assert.deepEqual(calls.order, ['preflight']);
+});
+
+test('7. Existing INDETERMINATE blocks execution', async () => {
+  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.INDETERMINATE });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.INDETERMINATE);
+  assert.deepEqual(calls.order, ['preflight']);
+});
+
+test('8. Existing-operation repository error does not continue as new', async () => {
+  const input = buildInput();
+  const { deps, calls } = makeDeps({}, { preflightError: true });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'PREFLIGHT');
+  assert.equal(rec.reasonCode, 'OPERATION_LOOKUP_FAILED');
+  assert.deepEqual(calls.order, ['preflight']);
+});
+
+test('9. Replay performs no Quote/Reserve/Execute/Price/Settle/Release', async () => {
+  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.SETTLED });
+  const input = buildInput({ execute: recordExecute(calls) });
+  await runAIBillingOrchestration(input, deps);
+  assert.deepEqual(calls.order, ['preflight']);
+});
+
+test('10. Replay result is recoveryRequired', async () => {
+  const { deps } = makeDeps({}, { initialStatus: AIBillingOperationStatus.RELEASED });
+  const input = buildInput();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.recoveryRequired, true);
+  assert.equal(rec.operationId, OPERATION_ID);
+});
+
+// --- Create / race ----------------------------------------------------------
+
+test('11. Quote occurs before Reserve', async () => {
   const { deps, calls } = makeDeps();
   const input = buildInput({ execute: recordExecute(calls) });
   await runAIBillingOrchestration(input, deps);
   assert.ok(calls.order.indexOf('quote') < calls.order.indexOf('reserve'));
 });
 
-test('3. Reservation and operation creation happen before execute', async () => {
+test('12. Reserve occurs before operation creation', async () => {
   const { deps, calls } = makeDeps();
   const input = buildInput({ execute: recordExecute(calls) });
   await runAIBillingOrchestration(input, deps);
   assert.ok(calls.order.indexOf('reserve') < calls.order.indexOf('createOperation'));
+});
+
+test('13. Operation is created before Execute', async () => {
+  const { deps, calls } = makeDeps();
+  const input = buildInput({ execute: recordExecute(calls) });
+  await runAIBillingOrchestration(input, deps);
   assert.ok(calls.order.indexOf('createOperation') < calls.order.indexOf('execute'));
 });
 
-test('4. Execute completes and execution evidence is stored before pricing', async () => {
+test('14. Operation creation failure blocks Execute', async () => {
+  const { deps, calls } = makeDeps({}, { createThrows: true });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'OPERATION_CREATION');
+  assert.equal(rec.reasonCode, 'OPERATION_CREATE_FAILED');
+  assert.equal(rec.reservationId, RESERVATION_ID);
+  assert.equal(calls.executeContexts.length, 0);
+});
+
+test('15. Operation creation failure does not auto-release', async () => {
+  const { deps, calls } = makeDeps({}, { createThrows: true });
+  const input = buildInput();
+  await runAIBillingOrchestration(input, deps);
+  assert.ok(!calls.order.includes('release'));
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('price'));
+});
+
+test('16. Operation idempotent replay blocks Execute', async () => {
+  const { deps, calls } = makeDeps({}, { createIdempotentReplay: true });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'OPERATION_CREATION');
+  assert.equal(rec.reasonCode, 'OPERATION_CREATE_REPLAY');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.RESERVED);
+  assert.equal(calls.executeContexts.length, 0);
+});
+
+test('17. Reservation replay plus newly-created operation may execute once', async () => {
+  const { deps, calls } = makeDeps({}, { reserveIdempotentReplay: true });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const result = expectSettled(await runAIBillingOrchestration(input, deps));
+  assert.equal(calls.executeContexts.length, 1);
+  assert.equal(result.outcome, 'SETTLED');
+});
+
+test('18. Concurrent create loser never executes AI', async () => {
+  const { deps, calls } = makeDeps({}, { createIdempotentReplay: true });
+  const input = buildInput({ execute: recordExecute(calls) });
+  await runAIBillingOrchestration(input, deps);
+  assert.equal(calls.executeContexts.length, 0);
+});
+
+test('19. operationId is stable and passed through unchanged', async () => {
   const { deps, calls } = makeDeps();
   const input = buildInput({ execute: recordExecute(calls) });
   await runAIBillingOrchestration(input, deps);
-  assert.ok(calls.order.indexOf('execute') < calls.order.indexOf('recordExecution'));
+  assert.equal(calls.getOperationIds[0], OPERATION_ID);
+  assert.equal(calls.createInputs[0].operationId, OPERATION_ID);
+  assert.equal(calls.executeContexts[0].operationId, OPERATION_ID);
+  assert.equal(calls.executeContexts[0].reservationId, RESERVATION_ID);
+});
+
+// --- SUCCESS flow -----------------------------------------------------------
+
+test('20. Parsed SUCCESS records execution evidence', async () => {
+  const { deps, calls } = makeDeps();
+  const input = buildInput({ execute: recordExecute(calls) });
+  await runAIBillingOrchestration(input, deps);
+  assert.equal(calls.recordExecutionInputs.length, 1);
+  assert.deepEqual(calls.recordExecutionInputs[0].execution, successOutcome().execution);
+  assert.deepEqual(calls.recordExecutionInputs[0].usage, BASE_USAGE);
+});
+
+test('21. Execution evidence is stored before Price', async () => {
+  const { deps, calls } = makeDeps();
+  const input = buildInput({ execute: recordExecute(calls) });
+  await runAIBillingOrchestration(input, deps);
   assert.ok(calls.order.indexOf('recordExecution') < calls.order.indexOf('price'));
 });
 
-test('5. Actual pricing evidence is stored before settlement', async () => {
+test('22. Pricing uses canonical usage', async () => {
   const { deps, calls } = makeDeps();
   const input = buildInput({ execute: recordExecute(calls) });
   await runAIBillingOrchestration(input, deps);
-  assert.ok(calls.order.indexOf('price') < calls.order.indexOf('recordPricing'));
+  assert.deepEqual(calls.priceInputs[0].usage, BASE_USAGE);
+});
+
+test('23. Pricing evidence is stored before Settle', async () => {
+  const { deps, calls } = makeDeps();
+  const input = buildInput({ execute: recordExecute(calls) });
+  await runAIBillingOrchestration(input, deps);
   assert.ok(calls.order.indexOf('recordPricing') < calls.order.indexOf('settle'));
 });
 
-test('6. Successful call order is exactly the durable flow', async () => {
+test('24. Settle uses pricing.walletTokens', async () => {
+  const { deps, calls } = makeDeps();
+  const input = buildInput({ execute: recordExecute(calls) });
+  await runAIBillingOrchestration(input, deps);
+  const price = expectedPrice(input, BASE_USAGE);
+  assert.equal(calls.settleInputs[0].actualTokens, price.walletTokens);
+});
+
+test('25. Real settlement result marks operation SETTLED', async () => {
+  const { deps, calls } = makeDeps();
+  const input = buildInput({ execute: recordExecute(calls) });
+  const result = expectSettled(await runAIBillingOrchestration(input, deps));
+  assert.equal(calls.markSettledInputs.length, 1);
+  assert.equal(calls.markSettledInputs[0].settlement.consumeTransactionId, 'tx-1');
+  assert.equal(result.outcome, 'SETTLED');
+  assert.equal(result.recoveryRequired, false);
+  assert.equal(result.settlement.consumeTransactionId, 'tx-1');
+});
+
+test('26. Success data is returned but not persisted as evidence', async () => {
+  const { deps, calls } = makeDeps();
+  const input = buildInput({ execute: recordExecute(calls) });
+  const result = expectSettled(await runAIBillingOrchestration(input, deps));
+  assert.deepEqual(result.data, SAMPLE_DATA);
+  assert.ok(!('data' in calls.recordExecutionInputs[0]));
+  assert.ok(!('data' in calls.recordPricingInputs[0]));
+});
+
+test('27. Execute called exactly once', async () => {
+  const { deps, calls } = makeDeps();
+  const input = buildInput({ execute: recordExecute(calls) });
+  await runAIBillingOrchestration(input, deps);
+  assert.equal(calls.executeContexts.length, 1);
+});
+
+test('28. Actual provider mismatch blocks pricing/settlement', async () => {
+  const input = buildInput({
+    execute: async () => successOutcome({
+      execution: { provider: 'other-provider', model: 'fake-model' },
+      usage: { ...BASE_USAGE, provider: 'other-provider' },
+    }),
+  });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'EXECUTION_EVIDENCE');
+  assert.equal(rec.reasonCode, 'EXECUTION_EVIDENCE_FAILED');
+  assert.ok(calls.order.includes('recordExecution'));
+  assert.ok(!calls.order.includes('price'));
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('29. Actual model mismatch blocks pricing/settlement', async () => {
+  const input = buildInput({
+    execute: async () => successOutcome({
+      execution: { provider: 'fake-provider', model: 'other-model' },
+      usage: { ...BASE_USAGE, model: 'other-model' },
+    }),
+  });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'EXECUTION_EVIDENCE');
+  assert.equal(rec.reasonCode, 'EXECUTION_EVIDENCE_FAILED');
+  assert.ok(calls.order.includes('recordExecution'));
+  assert.ok(!calls.order.includes('price'));
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('30. Invalid usage blocks pricing/settlement/release', async () => {
+  const input = buildInput({
+    execute: async () => successOutcome({ usage: { ...BASE_USAGE, inputTokens: 13000, totalTokens: 13020 } }),
+  });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.reasonCode, 'USAGE_LIMITS_EXCEEDED');
+  assert.equal(rec.stage, 'USAGE_VALIDATION');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.EXECUTION_SUCCEEDED);
+  assert.ok(calls.order.includes('recordExecution'));
+  assert.ok(!calls.order.includes('price'));
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('30a. recordExecution occurs before usage-limit validation', async () => {
+  const input = buildInput({
+    execute: async () => successOutcome({ usage: { ...BASE_USAGE, outputTokens: 1300, totalTokens: 1310 } }),
+  });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.reasonCode, 'USAGE_LIMITS_EXCEEDED');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.EXECUTION_SUCCEEDED);
+  assert.ok(calls.order.includes('recordExecution'));
+  assert.ok(!calls.order.includes('price'));
+  assert.equal(calls.recordExecutionInputs.length, 1);
+  assert.deepEqual(calls.recordExecutionInputs[0].usage, { ...BASE_USAGE, outputTokens: 1300, totalTokens: 1310 });
+});
+
+test('30b. FIXED_FALLBACK with inputTokens above maxInputTokens records execution first', async () => {
+  const input = buildInput({
+    requestedMode: 'FIXED_FALLBACK',
+    provider: undefined,
+    model: undefined,
+    execute: async () => successOutcome({ usage: { ...BASE_USAGE, inputTokens: 13000, totalTokens: 13020 } }),
+  });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.reasonCode, 'USAGE_LIMITS_EXCEEDED');
+  assert.equal(rec.stage, 'USAGE_VALIDATION');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.EXECUTION_SUCCEEDED);
+  assert.ok(calls.order.includes('recordExecution'));
+  assert.ok(!calls.order.includes('price'));
+  assert.ok(!calls.order.includes('recordPricing'));
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('30c. FIXED_FALLBACK with outputTokens above maxOutputTokens records execution first', async () => {
+  const input = buildInput({
+    requestedMode: 'FIXED_FALLBACK',
+    provider: undefined,
+    model: undefined,
+    execute: async () => successOutcome({ usage: { ...BASE_USAGE, outputTokens: 1300, totalTokens: 1310 } }),
+  });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.reasonCode, 'USAGE_LIMITS_EXCEEDED');
+  assert.equal(rec.stage, 'USAGE_VALIDATION');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.EXECUTION_SUCCEEDED);
+  assert.ok(calls.order.includes('recordExecution'));
+  assert.ok(!calls.order.includes('price'));
+  assert.ok(!calls.order.includes('recordPricing'));
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('30d. Valid FIXED_FALLBACK still prices and settles normally', async () => {
+  const input = buildInput({ requestedMode: 'FIXED_FALLBACK', provider: undefined, model: undefined });
+  const { deps, calls } = makeDeps();
+  const result = expectSettled(await runAIBillingOrchestration(input, deps));
+  assert.equal(result.outcome, 'SETTLED');
+  assert.ok(calls.order.includes('recordExecution'));
+  assert.ok(calls.order.includes('price'));
+  assert.ok(calls.order.includes('recordPricing'));
+  assert.ok(calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('31. actualWalletTokens above reserved blocks settlement', async () => {
+  const input = buildInput();
+  const { deps, calls } = makeDeps({
+    calculateActualPrice: () => priceResult({ walletTokens: 999_999 }),
+  });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'PRICING');
+  assert.equal(rec.reasonCode, 'PRICING_LIMITS_EXCEEDED');
+  assert.ok(!calls.order.includes('settle'));
+});
+
+test('32. Execution-evidence write failure blocks pricing', async () => {
+  const input = buildInput();
+  const { deps, calls } = makeDeps({}, { executionThrows: true });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'EXECUTION_EVIDENCE');
+  assert.equal(rec.reasonCode, 'EXECUTION_EVIDENCE_FAILED');
+  assert.ok(!calls.order.includes('price'));
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('33. Pricing failure leaves operation after execution evidence', async () => {
+  const input = buildInput();
+  const { deps, calls } = makeDeps({
+    calculateActualPrice: () => {
+      throw new Error('price boom');
+    },
+  });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'PRICING');
+  assert.equal(rec.reasonCode, 'PRICING_FAILED');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.EXECUTION_SUCCEEDED);
+  assert.ok(calls.order.includes('recordExecution'));
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('34. Pricing-evidence write failure blocks settlement', async () => {
+  const input = buildInput();
+  const { deps, calls } = makeDeps({}, { pricingThrows: true });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'PRICING_EVIDENCE');
+  assert.equal(rec.reasonCode, 'PRICING_EVIDENCE_FAILED');
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('35. Settlement failure leaves PRICED evidence', async () => {
+  const input = buildInput();
+  const { deps, calls } = makeDeps({
+    settleForAmount: async () => {
+      throw new Error('settle boom');
+    },
+  });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'SETTLEMENT');
+  assert.equal(rec.reasonCode, 'SETTLEMENT_FAILED');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.PRICED);
+  assert.ok(calls.order.includes('recordPricing'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('36. Final SETTLED marking failure does not settle again', async () => {
+  const input = buildInput();
+  const { deps, calls } = makeDeps({}, { settledThrows: true });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'SETTLED_EVIDENCE');
+  assert.equal(rec.reasonCode, 'SETTLED_EVIDENCE_FAILED');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.PRICED);
+  assert.equal(calls.settleInputs.length, 1);
+});
+
+test('37. Zero-token actual settlement remains supported', async () => {
+  const zeroRate = rateCard({ inputMicrosPerMillionTokens: 0, outputMicrosPerMillionTokens: 0 });
+  const zeroPolicy = policy({ minimumWalletTokens: 0 });
+  const input = buildInput({ rateCard: zeroRate, walletPolicy: zeroPolicy });
+  const { deps, calls } = makeDeps();
+  const result = expectSettled(await runAIBillingOrchestration(input, deps));
+  assert.equal(result.actualWalletTokens, 0);
+  assert.equal(calls.settleInputs[0].actualTokens, 0);
+  assert.equal(calls.markSettledInputs[0].settlement.actualTokens, 0);
+});
+
+test('38. Fixed fallback pricing result is persisted exactly when returned by pricing engine', async () => {
+  const customPrice = priceResult({ walletTokens: 7, appliedMode: 'FIXED_FALLBACK', fallbackReason: 'USAGE_MISSING' });
+  const input = buildInput();
+  const { deps, calls } = makeDeps({
+    calculateActualPrice: () => customPrice,
+  });
+  await runAIBillingOrchestration(input, deps);
+  assert.deepEqual(calls.recordPricingInputs[0].pricing, customPrice);
+});
+
+// --- Requested identity preflight validation ---------------------------------
+
+function validCreateResult(
+  overrides: Partial<CreateAIBillingOperationResult> = {},
+): CreateAIBillingOperationResult {
+  return {
+    ...buildCreateResult(
+      OPERATION_ID,
+      RESERVATION_ID,
+      AIBillingOperationStatus.RESERVED,
+      false,
+      13200,
+      BUSINESS_TOKEN_PRICING_VERSION,
+    ),
+    ...overrides,
+  };
+}
+
+test('38a. Only provider supplied is invalid before Quote', async () => {
+  const input = buildInput({ provider: 'fake-provider', model: undefined });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'PREFLIGHT');
+  assert.equal(rec.reasonCode, 'INVALID_REQUESTED_IDENTITY');
+  assert.deepEqual(calls.order, []);
+});
+
+test('38b. Only model supplied is invalid before Quote', async () => {
+  const input = buildInput({ provider: undefined, model: 'fake-model' });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'PREFLIGHT');
+  assert.equal(rec.reasonCode, 'INVALID_REQUESTED_IDENTITY');
+  assert.deepEqual(calls.order, []);
+});
+
+test('38c. Blank provider is invalid before Quote', async () => {
+  const input = buildInput({ provider: '  ', model: 'fake-model' });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'PREFLIGHT');
+  assert.equal(rec.reasonCode, 'INVALID_REQUESTED_IDENTITY');
+  assert.deepEqual(calls.order, []);
+});
+
+test('38d. Blank model is invalid before Quote', async () => {
+  const input = buildInput({ provider: 'fake-provider', model: '' });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'PREFLIGHT');
+  assert.equal(rec.reasonCode, 'INVALID_REQUESTED_IDENTITY');
+  assert.deepEqual(calls.order, []);
+});
+
+test('38e. Non-string provider runtime value is invalid', async () => {
+  const input = buildInput({ provider: 123 as unknown as string, model: 'fake-model' });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'PREFLIGHT');
+  assert.equal(rec.reasonCode, 'INVALID_REQUESTED_IDENTITY');
+  assert.deepEqual(calls.order, []);
+});
+
+test('38f. Non-string model runtime value is invalid', async () => {
+  const input = buildInput({ provider: 'fake-provider', model: {} as unknown as string });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'PREFLIGHT');
+  assert.equal(rec.reasonCode, 'INVALID_REQUESTED_IDENTITY');
+  assert.deepEqual(calls.order, []);
+});
+
+test('38g. Invalid identity performs no Reserve/Create/Execute/Price/Settle/Release', async () => {
+  const input = buildInput({ provider: 'fake-provider', model: undefined });
+  const { deps, calls } = makeDeps();
+  await runAIBillingOrchestration(input, deps);
+  assert.ok(!calls.order.includes('reserve'));
+  assert.ok(!calls.order.includes('createOperation'));
+  assert.ok(!calls.order.includes('execute'));
+  assert.ok(!calls.order.includes('price'));
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('38h. Validated trimmed pair is used for Quote, metadata, create, and snapshot', async () => {
+  const input = buildInput({ provider: '  fake-provider  ', model: ' fake-model ' });
+  const { deps, calls } = makeDeps();
+  const result = expectSettled(await runAIBillingOrchestration(input, deps));
+  assert.equal(calls.quoteInputs[0].provider, 'fake-provider');
+  assert.equal(calls.quoteInputs[0].model, 'fake-model');
+  const meta = calls.reserveInputs[0].metadata as AIBillingReservationMetadata;
+  assert.equal(meta.aiBilling.provider, 'fake-provider');
+  assert.equal(meta.aiBilling.model, 'fake-model');
+  assert.equal(calls.createInputs[0].requestedProvider, 'fake-provider');
+  assert.equal(calls.createInputs[0].requestedModel, 'fake-model');
+  assert.deepEqual(calls.recordExecutionInputs[0].usage.provider, 'fake-provider');
+  assert.equal(result.billing.provider, 'fake-provider');
+});
+
+// --- Reservation / durable snapshot integrity --------------------------------
+
+test('38i. reservationId mismatch blocks Execute', async () => {
+  const { deps, calls } = makeDeps({
+    createAIBillingOperation: async () => validCreateResult({ reservationId: 'other-res' }),
+  });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'OPERATION_CREATION');
+  assert.equal(rec.reasonCode, 'OPERATION_SNAPSHOT_MISMATCH');
+  assert.equal(calls.executeContexts.length, 0);
+});
+
+test('38j. operationId mismatch blocks Execute', async () => {
+  const { deps, calls } = makeDeps({
+    createAIBillingOperation: async () => validCreateResult({ operationId: 'other-op' }),
+  });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'OPERATION_CREATION');
+  assert.equal(rec.reasonCode, 'OPERATION_SNAPSHOT_MISMATCH');
+  assert.equal(calls.executeContexts.length, 0);
+});
+
+test('38k. createResult.reservedTokens mismatch blocks Execute', async () => {
+  const { deps, calls } = makeDeps({
+    createAIBillingOperation: async () => validCreateResult({ reservedTokens: 100 }),
+  });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'OPERATION_CREATION');
+  assert.equal(rec.reasonCode, 'OPERATION_SNAPSHOT_MISMATCH');
+  assert.equal(calls.executeContexts.length, 0);
+});
+
+test('38l. reservationPricingVersion mismatch blocks Execute', async () => {
+  const { deps, calls } = makeDeps({
+    createAIBillingOperation: async () => validCreateResult({ reservationPricingVersion: 2 }),
+  });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'OPERATION_CREATION');
+  assert.equal(rec.reasonCode, 'OPERATION_SNAPSHOT_MISMATCH');
+  assert.equal(calls.executeContexts.length, 0);
+});
+
+test('38m. non-RESERVED create status blocks Execute', async () => {
+  const { deps, calls } = makeDeps({
+    createAIBillingOperation: async () =>
+      validCreateResult({ status: AIBillingOperationStatus.EXECUTION_SUCCEEDED }),
+  });
+  const input = buildInput({ execute: recordExecute(calls) });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'OPERATION_CREATION');
+  assert.equal(rec.reasonCode, 'OPERATION_SNAPSHOT_MISMATCH');
+  assert.equal(calls.executeContexts.length, 0);
+});
+
+test('38n. snapshot mismatch performs no Price/Settle/Release', async () => {
+  const { deps, calls } = makeDeps({
+    createAIBillingOperation: async () => validCreateResult({ reservedTokens: 100 }),
+  });
+  const input = buildInput({ execute: recordExecute(calls) });
+  await runAIBillingOrchestration(input, deps);
+  assert.ok(!calls.order.includes('price'));
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('38o. durable reservedTokens is the pricing ceiling', async () => {
+  const input = buildInput();
+  const quote = expectedQuote(input);
+  const ceiling = quote.reservationTokens;
+  const { deps, calls } = makeDeps({
+    calculateActualPrice: () => priceResult({ walletTokens: ceiling + 1 }),
+  });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'PRICING');
+  assert.equal(rec.reasonCode, 'PRICING_LIMITS_EXCEEDED');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.EXECUTION_SUCCEEDED);
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('38p. happy path create carries real reserved tokens and pricing version', async () => {
+  const input = buildInput();
+  const { deps, calls } = makeDeps();
+  const result = expectSettled(await runAIBillingOrchestration(input, deps));
+  const quote = expectedQuote(input);
+  assert.equal(calls.createInputs.length, 1);
+  assert.equal(result.billing.reservedTokens, quote.reservationTokens);
+});
+
+// --- NON_BILLABLE flow ------------------------------------------------------
+
+test('39. Failure evidence stored before Release', async () => {
+  const input = buildInput({
+    execute: async () => ({
+      kind: 'NON_BILLABLE_FAILURE',
+      code: 'PROMPT_BLOCKED',
+      message: 'request not allowed',
+      providerRequestSent: false,
+      retryable: false,
+    }),
+  });
+  const { deps, calls } = makeDeps();
+  const result = expectReleased(await runAIBillingOrchestration(input, deps));
+  assert.equal(result.outcome, 'RELEASED');
+  assert.equal(result.failureCode, 'PROMPT_BLOCKED');
+  assert.ok(calls.order.indexOf('recordFailure') < calls.order.indexOf('release'));
+  assert.ok(calls.order.indexOf('release') < calls.order.indexOf('markReleased'));
+});
+
+test('40. Release is not called if failure persistence fails', async () => {
+  const input = buildInput({
+    execute: async () => ({
+      kind: 'NON_BILLABLE_FAILURE',
+      code: 'PROMPT_BLOCKED',
+      message: 'request not allowed',
+      providerRequestSent: false,
+      retryable: false,
+    }),
+  });
+  const { deps, calls } = makeDeps({}, { failureThrows: true });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'FAILURE_EVIDENCE');
+  assert.equal(rec.reasonCode, 'FAILURE_EVIDENCE_FAILED');
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('41. Real release result marks operation RELEASED', async () => {
+  const input = buildInput({
+    execute: async () => ({
+      kind: 'NON_BILLABLE_FAILURE',
+      code: 'PROMPT_BLOCKED',
+      message: 'request not allowed',
+      providerRequestSent: false,
+      retryable: false,
+    }),
+  });
+  const { deps, calls } = makeDeps();
+  const result = expectReleased(await runAIBillingOrchestration(input, deps));
+  assert.equal(calls.markReleasedInputs.length, 1);
+  assert.equal(calls.markReleasedInputs[0].release.reservationId, RESERVATION_ID);
+  assert.equal(result.outcome, 'RELEASED');
+  assert.equal(result.recoveryRequired, false);
+});
+
+test('42. Release failure leaves NON_BILLABLE_CONFIRMED', async () => {
+  const input = buildInput({
+    execute: async () => ({
+      kind: 'NON_BILLABLE_FAILURE',
+      code: 'PROMPT_BLOCKED',
+      message: 'request not allowed',
+      providerRequestSent: false,
+      retryable: false,
+    }),
+  });
+  const { deps, calls } = makeDeps({
+    releaseReservation: async () => {
+      throw new Error('release boom');
+    },
+  });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'RELEASE');
+  assert.equal(rec.reasonCode, 'RELEASE_FAILED');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.NON_BILLABLE_CONFIRMED);
+  assert.equal(rec.reservationId, RESERVATION_ID);
+});
+
+test('43. Final RELEASED marking failure does not release twice', async () => {
+  const input = buildInput({
+    execute: async () => ({
+      kind: 'NON_BILLABLE_FAILURE',
+      code: 'PROMPT_BLOCKED',
+      message: 'request not allowed',
+      providerRequestSent: false,
+      retryable: false,
+    }),
+  });
+  const { deps, calls } = makeDeps({}, { releasedThrows: true });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'RELEASED_EVIDENCE');
+  assert.equal(rec.reasonCode, 'RELEASED_EVIDENCE_FAILED');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.NON_BILLABLE_CONFIRMED);
+  assert.equal(calls.releaseInputs.length, 1);
+});
+
+test('44. Non-billable path performs no pricing or settlement', async () => {
+  const input = buildInput({
+    execute: async () => ({
+      kind: 'NON_BILLABLE_FAILURE',
+      code: 'PROMPT_BLOCKED',
+      message: 'request not allowed',
+      providerRequestSent: false,
+      retryable: false,
+    }),
+  });
+  const { deps, calls } = makeDeps();
+  await runAIBillingOrchestration(input, deps);
+  assert.ok(!calls.order.includes('price'));
+  assert.ok(!calls.order.includes('recordPricing'));
+  assert.ok(!calls.order.includes('settle'));
+});
+
+test('45. providerRequestSent=false preserved', async () => {
+  const input = buildInput({
+    execute: async () => ({
+      kind: 'NON_BILLABLE_FAILURE',
+      code: 'PROMPT_BLOCKED',
+      message: 'request not allowed',
+      providerRequestSent: false,
+      retryable: true,
+    }),
+  });
+  const { deps, calls } = makeDeps();
+  await runAIBillingOrchestration(input, deps);
+  assert.equal(calls.failureInputs[0].failure.kind, 'NON_BILLABLE_FAILURE');
+  assert.equal(calls.failureInputs[0].failure.providerRequestSent, false);
+  assert.equal(calls.failureInputs[0].failure.retryable, true);
+});
+
+// --- INDETERMINATE flow -----------------------------------------------------
+
+function indeterminateOutcome() {
+  return {
+    kind: 'INDETERMINATE_FAILURE',
+    code: 'PROVIDER_TIMEOUT',
+    message: 'provider did not respond',
+    providerRequestSent: true,
+    retryable: false,
+  };
+}
+
+test('46. Failure evidence is persisted', async () => {
+  const input = buildInput({ execute: async () => indeterminateOutcome() });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(calls.failureInputs.length, 1);
+  assert.equal(calls.failureInputs[0].failure.kind, 'INDETERMINATE_FAILURE');
+  assert.equal(calls.failureInputs[0].failure.code, 'PROVIDER_TIMEOUT');
+  assert.equal(rec.stage, 'EXECUTION');
+});
+
+test('47. Reservation is not released', async () => {
+  const input = buildInput({ execute: async () => indeterminateOutcome() });
+  const { deps, calls } = makeDeps();
+  await runAIBillingOrchestration(input, deps);
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('48. Reservation is not settled', async () => {
+  const input = buildInput({ execute: async () => indeterminateOutcome() });
+  const { deps, calls } = makeDeps();
+  await runAIBillingOrchestration(input, deps);
+  assert.ok(!calls.order.includes('settle'));
+});
+
+test('49. Pricing is not called', async () => {
+  const input = buildInput({ execute: async () => indeterminateOutcome() });
+  const { deps, calls } = makeDeps();
+  await runAIBillingOrchestration(input, deps);
+  assert.ok(!calls.order.includes('price'));
+  assert.ok(!calls.order.includes('recordPricing'));
+});
+
+test('50. AI is not retried', async () => {
+  const { deps, calls } = makeDeps();
+  const input = buildInput({
+    execute: async (c) => {
+      calls.order.push('execute');
+      calls.executeContexts.push(c);
+      return indeterminateOutcome();
+    },
+  });
+  await runAIBillingOrchestration(input, deps);
+  assert.equal(calls.executeContexts.length, 1);
+});
+
+test('51. Partial execution identity is passed through', async () => {
+  const input = buildInput({
+    execute: async () => ({
+      ...indeterminateOutcome(),
+      execution: { provider: 'fake-provider', model: 'fake-model', providerRequestId: 'req-9' },
+    }),
+  });
+  const { deps, calls } = makeDeps();
+  await runAIBillingOrchestration(input, deps);
+  assert.deepEqual(calls.failureInputs[0].failure.execution, {
+    provider: 'fake-provider',
+    model: 'fake-model',
+    providerRequestId: 'req-9',
+  });
+});
+
+test('52. Result requires recovery', async () => {
+  const input = buildInput({ execute: async () => indeterminateOutcome() });
+  const { deps } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.recoveryRequired, true);
+  assert.equal(rec.stage, 'EXECUTION');
+  assert.equal(rec.reasonCode, 'INDETERMINATE_EXECUTION');
+  assert.equal(rec.operationStatus, AIBillingOperationStatus.INDETERMINATE);
+});
+
+// --- Thrown / invalid executor ----------------------------------------------
+
+test('53. Thrown executor becomes safe indeterminate evidence', async () => {
+  const input = buildInput({
+    execute: async () => {
+      throw new Error('ai crash');
+    },
+  });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(calls.failureInputs[0].failure.kind, 'INDETERMINATE_FAILURE');
+  assert.equal(calls.failureInputs[0].failure.code, 'EXECUTOR_THROWN_DISPATCH_UNKNOWN');
+  assert.equal(calls.failureInputs[0].failure.providerRequestSent, true);
+  assert.equal(rec.reasonCode, 'EXECUTOR_THROWN_DISPATCH_UNKNOWN');
+});
+
+test('54. Raw thrown message is not persisted or returned', async () => {
+  const input = buildInput({
+    execute: async () => {
+      throw new Error('ai crash secret details');
+    },
+  });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  const persisted = JSON.stringify(calls.failureInputs[0].failure);
+  assert.ok(!persisted.includes('ai crash'));
+  assert.ok(!persisted.includes('secret'));
+  const returned = JSON.stringify(rec);
+  assert.ok(!returned.includes('ai crash'));
+});
+
+test('55. Invalid outcome becomes safe indeterminate evidence', async () => {
+  const input = buildInput({
+    execute: async () => ({ kind: 'UNKNOWN', whatever: true }),
+  });
+  const { deps, calls } = makeDeps();
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(calls.failureInputs[0].failure.code, 'EXECUTION_OUTCOME_INVALID');
+  assert.equal(calls.failureInputs[0].failure.providerRequestSent, true);
+  assert.equal(rec.reasonCode, 'EXECUTION_OUTCOME_INVALID');
+});
+
+test('56. No financial action after thrown executor', async () => {
+  const input = buildInput({
+    execute: async () => {
+      throw new Error('ai crash');
+    },
+  });
+  const { deps, calls } = makeDeps();
+  await runAIBillingOrchestration(input, deps);
+  assert.ok(!calls.order.includes('price'));
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('release'));
+});
+
+test('57. Failure-evidence persistence failure still performs no financial action', async () => {
+  const input = buildInput({
+    execute: async () => {
+      throw new Error('ai crash');
+    },
+  });
+  const { deps, calls } = makeDeps({}, { failureThrows: true });
+  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
+  assert.equal(rec.stage, 'FAILURE_EVIDENCE');
+  assert.equal(rec.reasonCode, 'FAILURE_EVIDENCE_FAILED');
+  assert.ok(!calls.order.includes('release'));
+  assert.ok(!calls.order.includes('settle'));
+  assert.ok(!calls.order.includes('price'));
+});
+
+// --- Ordering ---------------------------------------------------------------
+
+test('58. Exact call order for SUCCESS', async () => {
   const { deps, calls } = makeDeps();
   const input = buildInput({ execute: recordExecute(calls) });
   await runAIBillingOrchestration(input, deps);
@@ -705,736 +1574,71 @@ test('6. Successful call order is exactly the durable flow', async () => {
   ]);
 });
 
-test('7. Successful result preserves generic AI data', async () => {
-  const input = buildInput();
-  const { deps } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.deepEqual(result.data, SAMPLE_DATA);
-});
-
-test('8. Reserved amount equals quote.reservationTokens', async () => {
-  const input = buildInput();
+test('59. Exact call order for NON_BILLABLE', async () => {
   const { deps, calls } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  const quote = expectedQuote(input);
-  assert.equal(calls.reserveInputs[0].tokens, quote.reservationTokens);
-  assert.equal(result.billing.reservedTokens, quote.reservationTokens);
-});
-
-test('9. Settlement amount equals the pricing engine Wallet-token result', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  const price = expectedPrice(input, BASE_USAGE);
-  assert.equal(calls.settleInputs[0].actualTokens, price.walletTokens);
-  assert.equal(result.billing.actualTokens, price.walletTokens);
-});
-
-test('10. Released amount comes from the settlement result', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  const quote = expectedQuote(input);
-  const price = expectedPrice(input, BASE_USAGE);
-  assert.equal(result.billing.releasedTokens, quote.reservationTokens - price.walletTokens);
-  assert.equal(result.billing.releasedTokens, quote.reservationTokens - calls.settleInputs[0].actualTokens);
-});
-
-// --- Quote and reservation failure ------------------------------------------
-
-test('11. Quote failure performs no reservation or execution', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps({
-    calculateQuote: () => {
-      throw new Error('quote boom');
-    },
-  });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'QUOTE');
-  assert.equal(rec.reasonCode, 'QUOTE_FAILED');
-  assert.deepEqual(calls.order, ['preflight', 'quote']);
-});
-
-test('12. Reservation failure performs no execution', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps({
-    reserveForAmount: async () => {
-      throw new Error('reserve boom');
-    },
-  });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'RESERVATION');
-  assert.equal(rec.reasonCode, 'RESERVATION_FAILED');
-  assert.deepEqual(calls.order, ['preflight', 'quote', 'reserve']);
-});
-
-test('13. Reservation failure performs no settlement or release', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps({
-    reserveForAmount: async () => {
-      throw new Error('reserve boom');
-    },
+  const input = buildInput({
+    execute: recordExecute(calls, async () => ({
+      kind: 'NON_BILLABLE_FAILURE',
+      code: 'PROMPT_BLOCKED',
+      message: 'request not allowed',
+      providerRequestSent: false,
+      retryable: false,
+    })),
   });
   await runAIBillingOrchestration(input, deps);
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
+  assert.deepEqual(calls.order, [
+    'preflight',
+    'quote',
+    'reserve',
+    'createOperation',
+    'execute',
+    'recordFailure',
+    'release',
+    'markReleased',
+  ]);
 });
 
-// --- Existing-operation replay guard ----------------------------------------
-
-test('14. Existing RESERVED operation blocks execution', async () => {
-  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.RESERVED });
-  const input = buildInput({ execute: recordExecute(calls) });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'PREFLIGHT');
-  assert.equal(rec.reasonCode, 'OPERATION_REPLAY_REQUIRES_RECOVERY');
-  assert.equal(rec.operationStatus, AIBillingOperationStatus.RESERVED);
-  assert.deepEqual(calls.order, ['preflight']);
-});
-
-test('15. Existing EXECUTION_SUCCEEDED blocks execution', async () => {
-  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.EXECUTION_SUCCEEDED });
-  const input = buildInput({ execute: recordExecute(calls) });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.operationStatus, AIBillingOperationStatus.EXECUTION_SUCCEEDED);
-  assert.deepEqual(calls.order, ['preflight']);
-});
-
-test('16. Existing PRICED blocks execution', async () => {
-  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.PRICED });
-  const input = buildInput({ execute: recordExecute(calls) });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.operationStatus, AIBillingOperationStatus.PRICED);
-  assert.deepEqual(calls.order, ['preflight']);
-});
-
-test('17. Existing SETTLED blocks execution', async () => {
-  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.SETTLED });
-  const input = buildInput({ execute: recordExecute(calls) });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.operationStatus, AIBillingOperationStatus.SETTLED);
-  assert.deepEqual(calls.order, ['preflight']);
-});
-
-test('18. Existing RELEASED blocks execution', async () => {
-  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.RELEASED });
-  const input = buildInput({ execute: recordExecute(calls) });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.operationStatus, AIBillingOperationStatus.RELEASED);
-  assert.deepEqual(calls.order, ['preflight']);
-});
-
-test('19. Existing INDETERMINATE blocks execution', async () => {
-  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.INDETERMINATE });
-  const input = buildInput({ execute: recordExecute(calls) });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.operationStatus, AIBillingOperationStatus.INDETERMINATE);
-  assert.deepEqual(calls.order, ['preflight']);
-});
-
-test('20. Existing-operation repository error does not continue as new', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps({}, { preflightError: true });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'PREFLIGHT');
-  assert.equal(rec.reasonCode, 'OPERATION_LOOKUP_FAILED');
-  assert.deepEqual(calls.order, ['preflight']);
-});
-
-test('21. Replay performs no Quote/Reserve/Execute/Price/Settle/Release', async () => {
-  const { deps, calls } = makeDeps({}, { initialStatus: AIBillingOperationStatus.EXECUTION_SUCCEEDED });
-  const input = buildInput({ execute: recordExecute(calls) });
-  await runAIBillingOrchestration(input, deps);
-  assert.deepEqual(calls.order, ['preflight']);
-});
-
-test('22. Replay result is recoveryRequired with status and reason code', async () => {
-  const { deps } = makeDeps({}, { initialStatus: AIBillingOperationStatus.PRICED });
-  const input = buildInput();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.recoveryRequired, true);
-  assert.equal(rec.operationId, OPERATION_ID);
-  assert.equal(rec.reservationId, RESERVATION_ID);
-  assert.equal(rec.stage, 'PREFLIGHT');
-  assert.equal(rec.reasonCode, 'OPERATION_REPLAY_REQUIRES_RECOVERY');
-});
-
-// --- Create / race ----------------------------------------------------------
-
-test('23. Operation creation failure blocks Execute', async () => {
-  const { deps, calls } = makeDeps({}, { createThrows: true });
-  const input = buildInput({ execute: recordExecute(calls) });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'OPERATION_CREATION');
-  assert.equal(rec.reasonCode, 'OPERATION_CREATE_FAILED');
-  assert.equal(rec.reservationId, RESERVATION_ID);
-  assert.ok(!calls.order.includes('execute'));
-});
-
-test('24. Operation creation failure does not auto-release', async () => {
-  const { deps, calls } = makeDeps({}, { createThrows: true });
-  const input = buildInput();
-  await runAIBillingOrchestration(input, deps);
-  assert.ok(!calls.order.includes('release'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('price'));
-});
-
-test('25. Operation idempotent replay blocks Execute', async () => {
-  const { deps, calls } = makeDeps({}, { createIdempotentReplay: true });
-  const input = buildInput({ execute: recordExecute(calls) });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'OPERATION_CREATION');
-  assert.equal(rec.reasonCode, 'OPERATION_CREATE_REPLAY');
-  assert.equal(rec.operationStatus, AIBillingOperationStatus.RESERVED);
-  assert.ok(!calls.order.includes('execute'));
-  assert.ok(!calls.order.includes('price'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('26. Reservation replay plus newly-created operation may execute once', async () => {
-  const { deps, calls } = makeDeps({}, { reserveIdempotentReplay: true });
-  const input = buildInput({ execute: recordExecute(calls) });
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.equal(calls.executeContexts.length, 1);
-  assert.ok(result.outcome === 'SETTLED');
-});
-
-test('27. Concurrent create loser never executes AI', async () => {
-  const { deps, calls } = makeDeps({}, { createIdempotentReplay: true });
-  const input = buildInput({ execute: recordExecute(calls) });
-  await runAIBillingOrchestration(input, deps);
-  assert.equal(calls.executeContexts.length, 0);
-});
-
-test('28. operationId is stable and passed through unchanged', async () => {
+test('60. Exact call order for INDETERMINATE', async () => {
   const { deps, calls } = makeDeps();
-  const input = buildInput({ execute: recordExecute(calls) });
+  const input = buildInput({ execute: recordExecute(calls, async () => indeterminateOutcome()) });
   await runAIBillingOrchestration(input, deps);
-  assert.equal(calls.createInputs[0].operationId, OPERATION_ID);
-  assert.equal(calls.executeContexts[0].operationId, OPERATION_ID);
-  assert.equal(calls.executeContexts[0].reservationId, RESERVATION_ID);
-  assert.equal(calls.getOperationIds[0], OPERATION_ID);
+  assert.deepEqual(calls.order, [
+    'preflight',
+    'quote',
+    'reserve',
+    'createOperation',
+    'execute',
+    'recordFailure',
+  ]);
 });
 
-// --- SUCCESS flow -----------------------------------------------------------
-
-test('29. Parsed SUCCESS records execution evidence', async () => {
-  const { deps, calls } = makeDeps();
-  const input = buildInput({ execute: recordExecute(calls) });
-  await runAIBillingOrchestration(input, deps);
-  assert.equal(calls.recordExecutionInputs.length, 1);
-  assert.deepEqual(calls.recordExecutionInputs[0].execution, successOutcome().execution);
-  assert.deepEqual(calls.recordExecutionInputs[0].usage, BASE_USAGE);
-});
-
-test('30. Execution evidence is stored before Price', async () => {
-  const { deps, calls } = makeDeps();
-  const input = buildInput({ execute: recordExecute(calls) });
-  await runAIBillingOrchestration(input, deps);
-  assert.ok(calls.order.indexOf('recordExecution') < calls.order.indexOf('price'));
-});
-
-test('31. Pricing uses canonical usage', async () => {
-  const { deps, calls } = makeDeps();
-  const input = buildInput({ execute: recordExecute(calls) });
-  await runAIBillingOrchestration(input, deps);
-  assert.deepEqual(calls.priceInputs[0].usage, BASE_USAGE);
-});
-
-test('32. Pricing evidence is stored before Settle', async () => {
+test('61. No settlement before pricing evidence', async () => {
   const { deps, calls } = makeDeps();
   const input = buildInput({ execute: recordExecute(calls) });
   await runAIBillingOrchestration(input, deps);
   assert.ok(calls.order.indexOf('recordPricing') < calls.order.indexOf('settle'));
 });
 
-test('33. Settle uses pricing.walletTokens', async () => {
-  const { deps, calls } = makeDeps();
-  const input = buildInput({ execute: recordExecute(calls) });
-  await runAIBillingOrchestration(input, deps);
-  const price = expectedPrice(input, BASE_USAGE);
-  assert.equal(calls.settleInputs[0].actualTokens, price.walletTokens);
-});
-
-test('34. Real settlement result marks operation SETTLED', async () => {
-  const { deps, calls } = makeDeps();
-  const input = buildInput({ execute: recordExecute(calls) });
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.equal(calls.markSettledInputs.length, 1);
-  assert.equal(calls.markSettledInputs[0].settlement.consumeTransactionId, 'tx-1');
-  assert.equal(result.outcome, 'SETTLED');
-  assert.equal(result.recoveryRequired, false);
-});
-
-test('35. Success data is returned but not persisted as evidence', async () => {
-  const { deps, calls } = makeDeps();
-  const input = buildInput({ execute: recordExecute(calls) });
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.deepEqual(result.data, SAMPLE_DATA);
-  assert.ok(!('data' in calls.recordExecutionInputs[0]));
-  assert.ok(!('data' in calls.recordPricingInputs[0]));
-});
-
-test('36. Execute called exactly once', async () => {
-  const { deps, calls } = makeDeps();
-  const input = buildInput({ execute: recordExecute(calls) });
-  await runAIBillingOrchestration(input, deps);
-  assert.equal(calls.executeContexts.length, 1);
-});
-
-// --- Usage validation -------------------------------------------------------
-
-test('37. Actual provider mismatch blocks pricing/settlement', async () => {
-  const input = buildInput({
-    execute: async () => successOutcome({
-      execution: { provider: 'other-provider', model: 'fake-model' },
-      usage: { ...BASE_USAGE, provider: 'other-provider' },
-    }),
-  });
-  const { deps, calls } = makeDeps();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'EXECUTION_EVIDENCE');
-  assert.equal(rec.reasonCode, 'EXECUTION_EVIDENCE_FAILED');
-  assert.ok(calls.order.includes('recordExecution'));
-  assert.ok(!calls.order.includes('price'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('38. Actual model mismatch blocks pricing/settlement', async () => {
-  const input = buildInput({
-    execute: async () => successOutcome({
-      execution: { provider: 'fake-provider', model: 'other-model' },
-      usage: { ...BASE_USAGE, model: 'other-model' },
-    }),
-  });
-  const { deps, calls } = makeDeps();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'EXECUTION_EVIDENCE');
-  assert.equal(rec.reasonCode, 'EXECUTION_EVIDENCE_FAILED');
-  assert.ok(calls.order.includes('recordExecution'));
-  assert.ok(!calls.order.includes('price'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('39. Input usage above maxInputTokens is rejected before pricing', async () => {
-  const input = buildInput({
-    execute: async () => successOutcome({ usage: { ...BASE_USAGE, inputTokens: 13000 } }),
-  });
-  const { deps, calls } = makeDeps();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.reasonCode, 'USAGE_LIMITS_EXCEEDED');
-  assert.ok(!calls.order.includes('price'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('40. Output usage above maxOutputTokens is rejected before pricing', async () => {
-  const input = buildInput({
-    execute: async () => successOutcome({ usage: { ...BASE_USAGE, outputTokens: 1300 } }),
-  });
-  const { deps, calls } = makeDeps();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.reasonCode, 'USAGE_LIMITS_EXCEEDED');
-  assert.ok(!calls.order.includes('price'));
-});
-
-test('40a. FIXED_FALLBACK with inputTokens above maxInputTokens is rejected before pricing', async () => {
-  const input = buildInput({
-    requestedMode: 'FIXED_FALLBACK',
-    provider: undefined,
-    model: undefined,
-    execute: async () => successOutcome({ usage: { ...BASE_USAGE, inputTokens: 13000 } }),
-  });
-  const { deps, calls } = makeDeps();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'USAGE_VALIDATION');
-  assert.equal(rec.reasonCode, 'USAGE_LIMITS_EXCEEDED');
-  assert.equal(rec.operationStatus, AIBillingOperationStatus.EXECUTION_SUCCEEDED);
-  assert.ok(calls.order.includes('recordExecution'));
-  assert.ok(!calls.order.includes('price'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('40b. FIXED_FALLBACK with outputTokens above maxOutputTokens is rejected before pricing', async () => {
-  const input = buildInput({
-    requestedMode: 'FIXED_FALLBACK',
-    provider: undefined,
-    model: undefined,
-    execute: async () => successOutcome({ usage: { ...BASE_USAGE, outputTokens: 1300 } }),
-  });
-  const { deps, calls } = makeDeps();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'USAGE_VALIDATION');
-  assert.equal(rec.reasonCode, 'USAGE_LIMITS_EXCEEDED');
-  assert.equal(rec.operationStatus, AIBillingOperationStatus.EXECUTION_SUCCEEDED);
-  assert.ok(calls.order.includes('recordExecution'));
-  assert.ok(!calls.order.includes('price'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('41. Usage validation failure does not settle or release', async () => {
-  const input = buildInput({
-    execute: async () => successOutcome({ usage: { ...BASE_USAGE, provider: 'other-provider' } }),
-  });
-  const { deps, calls } = makeDeps();
-  await runAIBillingOrchestration(input, deps);
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('42. Malformed SUCCESS without usage is treated conservatively as indeterminate', async () => {
-  const input = buildInput({
-    execute: async () => ({ kind: 'SUCCESS', data: SAMPLE_DATA }),
-  });
-  const { deps, calls } = makeDeps();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.reasonCode, 'EXECUTION_OUTCOME_INVALID');
-  assert.equal(calls.failureInputs[0].failure.code, 'EXECUTION_OUTCOME_INVALID');
-  assert.ok(!calls.order.includes('price'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('43. Malformed SUCCESS with invalid usage is treated conservatively as indeterminate', async () => {
+test('62. No release before non-billable evidence', async () => {
   const input = buildInput({
     execute: async () => ({
-      kind: 'SUCCESS',
-      data: SAMPLE_DATA,
-      execution: { provider: 'fake-provider', model: 'fake-model' },
-      usage: { provider: 'fake-provider', model: 'fake-model', inputTokens: -5, outputTokens: 10, totalTokens: 5 },
+      kind: 'NON_BILLABLE_FAILURE',
+      code: 'PROMPT_BLOCKED',
+      message: 'request not allowed',
+      providerRequestSent: false,
+      retryable: false,
     }),
   });
   const { deps, calls } = makeDeps();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.reasonCode, 'EXECUTION_OUTCOME_INVALID');
-  assert.equal(calls.failureInputs[0].failure.code, 'EXECUTION_OUTCOME_INVALID');
-  assert.ok(!calls.order.includes('price'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('44. totalTokens is not independently billed by the orchestrator', async () => {
-  const input = buildInput({
-    execute: async () => successOutcome({ usage: { ...BASE_USAGE, totalTokens: 999_999 } }),
-  });
-  const { deps, calls } = makeDeps({
-    calculateActualPrice: () => priceResult({ walletTokens: 7 }),
-  });
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.equal(calls.settleInputs[0].actualTokens, 7);
-  assert.equal(result.billing.actualTokens, 7);
-});
-
-// --- Pricing and settlement -------------------------------------------------
-
-test('45. Provider usage pricing settles the actual amount', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  const price = expectedPrice(input, BASE_USAGE);
-  assert.equal(result.billing.actualTokens, price.walletTokens);
-  assert.equal(calls.settleInputs[0].actualTokens, price.walletTokens);
-});
-
-test('46. Fixed fallback mode reserves and settles the fixed amount', async () => {
-  const input = buildInput({ requestedMode: 'FIXED_FALLBACK', provider: undefined, model: undefined });
-  const { deps, calls } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  const quote = expectedQuote(input);
-  assert.equal(quote.reservationTokens, 2);
-  assert.equal(result.billing.actualTokens, 2);
-  assert.equal(calls.settleInputs[0].actualTokens, 2);
-});
-
-test('47. Partial settlement returns unused reservation', async () => {
-  const input = buildInput();
-  const { deps } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  const quote = expectedQuote(input);
-  const price = expectedPrice(input, BASE_USAGE);
-  assert.equal(result.billing.reservedTokens, quote.reservationTokens);
-  assert.ok(result.billing.releasedTokens > 0);
-  assert.equal(result.billing.releasedTokens, quote.reservationTokens - price.walletTokens);
-});
-
-test('48. Full settlement returns zero unused tokens', async () => {
-  const input = buildInput({ requestedMode: 'FIXED_FALLBACK', provider: undefined, model: undefined });
-  const { deps } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.equal(result.billing.actualTokens, 2);
-  assert.equal(result.billing.releasedTokens, 0);
-});
-
-test('49. Zero actual price is passed unchanged to settlement', async () => {
-  const zeroRate = rateCard({ inputMicrosPerMillionTokens: 0, outputMicrosPerMillionTokens: 0 });
-  const zeroPolicy = policy({ minimumWalletTokens: 0 });
-  const input = buildInput({ rateCard: zeroRate, walletPolicy: zeroPolicy });
-  const { deps, calls } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.equal(result.billing.actualTokens, 0);
-  assert.equal(calls.settleInputs[0].actualTokens, 0);
-  assert.equal(result.billing.releasedTokens, 2);
-});
-
-test('50. Actual price above reservation is rejected before settlement', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps({
-    calculateActualPrice: () => priceResult({ walletTokens: 999_999 }),
-  });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'PRICING');
-  assert.equal(rec.reasonCode, 'PRICING_LIMITS_EXCEEDED');
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('51. Pricing failure after execution evidence does not release', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps({
-    calculateActualPrice: () => {
-      throw new Error('price boom');
-    },
-  });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'PRICING');
-  assert.equal(rec.reasonCode, 'PRICING_FAILED');
-  assert.equal(rec.operationStatus, AIBillingOperationStatus.EXECUTION_SUCCEEDED);
-  assert.ok(!calls.order.includes('release'));
-  assert.ok(!calls.order.includes('settle'));
-});
-
-test('52. Settlement failure after pricing evidence does not release', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps({
-    settleForAmount: async () => {
-      throw new Error('settle boom');
-    },
-  });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'SETTLEMENT');
-  assert.equal(rec.reasonCode, 'SETTLEMENT_FAILED');
-  assert.equal(rec.operationStatus, AIBillingOperationStatus.PRICED);
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('53. Settlement result is the source of actual/released values', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  const quote = expectedQuote(input);
-  assert.equal(result.billing.actualTokens, calls.settleInputs[0].actualTokens);
-  assert.equal(result.billing.releasedTokens, quote.reservationTokens - calls.settleInputs[0].actualTokens);
-  assert.equal(result.billing.reservedTokens, quote.reservationTokens);
-  assert.equal(result.billing.consumeTransactionId, 'tx-1');
-});
-
-// --- Snapshot consistency ---------------------------------------------------
-
-test('54. Quote and actual pricing receive the same rate-card snapshot', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
   await runAIBillingOrchestration(input, deps);
-  assert.strictEqual(calls.quoteInputs[0].rateCard, calls.priceInputs[0].rateCard);
+  assert.ok(calls.order.indexOf('recordFailure') < calls.order.indexOf('release'));
 });
 
-test('55. Quote and actual pricing receive the same Wallet-policy snapshot', async () => {
-  const input = buildInput();
+test('63. No AI execution before durable operation creation', async () => {
   const { deps, calls } = makeDeps();
+  const input = buildInput({ execute: recordExecute(calls) });
   await runAIBillingOrchestration(input, deps);
-  assert.strictEqual(calls.quoteInputs[0].walletPolicy, calls.priceInputs[0].walletPolicy);
-});
-
-test('56. Quote receives a frozen independent Chat limits snapshot', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
-  await runAIBillingOrchestration(input, deps);
-  assert.notStrictEqual(calls.quoteInputs[0].chatLimits, input.chatLimits);
-  assert.ok(Object.isFrozen(calls.quoteInputs[0].chatLimits));
-  assert.deepEqual(calls.quoteInputs[0].chatLimits, input.chatLimits);
-});
-
-test('57. Mutating the original rateCard during execute does not affect pricing', async () => {
-  const myRate = rateCard();
-  const input = buildInput({
-    rateCard: myRate,
-    execute: async () => {
-      myRate[0].inputMicrosPerMillionTokens = 999_999_999;
-      return successOutcome();
-    },
-  });
-  const { deps } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.equal(result.billing.actualTokens, 30);
-});
-
-test('58. Mutating the original Wallet policy during execute does not affect pricing', async () => {
-  const myPolicy = policy();
-  const input = buildInput({
-    walletPolicy: myPolicy,
-    execute: async () => {
-      myPolicy.minimumWalletTokens = 999_999;
-      return successOutcome();
-    },
-  });
-  const { deps } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.equal(result.billing.actualTokens, 30);
-});
-
-test('59. Mutating the original Chat limits during execute does not affect quote validation', async () => {
-  const myLimits = chatLimits();
-  const input = buildInput({
-    chatLimits: myLimits,
-    execute: async () => {
-      myLimits.maxInputTokens = 1;
-      return successOutcome();
-    },
-  });
-  const { deps, calls } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.equal(calls.quoteInputs[0].chatLimits.maxInputTokens, 12000);
-  assert.equal(result.billing.actualTokens, 30);
-});
-
-test('60. Caller input is not mutated', async () => {
-  const myRate = rateCard();
-  const myPolicy = policy();
-  const myLimits = chatLimits();
-  const originalRate = myRate.map((r) => ({ ...r }));
-  const originalPolicy = { ...myPolicy };
-  const originalLimits = { ...myLimits };
-  const input = buildInput({ rateCard: myRate, walletPolicy: myPolicy, chatLimits: myLimits });
-  const { deps } = makeDeps();
-  await runAIBillingOrchestration(input, deps);
-  assert.deepEqual(input.rateCard, originalRate);
-  assert.deepEqual(input.walletPolicy, originalPolicy);
-  assert.deepEqual(input.chatLimits, originalLimits);
-});
-
-test('61. Rate-card entries are not mutated', async () => {
-  const input = buildInput();
-  const originalRate = input.rateCard.map((r) => ({ ...r }));
-  const { deps } = makeDeps();
-  await runAIBillingOrchestration(input, deps);
-  assert.deepEqual(input.rateCard, originalRate);
-});
-
-test('62. Wallet policy is not mutated', async () => {
-  const input = buildInput();
-  const originalPolicy = { ...input.walletPolicy };
-  const { deps } = makeDeps();
-  await runAIBillingOrchestration(input, deps);
-  assert.deepEqual(input.walletPolicy, originalPolicy);
-});
-
-test('63. Repeated orchestrations use independent snapshot objects', async () => {
-  const firstInput = buildInput();
-  const { deps: deps1, calls: calls1 } = makeDeps();
-  await runAIBillingOrchestration(firstInput, deps1);
-
-  const secondInput = buildInput();
-  const { deps: deps2, calls: calls2 } = makeDeps();
-  await runAIBillingOrchestration(secondInput, deps2);
-
-  assert.notStrictEqual(calls1.quoteInputs[0].rateCard, calls2.quoteInputs[0].rateCard);
-  assert.notStrictEqual(calls1.quoteInputs[0].rateCard[0], calls2.quoteInputs[0].rateCard[0]);
-  assert.notStrictEqual(calls1.quoteInputs[0].walletPolicy, calls2.quoteInputs[0].walletPolicy);
-  assert.notStrictEqual(calls1.quoteInputs[0].chatLimits, calls2.quoteInputs[0].chatLimits);
-});
-
-// --- Metadata -------------------------------------------------------------
-
-function metadataOf(inputs: ReserveBusinessTokensForAmountInput[]): AIBillingReservationMetadata {
-  const meta = inputs[0].metadata as AIBillingReservationMetadata;
-  assert.ok(meta && typeof meta === 'object');
-  return meta;
-}
-
-test('64. Reservation metadata contains sanitized aiBilling snapshot', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
-  await runAIBillingOrchestration(input, deps);
-  const meta = metadataOf(calls.reserveInputs);
-  assert.equal(meta.aiBilling.schemaVersion, 1);
-  assert.equal(meta.aiBilling.requestedMode, 'PROVIDER_USAGE');
-  assert.equal(meta.aiBilling.quoteAppliedMode, 'PROVIDER_USAGE');
-  assert.equal(meta.aiBilling.maxInputTokens, 12000);
-  assert.equal(meta.aiBilling.maxOutputTokens, 1200);
-  assert.equal(meta.aiBilling.provider, 'fake-provider');
-  assert.equal(meta.aiBilling.model, 'fake-model');
-});
-
-test('65. Metadata contains quotedTokens and versions', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  const meta = metadataOf(calls.reserveInputs);
-  assert.equal(meta.aiBilling.quotedTokens, result.billing.reservedTokens);
-  assert.equal(meta.aiBilling.rateCardVersion, 'rate-v1');
-  assert.equal(meta.aiBilling.walletPolicyVersion, 'policy-v1');
-  assert.equal(meta.aiBilling.maximumUsageWalletTokens, 13200);
-});
-
-test('66. Metadata omits full rate card and Wallet policy', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
-  await runAIBillingOrchestration(input, deps);
-  const serialized = JSON.stringify(calls.reserveInputs[0].metadata);
-  assert.ok(!serialized.includes('inputMicrosPerMillionTokens'));
-  assert.ok(!serialized.includes('outputMicrosPerMillionTokens'));
-  assert.ok(!serialized.includes('walletTokenValueMicros'));
-  assert.ok(!serialized.includes('markupBasisPoints'));
-  assert.ok(!serialized.includes('"rateCard"'));
-  assert.ok(!serialized.includes('"walletPolicy"'));
-});
-
-test('67. Metadata omits prompts, AI response, and raw usage', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
-  await runAIBillingOrchestration(input, deps);
-  const serialized = JSON.stringify(calls.reserveInputs[0].metadata);
-  assert.ok(!serialized.includes('prompt'));
-  assert.ok(!serialized.includes('message'));
-  assert.ok(!serialized.includes('"data"'));
-  assert.ok(!serialized.includes('"usage"'));
-});
-
-test('68. reservation.pricingVersion is not replaced by a rate-card version', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
-  await runAIBillingOrchestration(input, deps);
-  assert.ok(!('pricingVersion' in calls.reserveInputs[0]));
-  assert.equal(calls.reserveInputs[0].tokens, 13200);
-  const meta = metadataOf(calls.reserveInputs);
-  assert.equal(meta.aiBilling.rateCardVersion, 'rate-v1');
-});
-
-// --- Fixed mode -------------------------------------------------------------
-
-test('69. Fixed mode does not require provider/model', async () => {
-  const input = buildInput({ requestedMode: 'FIXED_FALLBACK', provider: undefined, model: undefined });
-  const { deps } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.equal(result.billing.appliedMode, 'FIXED_FALLBACK');
-});
-
-test('70. Fixed mode does not switch to provider pricing because usage exists', async () => {
-  const input = buildInput({
-    requestedMode: 'FIXED_FALLBACK',
-    provider: undefined,
-    model: undefined,
-    execute: async () => successOutcome(),
-  });
-  const { deps } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.equal(result.billing.appliedMode, 'FIXED_FALLBACK');
-  assert.equal(result.billing.actualTokens, 2);
+  assert.ok(calls.order.indexOf('createOperation') < calls.order.indexOf('execute'));
 });
 
 // --- Separation -------------------------------------------------------------
@@ -1443,175 +1647,60 @@ const serviceSource = readFileSync(
   new URL('../src/services/ai-billing-orchestrator.service.ts', import.meta.url),
   'utf8',
 );
+const typesSource = readFileSync(
+  new URL('../src/types/ai-billing-orchestrator.ts', import.meta.url),
+  'utf8',
+);
 
-test('71. Orchestrator performs no direct Prisma call', () => {
-  assert.ok(!serviceSource.includes('@prisma/client'));
-  assert.ok(!/prisma\./.test(serviceSource));
-});
-
-test('72. Orchestrator performs no direct HTTP call', () => {
+test('64. No HTTP call added', () => {
   assert.ok(!serviceSource.includes('node:http'));
   assert.ok(!serviceSource.includes('node:https'));
   assert.ok(!serviceSource.includes('fetch('));
 });
 
-test('73. Orchestrator performs no direct AI call except the supplied callback', () => {
+test('65. No live Chat/Streaming integration added', () => {
   assert.ok(!serviceSource.includes('@google/generative-ai'));
-  assert.ok(!serviceSource.includes('gemini'));
+  assert.ok(!serviceSource.includes('stream'));
 });
 
-test('74. Orchestrator contains no Wallet arithmetic', () => {
+test('66. No direct Prisma access in orchestrator', () => {
+  assert.ok(!serviceSource.includes('@prisma/client'));
+  assert.ok(!/prisma\./.test(serviceSource));
+});
+
+test('67. No direct Wallet arithmetic', () => {
   assert.ok(!serviceSource.includes('tokenBalance'));
   assert.ok(!serviceSource.includes('reservedBalance'));
   assert.ok(!serviceSource.includes('availableBalance'));
 });
 
-test('75. Orchestrator contains no duplicated provider pricing formula', () => {
+test('68. No direct transaction creation', () => {
+  assert.ok(!serviceSource.includes('tokenTransaction'));
+  assert.ok(!serviceSource.includes('CONSUME'));
+  assert.ok(!serviceSource.includes('REFUND'));
+});
+
+test('69. No production provider/model hardcoded', () => {
+  assert.ok(!serviceSource.includes('gemini'));
+  assert.ok(!serviceSource.includes('gpt-'));
+  assert.ok(!serviceSource.includes('claude'));
+});
+
+test('70. No provider price added', () => {
   assert.ok(!serviceSource.includes('inputMicrosPerMillionTokens'));
   assert.ok(!serviceSource.includes('outputMicrosPerMillionTokens'));
-  assert.ok(!serviceSource.includes('providerCostMicros'));
-  assert.ok(!serviceSource.includes('microsPerMillion'));
+  assert.ok(!typesSource.includes('billingCurrency: \'USD\''));
 });
 
-test('76. No hardcoded reservation ceiling exists', () => {
-  assert.ok(!/ceiling/i.test(serviceSource));
-  assert.ok(!serviceSource.includes('MAX_RESERVATION'));
-  assert.ok(!serviceSource.includes('> 8'));
+test('71. No prompt/response persistence', () => {
+  assert.ok(!serviceSource.includes('prompt'));
+  assert.ok(!serviceSource.includes('response'));
 });
 
-test('77. A quote above 8 is passed unchanged to variable reservation', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  const quote = expectedQuote(input);
-  assert.ok(quote.reservationTokens > 8);
-  assert.equal(calls.reserveInputs[0].tokens, quote.reservationTokens);
-  assert.equal(result.billing.reservedTokens, quote.reservationTokens);
-});
-
-test('78. Result exposes no wallet balance or secret fields', async () => {
-  const input = buildInput();
-  const { deps } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  const serialized = JSON.stringify(result);
-  assert.ok(!serialized.includes('availableBalance'));
-  assert.ok(!serialized.includes('reservedBalance'));
-  assert.ok(!serialized.includes('apiKey'));
-  assert.ok(!serialized.includes('secret'));
-  assert.ok(!('walletId' in result.billing));
-});
-
-test('79. Recovery results expose no raw error text', async () => {
-  const input = buildInput();
-  const { deps } = makeDeps({
-    calculateQuote: () => {
-      throw new Error('quote boom');
-    },
-  });
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  const serialized = JSON.stringify(rec);
-  assert.ok(!serialized.includes('quote boom'));
-  assert.ok(!serialized.includes('rateCard'));
-  assert.ok(!serialized.includes('walletPolicy'));
-  assert.ok(!serialized.includes('prompt'));
-  assert.ok(!serialized.includes('stack'));
-});
-
-test('80. Successful result returns a fresh quote object', async () => {
-  const input = buildInput();
-  const { deps, calls } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.notStrictEqual(result.quote, calls.quoteInputs[0]);
-  assert.deepEqual(result.quote, expectedQuote(input));
-});
-
-// --- Fallback quote behavior -------------------------------------------------
-
-test('81. RATE_CARD_NOT_FOUND quote followed by usage from another priced model is rejected', async () => {
-  const input = buildInput({
-    rateCard: [{ ...BASE_RATE, model: 'other-model', version: 'rate-other' }],
-    execute: async () => successOutcome({
-      execution: { provider: 'fake-provider', model: 'other-model' },
-      usage: { provider: 'fake-provider', model: 'other-model', inputTokens: 10, outputTokens: 20, totalTokens: 30 },
-    }),
-  });
-  const quote = expectedQuote(input);
-  assert.equal(quote.appliedMode, 'FIXED_FALLBACK');
-  assert.equal(quote.fallbackReason, 'RATE_CARD_NOT_FOUND');
-  const { deps, calls } = makeDeps();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'EXECUTION_EVIDENCE');
-  assert.equal(rec.reasonCode, 'EXECUTION_EVIDENCE_FAILED');
-  assert.ok(!calls.order.includes('price'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('82. RATE_CARD_NOT_FOUND quote followed by usage from another provider is rejected', async () => {
-  const input = buildInput({
-    rateCard: [{ ...BASE_RATE, provider: 'other-provider', version: 'rate-other' }],
-    execute: async () => successOutcome({
-      execution: { provider: 'other-provider', model: 'fake-model' },
-      usage: { provider: 'other-provider', model: 'fake-model', inputTokens: 10, outputTokens: 20, totalTokens: 30 },
-    }),
-  });
-  const quote = expectedQuote(input);
-  assert.equal(quote.appliedMode, 'FIXED_FALLBACK');
-  assert.equal(quote.fallbackReason, 'RATE_CARD_NOT_FOUND');
-  const { deps, calls } = makeDeps();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.stage, 'EXECUTION_EVIDENCE');
-  assert.equal(rec.reasonCode, 'EXECUTION_EVIDENCE_FAILED');
-  assert.ok(!calls.order.includes('price'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('83. RATE_CARD_NOT_FOUND quote still enforces maxInputTokens', async () => {
-  const input = buildInput({
-    rateCard: [{ ...BASE_RATE, model: 'other-model', version: 'rate-other' }],
-    execute: async () => successOutcome({
-      usage: { ...BASE_USAGE, inputTokens: 13000, totalTokens: 13020 },
-    }),
-  });
-  const quote = expectedQuote(input);
-  assert.equal(quote.appliedMode, 'FIXED_FALLBACK');
-  assert.equal(quote.fallbackReason, 'RATE_CARD_NOT_FOUND');
-  const { deps, calls } = makeDeps();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.reasonCode, 'USAGE_LIMITS_EXCEEDED');
-  assert.ok(!calls.order.includes('price'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('84. RATE_CARD_NOT_FOUND quote still enforces maxOutputTokens', async () => {
-  const input = buildInput({
-    rateCard: [{ ...BASE_RATE, model: 'other-model', version: 'rate-other' }],
-    execute: async () => successOutcome({
-      usage: { ...BASE_USAGE, outputTokens: 1300, totalTokens: 1310 },
-    }),
-  });
-  const quote = expectedQuote(input);
-  assert.equal(quote.appliedMode, 'FIXED_FALLBACK');
-  assert.equal(quote.fallbackReason, 'RATE_CARD_NOT_FOUND');
-  const { deps, calls } = makeDeps();
-  const rec = expectRecovery(await runAIBillingOrchestration(input, deps));
-  assert.equal(rec.reasonCode, 'USAGE_LIMITS_EXCEEDED');
-  assert.ok(!calls.order.includes('price'));
-  assert.ok(!calls.order.includes('settle'));
-  assert.ok(!calls.order.includes('release'));
-});
-
-test('85. Valid normalized usage is provider-priced, not treated as USAGE_INVALID', async () => {
-  const input = buildInput({
-    execute: async () => successOutcome({
-      usage: { provider: 'fake-provider', model: 'fake-model', input_tokens: 10, output_tokens: 20, total_tokens: 30 },
-    }),
-  });
-  const { deps } = makeDeps();
-  const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.equal(result.billing.appliedMode, 'PROVIDER_USAGE');
-  assert.equal(result.billing.fallbackReason, undefined);
-  assert.equal(result.billing.actualTokens, 30);
+test('72. No worker, scheduler, queue, endpoint, or dashboard', () => {
+  assert.ok(!serviceSource.includes('bullmq'));
+  assert.ok(!serviceSource.includes('queue'));
+  assert.ok(!serviceSource.includes('cron'));
+  assert.ok(!serviceSource.includes('router.'));
+  assert.ok(!serviceSource.includes('dashboard'));
 });
