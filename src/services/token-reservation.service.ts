@@ -47,6 +47,11 @@ export interface SettleBusinessTokenReservationInput {
   reservationId: string;
 }
 
+export interface SettleBusinessTokenReservationForAmountInput {
+  reservationId: string;
+  actualTokens: number;
+}
+
 export interface SettleBusinessTokenReservationResult {
   reservationId: string;
   referenceId: string;
@@ -55,6 +60,8 @@ export interface SettleBusinessTokenReservationResult {
   feature: BusinessTokenFeature;
   source: BusinessConsumptionSource;
   tokens: number;
+  actualTokens: number;
+  releasedTokens: number;
   pricingVersion: number;
   status: TokenReservationStatus;
   settledAt: Date;
@@ -164,9 +171,34 @@ function assertReservationId(reservationId: string): string {
   return trimmed;
 }
 
+function assertActualTokens(actualTokens: number): number {
+  if (
+    typeof actualTokens !== 'number' ||
+    !Number.isSafeInteger(actualTokens) ||
+    actualTokens < 0
+  ) {
+    throw new AppError(400, 'actualTokens must be a safe non-negative integer');
+  }
+  return actualTokens;
+}
+
+function assertReservedTokens(reservation: TokenReservation): number {
+  const reservedTokens = reservation.tokens;
+  if (
+    typeof reservedTokens !== 'number' ||
+    !Number.isSafeInteger(reservedTokens) ||
+    reservedTokens < 0
+  ) {
+    throw new AppError(409, 'Token reservation integrity conflict');
+  }
+  return reservedTokens;
+}
+
 function toSettledResult(
   consume: TokenTransaction | null,
   reservation: TokenReservation,
+  reservedTokens: number,
+  actualTokens: number,
   idempotentReplay: boolean,
 ): SettleBusinessTokenReservationResult {
   if (!consume) {
@@ -175,10 +207,51 @@ function toSettledResult(
 
   return {
     ...toReservationSummary(reservation),
+    actualTokens,
+    releasedTokens: reservedTokens - actualTokens,
     settledAt: reservation.settledAt ?? reservation.updatedAt,
     consumeTransactionId: consume.id,
     idempotentReplay,
   };
+}
+
+async function findConsumeTransaction(
+  tx: Pick<typeof prisma, 'tokenTransaction'>,
+  reservation: TokenReservation,
+  settlementReferenceId: string,
+): Promise<TokenTransaction | null> {
+  return tx.tokenTransaction.findFirst({
+    where: {
+      walletId: reservation.walletId,
+      userId: reservation.userId,
+      type: 'CONSUME',
+      source: reservation.source,
+      referenceId: settlementReferenceId,
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+async function findCompletedConsumeOrThrow(
+  tx: Pick<typeof prisma, 'tokenTransaction'>,
+  reservation: TokenReservation,
+  settlementReferenceId: string,
+  actualTokens: number,
+  reservedTokens: number,
+): Promise<TokenTransaction> {
+  const consume = await findConsumeTransaction(tx, reservation, settlementReferenceId);
+  if (!consume) {
+    throw new AppError(409, 'Token reservation integrity conflict');
+  }
+  if (
+    !Number.isSafeInteger(consume.tokens) ||
+    consume.tokens < 0 ||
+    consume.tokens > reservedTokens ||
+    consume.tokens !== actualTokens
+  ) {
+    throw new AppError(409, 'Token reservation integrity conflict');
+  }
+  return consume;
 }
 
 export async function reserveBusinessTokens(
@@ -319,25 +392,56 @@ export async function settleBusinessTokenReservation(
     throw new AppError(404, 'Reservation not found');
   }
 
-  if (reservation.status === TokenReservationStatus.COMPLETED) {
-    const consume = await prisma.tokenTransaction.findFirst({
-      where: {
-        walletId: reservation.walletId,
-        userId: reservation.userId,
-        type: 'CONSUME',
-        referenceId: `${reservation.referenceId}:settle`,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+  // Backward-compatible full settlement: consume the entire reserved amount.
+  return settleReservationCore(reservation, reservation.tokens);
+}
 
-    return toSettledResult(consume, reservation, true);
+export async function settleBusinessTokenReservationForAmount(
+  input: SettleBusinessTokenReservationForAmountInput,
+): Promise<SettleBusinessTokenReservationResult> {
+  const reservationId = assertReservationId(input.reservationId);
+  const actualTokens = assertActualTokens(input.actualTokens);
+
+  const reservation = await prisma.tokenReservation.findUnique({
+    where: { id: reservationId },
+  });
+
+  if (!reservation) {
+    throw new AppError(404, 'Reservation not found');
+  }
+
+  return settleReservationCore(reservation, actualTokens);
+}
+
+async function settleReservationCore(
+  reservation: TokenReservation,
+  actualTokens: number,
+): Promise<SettleBusinessTokenReservationResult> {
+  const reservationId = reservation.id;
+  const settlementReferenceId = `${reservation.referenceId}:settle`;
+
+  const reservedTokens = assertReservedTokens(reservation);
+  const requestedTokens = assertActualTokens(actualTokens);
+
+  if (requestedTokens > reservedTokens) {
+    throw new AppError(409, 'Token reservation integrity conflict');
+  }
+
+  if (reservation.status === TokenReservationStatus.COMPLETED) {
+    const consume = await findCompletedConsumeOrThrow(
+      prisma,
+      reservation,
+      settlementReferenceId,
+      requestedTokens,
+      reservedTokens,
+    );
+
+    return toSettledResult(consume, reservation, reservedTokens, requestedTokens, true);
   }
 
   if (reservation.status === TokenReservationStatus.RELEASED) {
     throw new AppError(409, 'Cannot settle a released reservation');
   }
-
-  const settlementReferenceId = `${reservation.referenceId}:settle`;
 
   try {
     return await prisma.$transaction(async (tx) => {
@@ -359,33 +463,36 @@ export async function settleBusinessTokenReservation(
         }
 
         if (current.status === TokenReservationStatus.COMPLETED) {
-          const consume = await tx.tokenTransaction.findFirst({
-            where: {
-              walletId: current.walletId,
-              userId: current.userId,
-              type: 'CONSUME',
-              referenceId: settlementReferenceId,
-            },
-            orderBy: { createdAt: 'desc' },
-          });
+          const consume = await findCompletedConsumeOrThrow(
+            tx,
+            current,
+            settlementReferenceId,
+            requestedTokens,
+            reservedTokens,
+          );
 
-          return toSettledResult(consume, current, true);
+          return toSettledResult(consume, current, reservedTokens, requestedTokens, true);
         }
 
         throw new AppError(409, 'Cannot settle a released reservation');
       }
 
+      const unusedTokens = reservedTokens - requestedTokens;
+
       // Settling works regardless of a later wallet status change, but the
-      // wallet must still hold the reserved tokens it committed to.
+      // wallet must still hold the reserved tokens it committed to. The
+      // complete original reservation is removed from reservedBalance and the
+      // unused portion is returned to the available balance.
       const walletUpdated = await tx.tokenWallet.updateMany({
         where: {
           id: reservation.walletId,
           reservedBalance: {
-            gte: reservation.tokens,
+            gte: reservedTokens,
           },
         },
         data: {
-          reservedBalance: { decrement: reservation.tokens },
+          reservedBalance: { decrement: reservedTokens },
+          tokenBalance: { increment: unusedTokens },
         },
       });
 
@@ -398,7 +505,7 @@ export async function settleBusinessTokenReservation(
           walletId: reservation.walletId,
           userId: reservation.userId,
           type: 'CONSUME',
-          tokens: reservation.tokens,
+          tokens: requestedTokens,
           source: reservation.source,
           paymentId: null,
           referenceId: settlementReferenceId,
@@ -421,6 +528,8 @@ export async function settleBusinessTokenReservation(
 
       return {
         ...toReservationSummary(settled),
+        actualTokens: requestedTokens,
+        releasedTokens: unusedTokens,
         settledAt: settled.settledAt ?? settled.updatedAt,
         consumeTransactionId: transaction.id,
         idempotentReplay: false,
@@ -433,17 +542,15 @@ export async function settleBusinessTokenReservation(
       });
 
       if (settled && settled.status === TokenReservationStatus.COMPLETED) {
-        const consume = await prisma.tokenTransaction.findFirst({
-          where: {
-            walletId: settled.walletId,
-            userId: settled.userId,
-            type: 'CONSUME',
-            referenceId: settlementReferenceId,
-          },
-          orderBy: { createdAt: 'desc' },
-        });
+        const consume = await findCompletedConsumeOrThrow(
+          prisma,
+          settled,
+          settlementReferenceId,
+          requestedTokens,
+          reservedTokens,
+        );
 
-        return toSettledResult(consume, settled, true);
+        return toSettledResult(consume, settled, reservedTokens, requestedTokens, true);
       }
     }
     throw err;

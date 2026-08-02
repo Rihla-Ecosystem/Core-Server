@@ -25,10 +25,12 @@ import {
   releaseBusinessTokenReservation,
   reserveBusinessTokens,
   settleBusinessTokenReservation,
+  settleBusinessTokenReservationForAmount,
 } from '../src/services/token-reservation.service.js';
 import type {
   ReleaseBusinessTokenReservationInput,
   ReserveBusinessTokensInput,
+  SettleBusinessTokenReservationResult,
 } from '../src/services/token-reservation.service.js';
 import { BUSINESS_TOKEN_PRICING_VERSION } from '../src/config/business-token-features.js';
 
@@ -809,6 +811,1108 @@ describe('Token Reservation Service', () => {
         409,
         'Token reservation integrity conflict',
       );
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('25. Negative actualTokens is rejected', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: -1,
+        }),
+        400,
+        'actualTokens must be a safe non-negative integer',
+      );
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(await countConsumeTransactions(userId), 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('26. Decimal actualTokens is rejected', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 1.5,
+        }),
+        400,
+        'actualTokens must be a safe non-negative integer',
+      );
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('27. NaN actualTokens is rejected', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: NaN,
+        }),
+        400,
+        'actualTokens must be a safe non-negative integer',
+      );
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('28. Infinity actualTokens is rejected', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: Infinity,
+        }),
+        400,
+        'actualTokens must be a safe non-negative integer',
+      );
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('29. Unsafe actualTokens is rejected', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 9007199254740992,
+        }),
+        400,
+        'actualTokens must be a safe non-negative integer',
+      );
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('30. Missing actualTokens in the explicit variable-settlement API is rejected', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: undefined as unknown as number,
+        }),
+        400,
+        'actualTokens must be a safe non-negative integer',
+      );
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('31. A = R consumes the entire reservation with releasedTokens = 0', async () => {
+    const { userId, walletId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      const settled = await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 2,
+      });
+
+      assert.equal(settled.status, TokenReservationStatus.COMPLETED);
+      assert.equal(settled.tokens, 2);
+      assert.equal(settled.actualTokens, 2);
+      assert.equal(settled.releasedTokens, 0);
+      assert.equal(settled.idempotentReplay, false);
+      assert.ok(settled.consumeTransactionId);
+
+      const reservation = await prisma.tokenReservation.findUnique({
+        where: { id: reserved.reservationId },
+      });
+      assert.ok(reservation);
+      assert.equal(reservation.status, TokenReservationStatus.COMPLETED);
+      assert.equal(reservation.tokens, 2);
+
+      const transactions = await prisma.tokenTransaction.findMany({
+        where: { userId, type: TokenTransactionType.CONSUME },
+      });
+      assert.equal(transactions.length, 1);
+      assert.equal(transactions[0].walletId, walletId);
+      assert.equal(transactions[0].tokens, 2);
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.reservedBalance, 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('32. A = R preserves the existing full-settlement wallet behavior', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+      await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 2,
+      });
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.reservedBalance, 0);
+      assert.equal(wallet.tokenBalance + wallet.reservedBalance, 8);
+      assert.equal(await countConsumeTransactions(userId), 1);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('33. Partial settlement consumes only A and returns R - A to the available balance', async () => {
+    const { userId, walletId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      const settled = await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 1,
+      });
+
+      assert.equal(settled.tokens, 2);
+      assert.equal(settled.actualTokens, 1);
+      assert.equal(settled.releasedTokens, 1);
+      assert.equal(settled.status, TokenReservationStatus.COMPLETED);
+      assert.equal(settled.idempotentReplay, false);
+
+      const reservation = await prisma.tokenReservation.findUnique({
+        where: { id: reserved.reservationId },
+      });
+      assert.ok(reservation);
+      assert.equal(reservation.tokens, 2);
+
+      const transactions = await prisma.tokenTransaction.findMany({
+        where: { userId, type: TokenTransactionType.CONSUME },
+      });
+      assert.equal(transactions.length, 1);
+      assert.equal(transactions[0].walletId, walletId);
+      assert.equal(transactions[0].tokens, 1);
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 9);
+      assert.equal(wallet.reservedBalance, 0);
+      assert.equal(wallet.tokenBalance + wallet.reservedBalance, 9);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('34. Partial settlement removes the complete R from reservedBalance', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+      await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 1,
+      });
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.reservedBalance, 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('35. Zero settlement returns the full reservation and completes it', async () => {
+    const { userId, walletId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      const settled = await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 0,
+      });
+
+      assert.equal(settled.status, TokenReservationStatus.COMPLETED);
+      assert.equal(settled.tokens, 2);
+      assert.equal(settled.actualTokens, 0);
+      assert.equal(settled.releasedTokens, 2);
+      assert.equal(settled.idempotentReplay, false);
+
+      const reservation = await prisma.tokenReservation.findUnique({
+        where: { id: reserved.reservationId },
+      });
+      assert.ok(reservation);
+      assert.equal(reservation.status, TokenReservationStatus.COMPLETED);
+      assert.equal(reservation.releasedAt, null);
+      assert.equal(reservation.tokens, 2);
+
+      const transactions = await prisma.tokenTransaction.findMany({
+        where: { userId, type: TokenTransactionType.CONSUME },
+      });
+      assert.equal(transactions.length, 1);
+      assert.equal(transactions[0].walletId, walletId);
+      assert.equal(transactions[0].tokens, 0);
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 10);
+      assert.equal(wallet.reservedBalance, 0);
+      assert.equal(await countConsumeTransactions(userId), 1);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('36. Zero settlement returns a real auditable completion transaction', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const input = buildInput(userId);
+      const reserved = await reserveBusinessTokens(input);
+
+      const settled = await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 0,
+      });
+
+      const consume = await prisma.tokenTransaction.findUnique({
+        where: { id: settled.consumeTransactionId },
+      });
+      assert.ok(consume);
+      assert.equal(consume.type, TokenTransactionType.CONSUME);
+      assert.equal(consume.tokens, 0);
+      assert.equal(consume.referenceId, `${reserved.referenceId}:settle`);
+      assert.deepEqual(consume.metadata, {
+        feature: 'AI_CHAT_QUERY',
+        reservationId: reserved.reservationId,
+        idempotencyKey: input.idempotencyKey,
+        pricingVersion: BUSINESS_TOKEN_PRICING_VERSION,
+      });
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('37. Zero settlement does not create a release-status reservation', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 0,
+      });
+
+      const reservation = await prisma.tokenReservation.findUnique({
+        where: { id: reserved.reservationId },
+      });
+      assert.ok(reservation);
+      assert.equal(reservation.status, TokenReservationStatus.COMPLETED);
+      assert.equal(reservation.releasedAt, null);
+      assert.equal(reservation.releaseReason, null);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('38. A > R is rejected and changes nothing', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 3,
+        }),
+        409,
+        'Token reservation integrity conflict',
+      );
+
+      const reservation = await prisma.tokenReservation.findUnique({
+        where: { id: reserved.reservationId },
+      });
+      assert.ok(reservation);
+      assert.equal(reservation.status, TokenReservationStatus.PENDING);
+      assert.equal(reservation.settledAt, null);
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(await countConsumeTransactions(userId), 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('39. A > R does not debit unreserved available tokens', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 10,
+        }),
+        409,
+        'Token reservation integrity conflict',
+      );
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(wallet.tokenBalance + wallet.reservedBalance, 10);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('40. Repeating settlement with the same A returns the same consume transaction', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      const first = await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 1,
+      });
+      const second = await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 1,
+      });
+
+      assert.equal(first.idempotentReplay, false);
+      assert.equal(second.idempotentReplay, true);
+      assert.equal(second.consumeTransactionId, first.consumeTransactionId);
+      assert.equal(second.actualTokens, 1);
+      assert.equal(second.releasedTokens, 1);
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 9);
+      assert.equal(wallet.reservedBalance, 0);
+      assert.equal(await countConsumeTransactions(userId), 1);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('41. Repeating settlement with a different A is rejected', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 1,
+      });
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 2,
+        }),
+        409,
+        'Token reservation integrity conflict',
+      );
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 9);
+      assert.equal(wallet.reservedBalance, 0);
+      assert.equal(await countConsumeTransactions(userId), 1);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('42. A COMPLETED reservation missing its consume transaction is rejected', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await prisma.tokenReservation.update({
+        where: { id: reserved.reservationId },
+        data: {
+          status: TokenReservationStatus.COMPLETED,
+          settledAt: new Date(),
+        },
+      });
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 1,
+        }),
+        409,
+        'Token reservation integrity conflict',
+      );
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('43. A RELEASED reservation cannot be settled', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await releaseBusinessTokenReservation({
+        reservationId: reserved.reservationId,
+        reason: 'released before settle',
+      });
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 1,
+        }),
+        409,
+        'Cannot settle a released reservation',
+      );
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('44. A consume transaction is not duplicated across retries', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 1,
+      });
+      await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 1,
+      });
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 0,
+        }),
+        409,
+        'Token reservation integrity conflict',
+      );
+
+      assert.equal(await countConsumeTransactions(userId), 1);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('45. Settle fails with 409 when reservedBalance is lower than the reserved tokens', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await prisma.tokenWallet.update({
+        where: { userId },
+        data: { reservedBalance: 1 },
+      });
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 1,
+        }),
+        409,
+        'Token reservation integrity conflict',
+      );
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('46. A failed guarded wallet update leaves all state unchanged', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await prisma.tokenWallet.update({
+        where: { userId },
+        data: { reservedBalance: 1 },
+      });
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 1,
+        }),
+        409,
+        'Token reservation integrity conflict',
+      );
+
+      const reservation = await prisma.tokenReservation.findUnique({
+        where: { id: reserved.reservationId },
+      });
+      assert.ok(reservation);
+      assert.equal(reservation.status, TokenReservationStatus.PENDING);
+      assert.equal(reservation.settledAt, null);
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.reservedBalance, 1);
+      assert.equal(await countConsumeTransactions(userId), 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('47. Two concurrent settlements with the same A produce one consume transaction', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      const [first, second] = await Promise.all([
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 1,
+        }),
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 1,
+        }),
+      ]);
+
+      assert.equal(first.consumeTransactionId, second.consumeTransactionId);
+      assert.equal(first.actualTokens, second.actualTokens);
+      const replays = [first, second].filter((r) => r.idempotentReplay === true);
+      assert.equal(replays.length, 1);
+      assert.equal(await countConsumeTransactions(userId), 1);
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 9);
+      assert.equal(wallet.reservedBalance, 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('48. Two concurrent settlements with different A values cannot both succeed', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      const [first, second] = await Promise.allSettled([
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 1,
+        }),
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 2,
+        }),
+      ]);
+
+      const fulfilled = [first, second].filter((r) => r.status === 'fulfilled');
+      const rejected = [first, second].filter((r) => r.status === 'rejected');
+      assert.equal(fulfilled.length, 1);
+      assert.equal(rejected.length, 1);
+
+      const reason = rejected[0];
+      assert.ok(reason.status === 'rejected');
+      assert.ok(reason.reason instanceof AppError);
+      assert.equal(reason.reason.statusCode, 409);
+
+      assert.equal(await countConsumeTransactions(userId), 1);
+
+      const wallet = await getWallet(userId);
+      assert.ok(wallet.tokenBalance >= 0);
+      assert.ok(wallet.reservedBalance >= 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('49. Concurrent settlement and release cannot both mutate the reservation', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      const [settled, released] = await Promise.allSettled([
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 1,
+        }),
+        releaseBusinessTokenReservation({
+          reservationId: reserved.reservationId,
+          reason: 'racing settle',
+        }),
+      ]);
+
+      const fulfilled = [settled, released].filter((r) => r.status === 'fulfilled');
+      const rejected = [settled, released].filter((r) => r.status === 'rejected');
+      assert.equal(fulfilled.length, 1);
+      assert.equal(rejected.length, 1);
+
+      const reservation = await prisma.tokenReservation.findUnique({
+        where: { id: reserved.reservationId },
+      });
+      assert.ok(reservation);
+      assert.notEqual(reservation.status, TokenReservationStatus.PENDING);
+
+      const wallet = await getWallet(userId);
+      assert.ok(wallet.tokenBalance >= 0);
+      assert.ok(wallet.reservedBalance >= 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('50. Balances never become negative after variable settlement', async () => {
+    const { userId } = await createUserWithWallet(2);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 0,
+      });
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 2);
+      assert.equal(wallet.reservedBalance, 0);
+
+      const second = await reserveBusinessTokens(buildInput(userId));
+      await settleBusinessTokenReservationForAmount({
+        reservationId: second.reservationId,
+        actualTokens: 2,
+      });
+
+      const finalWallet = await getWallet(userId);
+      assert.equal(finalWallet.tokenBalance, 0);
+      assert.equal(finalWallet.reservedBalance, 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('51. Same settlement referenceId across two different sources returns only the matching-source consume transaction', async () => {
+    const { userId, walletId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+      const settlementReferenceId = `${reserved.referenceId}:settle`;
+
+      await prisma.tokenReservation.update({
+        where: { id: reserved.reservationId },
+        data: {
+          status: TokenReservationStatus.COMPLETED,
+          settledAt: new Date(),
+        },
+      });
+
+      const matchingConsume = await prisma.tokenTransaction.create({
+        data: {
+          walletId,
+          userId,
+          type: TokenTransactionType.CONSUME,
+          tokens: 1,
+          source: TokenTransactionSource.CHAT,
+          paymentId: null,
+          referenceId: settlementReferenceId,
+        },
+      });
+
+      const otherSourceConsume = await prisma.tokenTransaction.create({
+        data: {
+          walletId,
+          userId,
+          type: TokenTransactionType.CONSUME,
+          tokens: 1,
+          source: TokenTransactionSource.VOICE,
+          paymentId: null,
+          referenceId: settlementReferenceId,
+        },
+      });
+
+      const settled = await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 1,
+      });
+
+      assert.equal(settled.idempotentReplay, true);
+      assert.equal(settled.consumeTransactionId, matchingConsume.id);
+      assert.notEqual(settled.consumeTransactionId, otherSourceConsume.id);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('52. A newer transaction from another source is never selected', async () => {
+    const { userId, walletId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+      const settlementReferenceId = `${reserved.referenceId}:settle`;
+
+      await prisma.tokenReservation.update({
+        where: { id: reserved.reservationId },
+        data: {
+          status: TokenReservationStatus.COMPLETED,
+          settledAt: new Date(),
+        },
+      });
+
+      const olderMatchingConsume = await prisma.tokenTransaction.create({
+        data: {
+          walletId,
+          userId,
+          type: TokenTransactionType.CONSUME,
+          tokens: 1,
+          source: TokenTransactionSource.CHAT,
+          paymentId: null,
+          referenceId: settlementReferenceId,
+          createdAt: new Date(Date.now() - 60_000),
+        },
+      });
+
+      const newerOtherSourceConsume = await prisma.tokenTransaction.create({
+        data: {
+          walletId,
+          userId,
+          type: TokenTransactionType.CONSUME,
+          tokens: 1,
+          source: TokenTransactionSource.VOICE,
+          paymentId: null,
+          referenceId: settlementReferenceId,
+          createdAt: new Date(),
+        },
+      });
+
+      const settled = await settleBusinessTokenReservationForAmount({
+        reservationId: reserved.reservationId,
+        actualTokens: 1,
+      });
+
+      assert.equal(settled.idempotentReplay, true);
+      assert.equal(settled.consumeTransactionId, olderMatchingConsume.id);
+      assert.notEqual(settled.consumeTransactionId, newerOtherSourceConsume.id);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('53. A COMPLETED reservation with a corrupted CONSUME amount above R is rejected with 409', async () => {
+    const { userId, walletId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+      const settlementReferenceId = `${reserved.referenceId}:settle`;
+
+      await prisma.tokenReservation.update({
+        where: { id: reserved.reservationId },
+        data: {
+          status: TokenReservationStatus.COMPLETED,
+          settledAt: new Date(),
+        },
+      });
+
+      await prisma.tokenTransaction.create({
+        data: {
+          walletId,
+          userId,
+          type: TokenTransactionType.CONSUME,
+          tokens: 3,
+          source: TokenTransactionSource.CHAT,
+          paymentId: null,
+          referenceId: settlementReferenceId,
+        },
+      });
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 3,
+        }),
+        409,
+        'Token reservation integrity conflict',
+      );
+
+      const reservation = await prisma.tokenReservation.findUnique({
+        where: { id: reserved.reservationId },
+      });
+      assert.ok(reservation);
+      assert.equal(reservation.status, TokenReservationStatus.COMPLETED);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('54. A COMPLETED reservation with a corrupted CONSUME amount is rejected even when A <= R', async () => {
+    const { userId, walletId } = await createUserWithWallet(10);
+
+    try {
+      for (const corruptedTokens of [-1, 3]) {
+        const reserved = await reserveBusinessTokens(buildInput(userId));
+        const settlementReferenceId = `${reserved.referenceId}:settle`;
+
+        await prisma.tokenReservation.update({
+          where: { id: reserved.reservationId },
+          data: {
+            status: TokenReservationStatus.COMPLETED,
+            settledAt: new Date(),
+          },
+        });
+
+        await prisma.tokenTransaction.create({
+          data: {
+            walletId,
+            userId,
+            type: TokenTransactionType.CONSUME,
+            tokens: corruptedTokens,
+            source: TokenTransactionSource.CHAT,
+            paymentId: null,
+            referenceId: settlementReferenceId,
+          },
+        });
+
+        await expectAppError(
+          settleBusinessTokenReservationForAmount({
+            reservationId: reserved.reservationId,
+            actualTokens: 1,
+          }),
+          409,
+          'Token reservation integrity conflict',
+        );
+
+        await prisma.tokenTransaction.deleteMany({ where: { userId } });
+        await prisma.tokenReservation.deleteMany({ where: { userId } });
+      }
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('55. Successful full, partial, zero, and replay results satisfy the settlement invariant', async () => {
+    const { userId } = await createUserWithWallet(20);
+
+    try {
+      const assertInvariant = (settled: SettleBusinessTokenReservationResult) => {
+        assert.ok(settled.actualTokens <= settled.tokens);
+        assert.ok(settled.releasedTokens >= 0);
+        assert.equal(settled.releasedTokens, settled.tokens - settled.actualTokens);
+      };
+
+      const partial = await reserveBusinessTokens(buildInput(userId));
+      const partialSettled = await settleBusinessTokenReservationForAmount({
+        reservationId: partial.reservationId,
+        actualTokens: 1,
+      });
+      assertInvariant(partialSettled);
+
+      const partialReplay = await settleBusinessTokenReservationForAmount({
+        reservationId: partial.reservationId,
+        actualTokens: 1,
+      });
+      assert.equal(partialReplay.idempotentReplay, true);
+      assertInvariant(partialReplay);
+
+      const full = await reserveBusinessTokens(buildInput(userId));
+      const fullSettled = await settleBusinessTokenReservationForAmount({
+        reservationId: full.reservationId,
+        actualTokens: 2,
+      });
+      assertInvariant(fullSettled);
+
+      const zero = await reserveBusinessTokens(buildInput(userId));
+      const zeroSettled = await settleBusinessTokenReservationForAmount({
+        reservationId: zero.reservationId,
+        actualTokens: 0,
+      });
+      assertInvariant(zeroSettled);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('56. A corrupted PENDING reservation with tokens = -1 cannot be settled through settleBusinessTokenReservation()', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await prisma.tokenReservation.update({
+        where: { id: reserved.reservationId },
+        data: { tokens: -1 },
+      });
+
+      await expectAppError(
+        settleBusinessTokenReservation({ reservationId: reserved.reservationId }),
+        409,
+        'Token reservation integrity conflict',
+      );
+
+      const reservation = await prisma.tokenReservation.findUnique({
+        where: { id: reserved.reservationId },
+      });
+      assert.ok(reservation);
+      assert.equal(reservation.status, TokenReservationStatus.PENDING);
+      assert.equal(reservation.settledAt, null);
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(await countConsumeTransactions(userId), 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('57. A corrupted PENDING reservation with tokens = -1 cannot be settled through settleBusinessTokenReservationForAmount()', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await prisma.tokenReservation.update({
+        where: { id: reserved.reservationId },
+        data: { tokens: -1 },
+      });
+
+      await expectAppError(
+        settleBusinessTokenReservationForAmount({
+          reservationId: reserved.reservationId,
+          actualTokens: 1,
+        }),
+        409,
+        'Token reservation integrity conflict',
+      );
+
+      const reservation = await prisma.tokenReservation.findUnique({
+        where: { id: reserved.reservationId },
+      });
+      assert.ok(reservation);
+      assert.equal(reservation.status, TokenReservationStatus.PENDING);
+      assert.equal(reservation.settledAt, null);
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(await countConsumeTransactions(userId), 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('58. A corrupted COMPLETED reservation with a negative stored amount cannot be replayed', async () => {
+    const { userId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      await prisma.tokenReservation.update({
+        where: { id: reserved.reservationId },
+        data: {
+          status: TokenReservationStatus.COMPLETED,
+          settledAt: new Date(),
+          tokens: -1,
+        },
+      });
+
+      await expectAppError(
+        settleBusinessTokenReservation({ reservationId: reserved.reservationId }),
+        409,
+        'Token reservation integrity conflict',
+      );
+
+      const reservation = await prisma.tokenReservation.findUnique({
+        where: { id: reserved.reservationId },
+      });
+      assert.ok(reservation);
+      assert.equal(reservation.status, TokenReservationStatus.COMPLETED);
+      assert.equal(reservation.tokens, -1);
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(await countConsumeTransactions(userId), 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('59. Normal backward-compatible full settlement still works with A = R', async () => {
+    const { userId, walletId } = await createUserWithWallet(10);
+
+    try {
+      const reserved = await reserveBusinessTokens(buildInput(userId));
+
+      const settled = await settleBusinessTokenReservation({
+        reservationId: reserved.reservationId,
+      });
+
+      assert.equal(settled.tokens, 2);
+      assert.equal(settled.actualTokens, 2);
+      assert.equal(settled.releasedTokens, 0);
+      assert.equal(settled.status, TokenReservationStatus.COMPLETED);
+      assert.equal(settled.idempotentReplay, false);
+
+      const consume = await prisma.tokenTransaction.findUnique({
+        where: { id: settled.consumeTransactionId },
+      });
+      assert.ok(consume);
+      assert.equal(consume.walletId, walletId);
+      assert.equal(consume.tokens, 2);
+      assert.equal(consume.source, TokenTransactionSource.CHAT);
+
+      const wallet = await getWallet(userId);
+      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.reservedBalance, 0);
+
+      const replay = await settleBusinessTokenReservation({
+        reservationId: reserved.reservationId,
+      });
+      assert.equal(replay.idempotentReplay, true);
+      assert.equal(replay.actualTokens, 2);
+      assert.equal(replay.releasedTokens, 0);
+      assert.equal(replay.consumeTransactionId, settled.consumeTransactionId);
+      assert.equal(await countConsumeTransactions(userId), 1);
     } finally {
       await cleanupUser(userId);
     }
