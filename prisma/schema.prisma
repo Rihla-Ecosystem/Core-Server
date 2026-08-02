@@ -146,6 +146,8 @@ model TokenReservation {
 
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
+  billingOperation AIBillingOperation?
+
   @@unique([referenceId])
   @@unique([userId, feature, idempotencyKey])
   @@index([walletId])
@@ -153,6 +155,96 @@ model TokenReservation {
   @@index([status])
   @@index([expiresAt])
   @@index([userId, status])
+}
+
+enum AIBillingOperationStatus {
+  RESERVED
+  EXECUTION_SUCCEEDED
+  PRICED
+  NON_BILLABLE_CONFIRMED
+  INDETERMINATE
+  REVIEW_REQUIRED
+  SETTLED
+  RELEASED
+}
+
+enum AIBillingOperationFailureKind {
+  NON_BILLABLE
+  INDETERMINATE
+}
+
+model AIBillingOperation {
+  id String @id @default(uuid()) @db.Uuid
+
+  operationId String @unique
+
+  reservationId String @unique @db.Uuid
+
+  walletId String @db.Uuid
+  userId   String @db.Uuid
+
+  feature String
+  source  TokenTransactionSource
+
+  status AIBillingOperationStatus @default(RESERVED)
+
+  // Immutable reservation snapshot
+  reservedTokens            Int
+  reservationPricingVersion Int
+
+  // Requested identity
+  requestedProvider String?
+  requestedModel    String?
+
+  // Actual execution identity evidence
+  actualProvider      String?
+  actualModel         String?
+  providerRequestId   String?
+  providerRequestSent Boolean?
+
+  // Canonical usage evidence
+  inputTokens  Int?
+  outputTokens Int?
+  totalTokens  Int?
+  cached       Boolean?
+  audioSeconds Float?
+
+  // Pricing evidence (safe subset only)
+  pricingMode           String?
+  pricingFallbackReason String?
+  actualWalletTokens    Int?
+  billingCurrency       String?
+  rateCardVersion       String?
+  walletPolicyVersion   String?
+
+  // Failure evidence
+  failureKind AIBillingOperationFailureKind?
+  failureCode String?
+  retryable   Boolean?
+
+  // Review evidence
+  reviewReasonCode String?
+
+  // Finalization evidence
+  consumeTransactionId String?
+
+  // Lifecycle timestamps
+  executedAt DateTime?
+  pricedAt   DateTime?
+  failedAt   DateTime?
+  reviewedAt DateTime?
+  settledAt  DateTime?
+  releasedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservation TokenReservation @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+
+  @@index([status, updatedAt])
+  @@index([walletId, status])
+  @@index([userId, createdAt])
+  @@map("AIBillingOperation")
 }
 
 enum TokenTransactionType {
