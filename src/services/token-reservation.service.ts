@@ -8,6 +8,7 @@ import { prisma } from '../config/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import {
   BUSINESS_TOKEN_PRICING_VERSION,
+  MAX_TOKEN_BALANCE,
   getBusinessTokenCost,
   isBusinessTokenFeature,
 } from '../config/business-token-features.js';
@@ -21,6 +22,15 @@ export interface ReserveBusinessTokensInput {
   userId: string;
   feature: string;
   source: string;
+  idempotencyKey: string;
+  metadata?: Prisma.InputJsonValue;
+}
+
+export interface ReserveBusinessTokensForAmountInput {
+  userId: string;
+  feature: BusinessTokenFeature;
+  tokens: number;
+  source: BusinessConsumptionSource;
   idempotencyKey: string;
   metadata?: Prisma.InputJsonValue;
 }
@@ -171,6 +181,16 @@ function assertReservationId(reservationId: string): string {
   return trimmed;
 }
 
+function assertReservationTokens(tokens: unknown): number {
+  if (typeof tokens !== 'number' || !Number.isSafeInteger(tokens) || tokens <= 0) {
+    throw new AppError(400, 'tokens must be a safe positive integer');
+  }
+  if (tokens > MAX_TOKEN_BALANCE) {
+    throw new AppError(400, 'tokens must not exceed the maximum wallet balance');
+  }
+  return tokens;
+}
+
 function assertActualTokens(actualTokens: number): number {
   if (
     typeof actualTokens !== 'number' ||
@@ -254,6 +274,49 @@ async function findCompletedConsumeOrThrow(
   return consume;
 }
 
+export async function reserveBusinessTokensForAmount(
+  input: ReserveBusinessTokensForAmountInput,
+): Promise<ReserveBusinessTokensResult> {
+  const userId = input.userId.trim();
+  const idempotencyKey = input.idempotencyKey.trim();
+
+  if (!userId) {
+    throw new AppError(400, 'userId must not be empty');
+  }
+
+  if (!idempotencyKey) {
+    throw new AppError(400, 'idempotencyKey must not be empty');
+  }
+
+  if (!isBusinessTokenFeature(input.feature)) {
+    throw new AppError(400, 'Invalid business token feature');
+  }
+
+  if (!isBusinessConsumptionSource(input.source)) {
+    throw new AppError(400, 'Invalid business consumption source');
+  }
+
+  const feature: BusinessTokenFeature = input.feature;
+  const source: BusinessConsumptionSource = input.source;
+  const tokens = assertReservationTokens(input.tokens);
+
+  return reserveReservationCore(
+    {
+      userId,
+      feature,
+      source,
+      tokens,
+      idempotencyKey,
+      metadata: input.metadata,
+    },
+    (existing) =>
+      existing.userId === userId &&
+      existing.feature === feature &&
+      existing.source === source &&
+      existing.tokens === tokens,
+  );
+}
+
 export async function reserveBusinessTokens(
   input: ReserveBusinessTokensInput,
 ): Promise<ReserveBusinessTokensResult> {
@@ -280,7 +343,39 @@ export async function reserveBusinessTokens(
   const source: BusinessConsumptionSource = input.source;
 
   // The token cost always comes from the backend pricing catalogue.
-  const cost = getBusinessTokenCost(feature);
+  const tokens = getBusinessTokenCost(feature);
+
+  return reserveReservationCore(
+    {
+      userId,
+      feature,
+      source,
+      tokens,
+      idempotencyKey,
+      metadata: input.metadata,
+    },
+    (existing) =>
+      existing.userId === userId &&
+      existing.feature === feature &&
+      existing.source === source &&
+      existing.tokens === tokens,
+  );
+}
+
+interface ReserveReservationCoreInput {
+  userId: string;
+  feature: BusinessTokenFeature;
+  source: BusinessConsumptionSource;
+  tokens: number;
+  idempotencyKey: string;
+  metadata?: Prisma.InputJsonValue;
+}
+
+async function reserveReservationCore(
+  input: ReserveReservationCoreInput,
+  isCompatibleReplay: (existing: TokenReservation) => boolean,
+): Promise<ReserveBusinessTokensResult> {
+  const { userId, feature, source, tokens, idempotencyKey, metadata } = input;
   const referenceId = `${userId}:${feature}:${idempotencyKey}`;
   const expiresAt = new Date(Date.now() + RESERVATION_TTL_MS);
 
@@ -289,12 +384,10 @@ export async function reserveBusinessTokens(
   });
 
   if (existing) {
-    const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
-    return {
-      ...toReservationSummary(existing),
-      ...(wallet ? toBalances(wallet) : { availableBalance: 0, reservedBalance: 0, totalBalance: 0 }),
-      idempotentReplay: true,
-    };
+    if (!isCompatibleReplay(existing)) {
+      throw new AppError(409, 'Token reservation integrity conflict');
+    }
+    return toReplayResult(existing, userId);
   }
 
   try {
@@ -303,11 +396,11 @@ export async function reserveBusinessTokens(
         where: {
           userId,
           status: 'ACTIVE',
-          tokenBalance: { gte: cost },
+          tokenBalance: { gte: tokens },
         },
         data: {
-          tokenBalance: { decrement: cost },
-          reservedBalance: { increment: cost },
+          tokenBalance: { decrement: tokens },
+          reservedBalance: { increment: tokens },
         },
       });
 
@@ -344,13 +437,13 @@ export async function reserveBusinessTokens(
           userId,
           feature,
           source,
-          tokens: cost,
+          tokens,
           pricingVersion: BUSINESS_TOKEN_PRICING_VERSION,
           idempotencyKey,
           referenceId,
           status: TokenReservationStatus.PENDING,
           expiresAt,
-          metadata: input.metadata ?? Prisma.DbNull,
+          metadata: metadata ?? Prisma.DbNull,
         },
       });
 
@@ -367,16 +460,26 @@ export async function reserveBusinessTokens(
       });
 
       if (existing) {
-        const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
-        return {
-          ...toReservationSummary(existing),
-          ...(wallet ? toBalances(wallet) : { availableBalance: 0, reservedBalance: 0, totalBalance: 0 }),
-          idempotentReplay: true,
-        };
+        if (!isCompatibleReplay(existing)) {
+          throw new AppError(409, 'Token reservation integrity conflict');
+        }
+        return toReplayResult(existing, userId);
       }
     }
     throw err;
   }
+}
+
+async function toReplayResult(
+  reservation: TokenReservation,
+  userId: string,
+): Promise<ReserveBusinessTokensResult> {
+  const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+  return {
+    ...toReservationSummary(reservation),
+    ...(wallet ? toBalances(wallet) : { availableBalance: 0, reservedBalance: 0, totalBalance: 0 }),
+    idempotentReplay: true,
+  };
 }
 
 export async function settleBusinessTokenReservation(
