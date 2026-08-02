@@ -118,6 +118,7 @@ enum TokenTransactionSource {
   FILE_UPLOAD
   OCR
   VOICE
+  ITINERARY
   PURCHASE
   ADMIN
 }

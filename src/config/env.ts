@@ -54,6 +54,9 @@ const envSchema = z.object({
 
   // Optional JSON override for AI pricing, e.g. '{"gemini-3.6-flash":{"input":0.3,"output":2.5}}'
   AI_PRICING_JSON: z.string().optional(),
+
+  // Free tier: tokens granted to a new account on registration.
+  SIGNUP_TOKEN_GRANT: z.coerce.number().int().min(0).default(20),
 });
 
 export const env = envSchema.parse(process.env);

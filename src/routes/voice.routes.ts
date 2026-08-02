@@ -1,10 +1,37 @@
 import { Router } from 'express';
+import type { Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
 import { authenticate } from '../middleware/auth.js';
 import { uploadAudio } from '../utils/upload.js';
-import { processVoice } from '../services/voice.service.js';
+import { processVoiceWithTokens } from '../services/voice.service.js';
 import { env } from '../config/env.js';
+import { AppError } from '../middleware/errorHandler.js';
+import { userRateLimit } from '../utils/rate-limit.js';
 
 const router = Router();
+
+const idempotencyKeySchema = z.string().uuid();
+
+function readIdempotencyKey(req: Request): string {
+  const value = req.headers['idempotency-key'];
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new AppError(400, 'Idempotency-Key header is required');
+  }
+  const parsed = idempotencyKeySchema.safeParse(value.trim());
+  if (!parsed.success) {
+    throw new AppError(400, 'Idempotency-Key header must be a valid UUID');
+  }
+  return parsed.data;
+}
+
+function requireIdempotencyKey(req: Request, _res: Response, next: NextFunction): void {
+  try {
+    readIdempotencyKey(req);
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
 
 router.get('/audio', async (req, res, next) => {
   const token = req.query.token;
@@ -45,37 +72,53 @@ router.get('/audio', async (req, res, next) => {
   }
 });
 
-router.post('/', authenticate, uploadAudio.single('audio'), async (req, res, next) => {
-  try {
-    if (!req.file) {
-      res.status(400).json({ error: 'Audio file is required' });
-      return;
-    }
+router.post(
+  '/',
+  authenticate,
+  userRateLimit({ windowMs: 60 * 1000, max: 30 }),
+  requireIdempotencyKey,
+  uploadAudio.single('audio'),
+  async (req, res, next) => {
+    try {
+      if (!req.file) {
+        res.status(400).json({ error: 'Audio file is required' });
+        return;
+      }
 
-    const lat = req.body.lat ? Number(req.body.lat) : undefined;
-    const lon = req.body.lon ? Number(req.body.lon) : undefined;
-    const conversationId = req.body.conversation_id;
+      const lat = req.body.lat ? Number(req.body.lat) : undefined;
+      const lon = req.body.lon ? Number(req.body.lon) : undefined;
+      const conversationId = req.body.conversation_id;
 
-    if (lat !== undefined && (isNaN(lat) || lat < -90 || lat > 90)) {
-      res.status(400).json({ error: 'Invalid latitude' });
-      return;
-    }
-    if (lon !== undefined && (isNaN(lon) || lon < -180 || lon > 180)) {
-      res.status(400).json({ error: 'Invalid longitude' });
-      return;
-    }
+      if (lat !== undefined && (isNaN(lat) || lat < -90 || lat > 90)) {
+        res.status(400).json({ error: 'Invalid latitude' });
+        return;
+      }
+      if (lon !== undefined && (isNaN(lon) || lon < -180 || lon > 180)) {
+        res.status(400).json({ error: 'Invalid longitude' });
+        return;
+      }
 
-    const result = await processVoice(req.file.buffer, req.file.mimetype, {
-      userId: req.user!.userId,
-      lat,
-      lon,
-      conversationId,
-      authorization: req.headers.authorization,
-    });
-    res.json(result);
-  } catch (err) {
-    next(err);
-  }
-});
+      const userId = req.user?.userId;
+      if (!userId) {
+        throw new AppError(401, 'Unauthorized');
+      }
+
+      const result = await processVoiceWithTokens({
+        userId,
+        businessRequestId: readIdempotencyKey(req),
+        audioBuffer: req.file.buffer,
+        audioMimeType: req.file.mimetype,
+        lat,
+        lon,
+        conversationId,
+        authorization: req.headers.authorization,
+        user: req.user,
+      });
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 export default router;

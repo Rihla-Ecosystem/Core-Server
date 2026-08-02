@@ -5,6 +5,7 @@ import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { chat, getConversations, getMessages, deleteConversation } from '../services/chat.service.js';
+import { userRateLimit } from '../utils/rate-limit.js';
 
 const router = Router();
 
@@ -31,7 +32,12 @@ function readIdempotencyKey(req: Request): string {
   return parsed.data;
 }
 
-router.post('/', authenticate, validate(chatSchema), async (req, res, next) => {
+router.post(
+  '/',
+  authenticate,
+  userRateLimit({ windowMs: 60 * 1000, max: 60 }),
+  validate(chatSchema),
+  async (req, res, next) => {
   try {
     const { message, lat, lon, conversation_id, base_currency, persona } = req.body;
     const businessRequestId = readIdempotencyKey(req);

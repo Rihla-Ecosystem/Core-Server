@@ -9,6 +9,7 @@ import {
   uploadIdentificationImage,
 } from '../utils/upload.js';
 import { identifyLandmarkWithTokens } from '../services/identify.service.js';
+import { userRateLimit } from '../utils/rate-limit.js';
 
 const router = Router();
 
@@ -98,6 +99,7 @@ function validateImageSignature(buffer: Buffer, mimetype: string): boolean {
 router.post(
   '/',
   authenticate,
+  userRateLimit({ windowMs: 60 * 1000, max: 30 }),
   requireIdempotencyKey,
   parseIdentificationImage,
   async (req, res, next) => {
@@ -145,6 +147,7 @@ router.post(
         lon,
         radius,
         authorization: req.headers.authorization,
+        user: req.user,
       });
       res.json(result);
     } catch (err) {

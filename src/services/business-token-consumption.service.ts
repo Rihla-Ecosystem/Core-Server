@@ -3,6 +3,7 @@ import { prisma } from '../config/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { getBusinessTokenCost } from '../config/business-token-features.js';
 import type { BusinessTokenFeature } from '../config/business-token-features.js';
+import { isTokenExemptUser, type TokenExemptUser } from '../utils/token-exempt.js';
 
 export type BusinessConsumptionSource = Exclude<
   TokenTransactionSource,
@@ -208,6 +209,47 @@ export async function consumeBusinessTokens(
     }
     throw err;
   }
+}
+
+export interface ExemptAwareConsumeResult extends ConsumeBusinessTokensResult {
+  /** true when the user is admin-exempt and no debit occurred. */
+  exempt: boolean;
+}
+
+/**
+ * Consumption wrapper honouring the admin exemption: admins are never debited
+ * and always receive an `exempt: true` result (never an idempotent replay).
+ */
+export async function consumeBusinessTokensOrExempt(
+  user: TokenExemptUser | null | undefined,
+  input: ConsumeBusinessTokensInput,
+): Promise<ExemptAwareConsumeResult> {
+  if (isTokenExemptUser(user)) {
+    return {
+      transactionId: '',
+      walletId: '',
+      feature: input.feature,
+      source: input.source,
+      tokensConsumed: 0,
+      walletBalance: 0,
+      idempotentReplay: false,
+      exempt: true,
+    };
+  }
+  const result = await consumeBusinessTokens(input);
+  return { ...result, exempt: false };
+}
+
+/**
+ * Refund wrapper honouring the admin exemption: admin-exempt users have no
+ * consume record to reverse, so this is a no-op for them.
+ */
+export async function reverseBusinessTokensOrExempt(
+  user: TokenExemptUser | null | undefined,
+  input: ReverseBusinessTokensInput,
+): Promise<void> {
+  if (isTokenExemptUser(user)) return;
+  await reverseBusinessTokens(input);
 }
 
 export interface ReverseBusinessTokensInput {

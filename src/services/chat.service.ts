@@ -8,20 +8,22 @@ import { getExchangeRates, isSupportedCurrency } from './currency.service.js';
 import { getJourneyProgress } from './internal.service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import {
-  consumeBusinessTokens,
-  reverseBusinessTokens,
+  consumeBusinessTokensOrExempt,
+  reverseBusinessTokensOrExempt,
 } from './business-token-consumption.service.js';
 import { recordAiUsage } from './ai-usage.service.js';
+import type { TokenExemptUser } from '../utils/token-exempt.js';
 
 export type ChatPersona = 'auto' | 'tour_guide' | 'local_expert' | 'safety_guru';
 
 async function revertAndRethrow(
   userId: string,
+  user: TokenExemptUser,
   businessRequestId: string,
   originalError: unknown,
 ): Promise<never> {
   try {
-    await reverseBusinessTokens({
+    await reverseBusinessTokensOrExempt(user, {
       userId,
       feature: 'AI_CHAT_QUERY',
       source: 'CHAT',
@@ -67,11 +69,12 @@ export async function chat(
       travelStyle: true,
       interests: true,
       accommodationType: true,
+      role: { select: { name: true } },
     },
   });
   if (!user) throw new AppError(404, 'User not found');
 
-  const consumption = await consumeBusinessTokens({
+  const consumption = await consumeBusinessTokensOrExempt(user, {
     userId,
     feature: 'AI_CHAT_QUERY',
     source: 'CHAT',
@@ -193,7 +196,7 @@ export async function chat(
 
     return result;
   } catch (err) {
-    return revertAndRethrow(userId, options.businessRequestId, err);
+    return revertAndRethrow(userId, user, options.businessRequestId, err);
   }
 }
 

@@ -8,6 +8,7 @@ import { streamChat } from '../services/chat-stream.service.js';
 import { recordAiUsage } from '../services/ai-usage.service.js';
 import { prisma } from '../config/prisma.js';
 import { Readable } from 'stream';
+import { userRateLimit } from '../utils/rate-limit.js';
 
 const router = Router();
 
@@ -33,7 +34,12 @@ function readIdempotencyKey(req: Request): string {
   return parsed.data;
 }
 
-router.post('/stream', authenticate, validate(streamSchema), async (req, res, next) => {
+router.post(
+  '/stream',
+  authenticate,
+  userRateLimit({ windowMs: 60 * 1000, max: 60 }),
+  validate(streamSchema),
+  async (req, res, next) => {
   try {
     const { message, lat, lon, conversation_id, persona } = req.body;
     const businessRequestId = readIdempotencyKey(req);

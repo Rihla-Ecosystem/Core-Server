@@ -5,17 +5,19 @@ import { fetchEnvContext } from './env.service.js';
 import { fetchPois } from './geo.service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import {
-  consumeBusinessTokens,
-  reverseBusinessTokens,
+  consumeBusinessTokensOrExempt,
+  reverseBusinessTokensOrExempt,
 } from './business-token-consumption.service.js';
+import type { TokenExemptUser } from '../utils/token-exempt.js';
 
 async function revertAndRethrow(
   userId: string,
+  user: TokenExemptUser,
   businessRequestId: string,
   originalError: unknown,
 ): Promise<never> {
   try {
-    await reverseBusinessTokens({
+    await reverseBusinessTokensOrExempt(user, {
       userId,
       feature: 'AI_CHAT_QUERY',
       source: 'CHAT',
@@ -38,6 +40,7 @@ async function revertAndRethrow(
 
 function buildWrappedStream(
   userId: string,
+  user: TokenExemptUser,
   businessRequestId: string,
   upstream: ReadableStream<Uint8Array>,
 ): ReadableStream<Uint8Array> {
@@ -49,7 +52,7 @@ function buildWrappedStream(
     if (refunded || cancelled) return;
     refunded = true;
     try {
-      await reverseBusinessTokens({
+      await reverseBusinessTokensOrExempt(user, {
         userId,
         feature: 'AI_CHAT_QUERY',
         source: 'CHAT',
@@ -126,11 +129,12 @@ export async function streamChat(
       travelStyle: true,
       interests: true,
       accommodationType: true,
+      role: { select: { name: true } },
     },
   });
   if (!user) throw new AppError(404, 'User not found');
 
-  const consumption = await consumeBusinessTokens({
+  const consumption = await consumeBusinessTokensOrExempt(user, {
     userId,
     feature: 'AI_CHAT_QUERY',
     source: 'CHAT',
@@ -219,10 +223,10 @@ export async function streamChat(
     }
 
     return {
-      body: buildWrappedStream(userId, options.businessRequestId, aiResponse.body),
+      body: buildWrappedStream(userId, user, options.businessRequestId, aiResponse.body),
       conversationId: conversationId!,
     };
   } catch (err) {
-    return revertAndRethrow(userId, options.businessRequestId, err);
+    return revertAndRethrow(userId, user, options.businessRequestId, err);
   }
 }

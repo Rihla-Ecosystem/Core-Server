@@ -1,11 +1,12 @@
 import { env } from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
 import {
-  consumeBusinessTokens,
-  reverseBusinessTokens,
+  consumeBusinessTokensOrExempt,
+  reverseBusinessTokensOrExempt,
 } from './business-token-consumption.service.js';
 import { recordAiUsage } from './ai-usage.service.js';
 import { upstreamError } from '../utils/http-client.js';
+import type { TokenExemptUser } from '../utils/token-exempt.js';
 
 export interface IdentifyResponse {
   name: string;
@@ -75,15 +76,17 @@ export interface IdentifyLandmarkWithTokensInput {
   lon?: number;
   radius?: number;
   authorization?: string;
+  user?: TokenExemptUser;
 }
 
 async function revertAndRethrow(
   userId: string,
+  user: TokenExemptUser | undefined,
   businessRequestId: string,
   originalError: unknown,
 ): Promise<never> {
   try {
-    await reverseBusinessTokens({
+    await reverseBusinessTokensOrExempt(user, {
       userId,
       feature: 'AI_IMAGE_ANALYSIS',
       source: 'IMAGE',
@@ -107,7 +110,7 @@ async function revertAndRethrow(
 export async function identifyLandmarkWithTokens(
   input: IdentifyLandmarkWithTokensInput,
 ): Promise<IdentifyResponse> {
-  const consumption = await consumeBusinessTokens({
+  const consumption = await consumeBusinessTokensOrExempt(input.user, {
     userId: input.userId,
     feature: 'AI_IMAGE_ANALYSIS',
     source: 'IMAGE',
@@ -127,6 +130,6 @@ export async function identifyLandmarkWithTokens(
       authorization: input.authorization,
     });
   } catch (err) {
-    return revertAndRethrow(input.userId, input.businessRequestId, err);
+    return revertAndRethrow(input.userId, input.user, input.businessRequestId, err);
   }
 }
