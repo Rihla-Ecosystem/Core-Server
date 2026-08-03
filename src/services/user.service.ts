@@ -273,44 +273,32 @@ export async function banUser(targetUserId: string, actorId: string) {
   return updated;
 }
 
-export async function getAuditLogs(page = 1, limit = 50) {
-  const skip = (page - 1) * limit;
-  const [total, logs] = await Promise.all([
-    prisma.auditLog.count(),
-    prisma.auditLog.findMany({
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
-      include: {
-        actor: { select: { displayName: true, email: true } },
-        target: { select: { displayName: true, email: true } },
-      },
-    }),
-  ]);
 
-  return {
-    logs,
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit),
+
 export async function unbanUser(targetUserId: string, actorId: string) {
-  const user = await prisma.user.findUnique({ where: { id: targetUserId } });
+  const user = await prisma.user.findUnique({
+    where: { id: targetUserId },
+  });
+
   if (!user) {
-    throw new AppError(404, 'User not found');
+    throw new AppError(404, "User not found");
   }
 
   const updated = await prisma.user.update({
     where: { id: targetUserId },
     data: { isBanned: false },
-    select: { id: true, email: true, displayName: true, isBanned: true },
+    select: {
+      id: true,
+      email: true,
+      displayName: true,
+      isBanned: true,
+    },
   });
 
   await prisma.auditLog.create({
     data: {
       actorId,
-      action: 'user_unbanned',
+      action: "user_unbanned",
       targetUserId,
     },
   });
@@ -394,7 +382,7 @@ export async function getAuditLogs() {
       actor: { select: { displayName: true, email: true } },
       target: { select: { displayName: true, email: true } },
     },
-  };
+  })
 }
 
 

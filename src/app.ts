@@ -20,15 +20,7 @@ const isLocalhostOrigin = (origin: string | undefined): boolean => {
 };
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // "null" origin is sent by privacy-focused browsers, sandboxed contexts,
-      // and local tooling — allow it for this localhost dev environment.
-      if (!origin || origin === 'null' || corsOrigins.includes(origin) || isLocalhostOrigin(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error(`Origin ${origin} not allowed by CORS`));
-      }
-    },
+    origin: "http://localhost:3000",
     credentials: true,
   })
 );

@@ -485,7 +485,7 @@ function buildUserWhere(filters: Omit<DashboardListFilters, 'page' | 'limit' | '
     if (search.length > 0) {
       and.push({
         OR: [
-          { id: search },
+     
           { displayName: { contains: search, mode: 'insensitive' } },
           { email: { contains: search, mode: 'insensitive' } },
         ],
