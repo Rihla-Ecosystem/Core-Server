@@ -158,6 +158,7 @@ export async function streamChat(
         'X-Internal-Api-Key': env.INTERNAL_API_KEY,
       },
       body: JSON.stringify(aiPayload),
+      signal: AbortSignal.timeout(15_000),
     });
 
     if (!aiResponse.ok) {

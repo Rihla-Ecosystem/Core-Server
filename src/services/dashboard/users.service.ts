@@ -1,10 +1,13 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/prisma.js';
 import { AppError } from '../../middleware/errorHandler.js';
+import { hashPassword } from '../../utils/hash.js';
 
 export type DashboardOrder = 'asc' | 'desc';
 export type DashboardSortField = 'createdAt' | 'lastLoginAt' | 'displayName' | 'email' | 'xp' | 'level' | 'id' | 'walletBalance';
 export type DashboardExportFormat = 'csv' | 'excel';
+
+export const EXPORT_MAX_ROWS = 1000;
 
 export interface DashboardListFilters {
   page: number;
@@ -184,6 +187,9 @@ export interface DashboardStatisticsResult {
   failedPayments: number;
   cancelledPayments: number;
   refundedPayments: number;
+  totalTrips: number;
+  totalBadges: number;
+  totalConversations: number;
 }
 
 export interface DashboardActivityItem {
@@ -352,6 +358,16 @@ type BasicUserRow = {
 
 function logDashboardAction(action: string, payload: Record<string, unknown>): void {
   console.info(`[dashboard/users] ${action}`, payload);
+}
+
+function sanitizeAuditFilters(filters: DashboardListFilters & { format: DashboardExportFormat }): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== null) {
+      sanitized[key] = value instanceof Date ? value.toISOString() : value;
+    }
+  }
+  return sanitized;
 }
 
 function decimalToNumber(value: Prisma.Decimal | number | null | undefined): number {
@@ -955,7 +971,7 @@ export async function listUsers(filters: DashboardListFilters): Promise<Dashboar
   const where = buildUserWhere(filters);
   const skip = (filters.page - 1) * filters.limit;
 
-  const [total, rows, totalUsers, activeUsers, verifiedUsers, bannedUsers, deletedUsers, walletUsers, avgUser, walletAggregate, paymentAggregate, tripCount, badgeCount, conversationCount] = await Promise.all([
+  const [total, rows, activeUsers, verifiedUsers, bannedUsers, deletedUsers, walletUsers, avgUser, walletAggregate, paymentAggregate, tripCount, badgeCount, conversationCount] = await Promise.all([
     prisma.user.count({ where }),
     prisma.user.findMany({
       where,
@@ -964,7 +980,6 @@ export async function listUsers(filters: DashboardListFilters): Promise<Dashboar
       orderBy: buildOrderBy(filters.sort, filters.order),
       select: userSummarySelect,
     }) as Promise<UserSummaryRow[]>,
-    prisma.user.count({ where }),
     prisma.user.count({ where: composeWhere(where, { isActive: true }) }),
     prisma.user.count({ where: composeWhere(where, { isEmailVerified: true }) }),
     prisma.user.count({ where: composeWhere(where, { isBanned: true }) }),
@@ -996,15 +1011,15 @@ export async function listUsers(filters: DashboardListFilters): Promise<Dashboar
   const revenue = decimalToNumber(paymentAggregate._sum.amount);
 
   const statistics: DashboardUsersStatistics = {
-    totalUsers,
+    totalUsers: total,
     activeUsers,
-    inactiveUsers: totalUsers - activeUsers,
+    inactiveUsers: total - activeUsers,
     verifiedUsers,
-    unverifiedUsers: totalUsers - verifiedUsers,
+    unverifiedUsers: total - verifiedUsers,
     bannedUsers,
     deletedUsers,
     walletUsers,
-    usersWithoutWallet: totalUsers - walletUsers,
+    usersWithoutWallet: total - walletUsers,
     averageXp: avgUser._avg.xp ?? 0,
     averageLevel: avgUser._avg.level ?? 0,
     averageWalletBalance,
@@ -1468,7 +1483,7 @@ export async function getUserStatistics(userId: string): Promise<DashboardUserSt
     throw new AppError(404, 'User not found');
   }
 
-  const [wallet, payments, tokenSummary, badges, trips, conversations, messagesCount, feedbackCount, preferencesCount, interactionCount, completedJourneys, totalJourneys] = await Promise.all([
+  const [wallet, payments, paymentStatusCounts, tokenSummary, badges, trips, conversations, messagesCount, feedbackCount, preferencesCount, interactionCount, completedJourneys, totalJourneys] = await Promise.all([
     prisma.tokenWallet.findUnique({
       where: { userId },
       select: { tokenBalance: true },
@@ -1477,6 +1492,11 @@ export async function getUserStatistics(userId: string): Promise<DashboardUserSt
       where: { userId },
       _count: { _all: true },
       _sum: { amount: true },
+    }),
+    prisma.payment.groupBy({
+      by: ['status'],
+      where: { userId },
+      _count: { _all: true },
     }),
     prisma.tokenTransaction.groupBy({
       by: ['type'],
@@ -1493,6 +1513,8 @@ export async function getUserStatistics(userId: string): Promise<DashboardUserSt
     prisma.userJourney.count({ where: { userId, completedAt: { not: null } } }),
     prisma.journey.count(),
   ]);
+
+  const paymentStatusMap = new Map(paymentStatusCounts.map((item) => [item.status, item._count._all]));
 
   const totalTokensEarned = tokenSummary.reduce((sum, item) => {
     const amount = item._sum.tokens ?? 0;
@@ -1515,11 +1537,11 @@ export async function getUserStatistics(userId: string): Promise<DashboardUserSt
 
   return {
     totalPayments: payments._count._all,
-    completedPayments: await prisma.payment.count({ where: { userId, status: 'COMPLETED' } }),
-    pendingPayments: await prisma.payment.count({ where: { userId, status: 'PENDING' } }),
-    failedPayments: await prisma.payment.count({ where: { userId, status: 'FAILED' } }),
-    cancelledPayments: await prisma.payment.count({ where: { userId, status: 'CANCELLED' } }),
-    refundedPayments: await prisma.payment.count({ where: { userId, status: 'REFUNDED' } }),
+    completedPayments: paymentStatusMap.get('COMPLETED') ?? 0,
+    pendingPayments: paymentStatusMap.get('PENDING') ?? 0,
+    failedPayments: paymentStatusMap.get('FAILED') ?? 0,
+    cancelledPayments: paymentStatusMap.get('CANCELLED') ?? 0,
+    refundedPayments: paymentStatusMap.get('REFUNDED') ?? 0,
     revenue: decimalToNumber(payments._sum.amount),
     walletBalance: wallet?.tokenBalance ?? 0,
     totalTokensEarned,
@@ -1718,6 +1740,9 @@ export async function getDashboardStatistics(filters: Omit<DashboardListFilters,
     failedPayments: paymentStatusMap.get('FAILED') ?? 0,
     cancelledPayments: paymentStatusMap.get('CANCELLED') ?? 0,
     refundedPayments: paymentStatusMap.get('REFUNDED') ?? 0,
+    totalTrips,
+    totalBadges,
+    totalConversations,
   };
 }
 
@@ -1976,14 +2001,24 @@ export async function getGrowthAnalytics(): Promise<DashboardGrowthAnalyticsResu
   const monthlyStart = addMonths(now, -11);
   const yearlyStart = addYears(now, -4);
 
-  const [dailyUsers, weeklyUsers, monthlyUsers, yearlyUsers] = await Promise.all([
-    prisma.user.findMany({ where: { createdAt: { gte: dailyStart } }, select: { createdAt: true } }),
-    prisma.user.findMany({ where: { createdAt: { gte: weeklyStart } }, select: { createdAt: true } }),
-    prisma.user.findMany({ where: { createdAt: { gte: monthlyStart } }, select: { createdAt: true } }),
-    prisma.user.findMany({ where: { createdAt: { gte: yearlyStart } }, select: { createdAt: true } }),
+  const countByTruncatedPeriod = async (column: 'created_at', step: 'day' | 'week' | 'month' | 'year'): Promise<Array<{ created_at: Date; count: bigint }>> => {
+    const start = step === 'day' ? dailyStart : step === 'week' ? weeklyStart : step === 'month' ? monthlyStart : yearlyStart;
+    return prisma.$queryRaw`
+      SELECT date_trunc(${Prisma.raw(`'${step}'`)}, ${Prisma.raw(column)}::timestamptz) AS created_at, COUNT(*)::bigint AS count
+      FROM ${Prisma.raw('users')}
+      WHERE ${Prisma.raw(column)}::timestamptz >= ${start}
+      GROUP BY 1
+    `;
+  };
+
+  const [dailyRows, weeklyRows, monthlyRows, yearlyRows] = await Promise.all([
+    countByTruncatedPeriod('created_at', 'day'),
+    countByTruncatedPeriod('created_at', 'week'),
+    countByTruncatedPeriod('created_at', 'month'),
+    countByTruncatedPeriod('created_at', 'year'),
   ]);
 
-  const build = (items: Array<{ createdAt: Date }>, start: Date, step: 'day' | 'week' | 'month' | 'year') => {
+  const build = (rows: Array<{ created_at: Date; count: bigint }>, start: Date, step: 'day' | 'week' | 'month' | 'year') => {
     const map = new Map<string, number>();
     const cursor = new Date(start);
 
@@ -2008,25 +2043,25 @@ export async function getGrowthAnalytics(): Promise<DashboardGrowthAnalyticsResu
       }
     }
 
-    for (const item of items) {
+    for (const item of rows) {
       const period = step === 'day'
-        ? formatDay(item.createdAt)
+        ? formatDay(item.created_at)
         : step === 'week'
-          ? formatWeek(item.createdAt)
+          ? formatWeek(item.created_at)
           : step === 'month'
-            ? formatMonth(item.createdAt)
-            : formatYear(item.createdAt);
-      map.set(period, (map.get(period) ?? 0) + 1);
+            ? formatMonth(item.created_at)
+            : formatYear(item.created_at);
+      map.set(period, (map.get(period) ?? 0) + Number(item.count));
     }
 
     return Array.from(map.entries()).map(([period, users]) => ({ period, users }));
   };
 
   return {
-    daily: build(dailyUsers, dailyStart, 'day'),
-    weekly: build(weeklyUsers, getWeekStart(weeklyStart), 'week'),
-    monthly: build(monthlyUsers, new Date(Date.UTC(monthlyStart.getUTCFullYear(), monthlyStart.getUTCMonth(), 1)), 'month'),
-    yearly: build(yearlyUsers, new Date(Date.UTC(yearlyStart.getUTCFullYear(), 0, 1)), 'year'),
+    daily: build(dailyRows, dailyStart, 'day'),
+    weekly: build(weeklyRows, getWeekStart(weeklyStart), 'week'),
+    monthly: build(monthlyRows, new Date(Date.UTC(monthlyStart.getUTCFullYear(), monthlyStart.getUTCMonth(), 1)), 'month'),
+    yearly: build(yearlyRows, new Date(Date.UTC(yearlyStart.getUTCFullYear(), 0, 1)), 'year'),
   };
 }
 
@@ -2037,19 +2072,24 @@ export async function getRevenueAnalytics(): Promise<DashboardRevenueAnalyticsRe
   const monthlyStart = addMonths(now, -11);
   const yearlyStart = addYears(now, -4);
 
-  const buildRevenue = async (start: Date, step: 'day' | 'week' | 'month' | 'year') => {
-    const payments = await prisma.payment.findMany({
-      where: {
-        status: 'COMPLETED',
-        createdAt: { gte: start, lte: now },
-      },
-      select: {
-        amount: true,
-        paidAt: true,
-        createdAt: true,
-      },
-    });
+  const revenueByTruncatedPeriod = async (step: 'day' | 'week' | 'month' | 'year'): Promise<Array<{ paid_at: Date; revenue: Prisma.Decimal }>> => {
+    const start = step === 'day' ? dailyStart : step === 'week' ? weeklyStart : step === 'month' ? monthlyStart : yearlyStart;
+    return prisma.$queryRaw`
+      SELECT COALESCE(date_trunc(${Prisma.raw(`'${step}'`)}, "paidAt"::timestamptz), date_trunc(${Prisma.raw(`'${step}'`)}, "createdAt"::timestamptz)) AS paid_at, COALESCE(SUM(amount), 0) AS revenue
+      FROM ${Prisma.raw('"Payment"')}
+      WHERE status = 'COMPLETED' AND "createdAt"::timestamptz >= ${start}
+      GROUP BY 1
+    `;
+  };
 
+  const [dailyRows, weeklyRows, monthlyRows, yearlyRows] = await Promise.all([
+    revenueByTruncatedPeriod('day'),
+    revenueByTruncatedPeriod('week'),
+    revenueByTruncatedPeriod('month'),
+    revenueByTruncatedPeriod('year'),
+  ]);
+
+  const buildRevenue = (rows: Array<{ paid_at: Date; revenue: Prisma.Decimal }>, start: Date, step: 'day' | 'week' | 'month' | 'year') => {
     const map = new Map<string, number>();
     const cursor = new Date(start);
 
@@ -2074,26 +2114,25 @@ export async function getRevenueAnalytics(): Promise<DashboardRevenueAnalyticsRe
       }
     }
 
-    for (const payment of payments) {
-      const timestamp = payment.paidAt ?? payment.createdAt;
+    for (const payment of rows) {
       const period = step === 'day'
-        ? formatDay(timestamp)
+        ? formatDay(payment.paid_at)
         : step === 'week'
-          ? formatWeek(timestamp)
+          ? formatWeek(payment.paid_at)
           : step === 'month'
-            ? formatMonth(timestamp)
-            : formatYear(timestamp);
-      map.set(period, (map.get(period) ?? 0) + decimalToNumber(payment.amount));
+            ? formatMonth(payment.paid_at)
+            : formatYear(payment.paid_at);
+      map.set(period, (map.get(period) ?? 0) + decimalToNumber(payment.revenue));
     }
 
     return Array.from(map.entries()).map(([period, revenue]) => ({ period, revenue }));
   };
 
   return {
-    revenueByDay: await buildRevenue(dailyStart, 'day'),
-    revenueByWeek: await buildRevenue(getWeekStart(weeklyStart), 'week'),
-    revenueByMonth: await buildRevenue(new Date(Date.UTC(monthlyStart.getUTCFullYear(), monthlyStart.getUTCMonth(), 1)), 'month'),
-    revenueByYear: await buildRevenue(new Date(Date.UTC(yearlyStart.getUTCFullYear(), 0, 1)), 'year'),
+    revenueByDay: buildRevenue(dailyRows, dailyStart, 'day'),
+    revenueByWeek: buildRevenue(weeklyRows, getWeekStart(weeklyStart), 'week'),
+    revenueByMonth: buildRevenue(monthlyRows, new Date(Date.UTC(monthlyStart.getUTCFullYear(), monthlyStart.getUTCMonth(), 1)), 'month'),
+    revenueByYear: buildRevenue(yearlyRows, new Date(Date.UTC(yearlyStart.getUTCFullYear(), 0, 1)), 'year'),
   };
 }
 
@@ -2109,20 +2148,14 @@ export async function getCountryAnalytics(): Promise<Array<{ nationality: string
 }
 
 export async function getLanguageAnalytics(): Promise<Array<{ language: string; count: number }>> {
-  const rows = await prisma.user.findMany({
-    select: { language: true },
-  });
+  const rows = await prisma.$queryRaw<Array<{ language: string; count: bigint }>>`
+    SELECT lang AS language, COUNT(*)::bigint AS count
+    FROM users, jsonb_array_elements_text(COALESCE(languages, '[]'::jsonb)) AS lang
+    GROUP BY lang
+    ORDER BY count DESC
+  `;
 
-  const counts = new Map<string, number>();
-  for (const row of rows) {
-    for (const language of flattenLanguages(row.language)) {
-      counts.set(language, (counts.get(language) ?? 0) + 1);
-    }
-  }
-
-  return Array.from(counts.entries())
-    .map(([language, count]) => ({ language, count }))
-    .sort((left, right) => right.count - left.count);
+  return rows.map((row) => ({ language: row.language, count: Number(row.count) }));
 }
 
 export async function getRetentionAnalytics(): Promise<DashboardRetentionAnalyticsResult> {
@@ -2302,10 +2335,12 @@ export async function searchUsers(search: string): Promise<Array<Record<string, 
     return [];
   }
 
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(term);
+
   const rows = await prisma.user.findMany({
     where: {
       OR: [
-        { id: term },
+        ...(isUuid ? [{ id: term }] : []),
         { displayName: { contains: term, mode: 'insensitive' } },
         { email: { contains: term, mode: 'insensitive' } },
       ],
@@ -2338,6 +2373,7 @@ export async function exportUsers(actorId: string, filters: DashboardListFilters
     where,
     orderBy: buildOrderBy(filters.sort, filters.order),
     select: userSummarySelect,
+    take: EXPORT_MAX_ROWS,
   }) as UserSummaryRow[];
 
   const rows = users.map((row) => ({
@@ -2368,7 +2404,7 @@ export async function exportUsers(actorId: string, filters: DashboardListFilters
   logDashboardAction('users_exported', { format: filters.format, total: rows.length });
   await createAuditLog(actorId, null, 'users_exported', {
     format: filters.format,
-    filters,
+    filters: sanitizeAuditFilters(filters),
     total: rows.length,
   }).catch(() => undefined);
 
@@ -2443,8 +2479,9 @@ export async function resetWallet(targetUserId: string, actorId: string): Promis
     select: { id: true, tokenBalance: true },
   });
 
-  if (wallet && wallet.tokenBalance !== 0) {
-    await prisma.$transaction(async (tx) => {
+  const previousBalance = wallet?.tokenBalance ?? 0;
+  await prisma.$transaction(async (tx) => {
+    if (wallet && wallet.tokenBalance !== 0) {
       await tx.tokenTransaction.create({
         data: {
           walletId: wallet.id,
@@ -2461,67 +2498,29 @@ export async function resetWallet(targetUserId: string, actorId: string): Promis
         where: { userId: targetUserId },
         data: { tokenBalance: 0, status: 'ACTIVE' },
       });
-
-      await tx.auditLog.create({
+    } else if (!wallet) {
+      await tx.tokenWallet.create({
         data: {
-          actorId,
-          targetUserId,
-          action: 'wallet_reset',
-          metadata: { previousBalance: wallet.tokenBalance },
+          userId: targetUserId,
+          tokenBalance: 0,
+          status: 'ACTIVE',
         },
       });
-    });
-  } else if (!wallet) {
-    await prisma.tokenWallet.create({
+    }
+
+    await tx.auditLog.create({
       data: {
-        userId: targetUserId,
-        tokenBalance: 0,
-        status: 'ACTIVE',
+        actorId,
+        targetUserId,
+        action: 'wallet_reset',
+        metadata: { previousBalance },
       },
     });
-    await createAuditLog(actorId, targetUserId, 'wallet_reset', { previousBalance: 0 });
-  } else {
-    await createAuditLog(actorId, targetUserId, 'wallet_reset', { previousBalance: 0 });
-  }
+  });
 
   logDashboardAction('wallet_reset', { actorId, targetUserId });
 
-  return prisma.user.findUniqueOrThrow({
-    where: { id: targetUserId },
-    select: {
-      id: true,
-      email: true,
-      displayName: true,
-      avatarUrl: true,
-      bio: true,
-      gender: true,
-      nationality: true,
-      language: true,
-      budgetLevel: true,
-      arrivalDate: true,
-      departureDate: true,
-      travelStyle: true,
-      interests: true,
-      accommodationType: true,
-      isEmailVerified: true,
-      isActive: true,
-      isBanned: true,
-      isDeleted: true,
-      roleId: true,
-      xp: true,
-      level: true,
-      createdAt: true,
-      updatedAt: true,
-      lastLoginAt: true,
-      role: {
-        select: {
-          id: true,
-          name: true,
-          permissions: true,
-        },
-      },
-    },
-  });
+  return getBasicUser(targetUserId);
 }
 
 export async function resetXp(targetUserId: string, actorId: string): Promise<BasicUserRow> {
@@ -2562,6 +2561,10 @@ export async function resetXp(targetUserId: string, actorId: string): Promise<Ba
 
   logDashboardAction('xp_reset', { actorId, targetUserId, previousXp: user.xp });
 
+  return getBasicUser(targetUserId);
+}
+
+async function getBasicUser(targetUserId: string): Promise<BasicUserRow> {
   return prisma.user.findUniqueOrThrow({
     where: { id: targetUserId },
     select: {
@@ -2609,67 +2612,39 @@ export async function bulkAction(action: 'delete' | 'restore' | 'ban' | 'unban' 
   const uniqueIds = Array.from(new Set(ids));
   const where = { id: { in: uniqueIds } };
 
-  if (action === 'delete') {
-    const result = await prisma.user.updateMany({ where, data: { isDeleted: true, deletedAt: now } });
-    await createAuditLog(actorId, null, 'users_bulk_deleted', { ids: uniqueIds, affected: result.count });
-    logDashboardAction('users_bulk_deleted', { actorId, affected: result.count });
-    return { affected: result.count };
-  }
+  const [auditAction, data, metadata]: [string, Prisma.UserUpdateManyMutationInput, Record<string, unknown>] = (() => {
+    switch (action) {
+      case 'delete':
+        return ['users_bulk_deleted', { isDeleted: true, deletedAt: now }, { ids: uniqueIds }];
+      case 'restore':
+        return ['users_bulk_restored', { isDeleted: false, deletedAt: null }, { ids: uniqueIds }];
+      case 'ban':
+        return ['users_bulk_banned', { isBanned: true }, { ids: uniqueIds }];
+      case 'unban':
+        return ['users_bulk_unbanned', { isBanned: false }, { ids: uniqueIds }];
+      case 'activate':
+        return ['users_bulk_activated', { isActive: true }, { ids: uniqueIds }];
+      case 'deactivate':
+        return ['users_bulk_deactivated', { isActive: false }, { ids: uniqueIds }];
+      case 'verify':
+        return ['users_bulk_verified', { isEmailVerified: true }, { ids: uniqueIds }];
+    }
+  })();
 
-  if (action === 'restore') {
-    const result = await prisma.user.updateMany({ where, data: { isDeleted: false, deletedAt: null } });
-    await createAuditLog(actorId, null, 'users_bulk_restored', { ids: uniqueIds, affected: result.count });
-    logDashboardAction('users_bulk_restored', { actorId, affected: result.count });
-    return { affected: result.count };
-  }
+  const result = await prisma.$transaction(async (tx) => {
+    const update = await tx.user.updateMany({ where, data });
+    await tx.auditLog.create({
+      data: {
+        actorId,
+        targetUserId: null,
+        action: auditAction,
+        metadata: { ...metadata, affected: update.count },
+      },
+    });
+    return update;
+  });
 
-  if (action === 'ban') {
-    const result = await prisma.user.updateMany({ where, data: { isBanned: true } });
-    await createAuditLog(actorId, null, 'users_bulk_banned', { ids: uniqueIds, affected: result.count });
-    logDashboardAction('users_bulk_banned', { actorId, affected: result.count });
-    return { affected: result.count };
-  }
-
-  if (action === 'unban') {
-    const result = await prisma.user.updateMany({ where, data: { isBanned: false } });
-    await createAuditLog(actorId, null, 'users_bulk_unbanned', { ids: uniqueIds, affected: result.count });
-    logDashboardAction('users_bulk_unbanned', { actorId, affected: result.count });
-    return { affected: result.count };
-  }
-
-  if (action === 'activate') {
-    const result = await prisma.user.updateMany({ where, data: { isActive: true } });
-    await createAuditLog(actorId, null, 'users_bulk_activated', { ids: uniqueIds, affected: result.count });
-    logDashboardAction('users_bulk_activated', { actorId, affected: result.count });
-    return { affected: result.count };
-  }
-
-  if (action === 'deactivate') {
-    const result = await prisma.user.updateMany({ where, data: { isActive: false } });
-    await createAuditLog(actorId, null, 'users_bulk_deactivated', { ids: uniqueIds, affected: result.count });
-    logDashboardAction('users_bulk_deactivated', { actorId, affected: result.count });
-    return { affected: result.count };
-  }
-
-  if (action === 'verify') {
-    const result = await prisma.user.updateMany({ where, data: { isEmailVerified: true } });
-    await createAuditLog(actorId, null, 'users_bulk_verified', { ids: uniqueIds, affected: result.count });
-    logDashboardAction('users_bulk_verified', { actorId, affected: result.count });
-    return { affected: result.count };
-  }
-
-  if (action === 'restore' && roleId !== undefined) {
-    return { affected: 0 };
-  }
-
-  if (roleId === undefined) {
-    throw new AppError(400, 'Role id is required');
-  }
-
-  const role = await getUserRoleOrThrow(roleId);
-  const result = await prisma.user.updateMany({ where, data: { roleId } });
-  await createAuditLog(actorId, null, 'users_bulk_role_changed', { ids: uniqueIds, roleId, roleName: role.name, affected: result.count });
-  logDashboardAction('users_bulk_role_changed', { actorId, affected: result.count, roleId });
+  logDashboardAction(auditAction, { actorId, affected: result.count });
   return { affected: result.count };
 }
 
@@ -2680,17 +2655,30 @@ export async function bulkChangeRole(ids: string[], roleId: number, actorId: str
 
   const uniqueIds = Array.from(new Set(ids));
   const role = await getUserRoleOrThrow(roleId);
-  const result = await prisma.user.updateMany({
-    where: { id: { in: uniqueIds } },
-    data: { roleId },
+
+  const result = await prisma.$transaction(async (tx) => {
+    const update = await tx.user.updateMany({
+      where: { id: { in: uniqueIds } },
+      data: { roleId },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorId,
+        targetUserId: null,
+        action: 'users_bulk_role_changed',
+        metadata: {
+          ids: uniqueIds,
+          roleId,
+          roleName: role.name,
+          affected: update.count,
+        },
+      },
+    });
+
+    return update;
   });
 
-  await createAuditLog(actorId, null, 'users_bulk_role_changed', {
-    ids: uniqueIds,
-    roleId,
-    roleName: role.name,
-    affected: result.count,
-  });
   logDashboardAction('users_bulk_role_changed', { actorId, affected: result.count, roleId });
 
   return { affected: result.count };
@@ -2741,4 +2729,284 @@ export async function bulkExport(ids: string[], actorId: string, format: Dashboa
     contentType: format === 'csv' ? 'text/csv; charset=utf-8' : 'application/vnd.ms-excel; charset=utf-8',
     data,
   };
+}
+
+export interface DashboardCreateUserInput {
+  email: string;
+  password: string;
+  displayName: string;
+  avatarUrl?: string;
+  bio?: string;
+  gender: 'MALE' | 'FEMALE';
+  nationality: string;
+  language?: string[];
+  budgetLevel?: string;
+  arrivalDate?: string;
+  departureDate?: string;
+  travelStyle?: string;
+  interests?: string[];
+  accommodationType?: string;
+  roleId?: number;
+}
+
+export interface DashboardUpdateUserInput {
+  email?: string;
+  displayName?: string;
+  avatarUrl?: string;
+  bio?: string;
+  gender?: 'MALE' | 'FEMALE';
+  nationality?: string;
+  language?: string[];
+  budgetLevel?: string;
+  arrivalDate?: string;
+  departureDate?: string;
+  travelStyle?: string;
+  interests?: string[];
+  accommodationType?: string;
+  roleId?: number;
+  isActive?: boolean;
+  isEmailVerified?: boolean;
+  isBanned?: boolean;
+  xp?: number;
+  level?: number;
+}
+
+export async function createUser(data: DashboardCreateUserInput, actorId: string): Promise<BasicUserRow> {
+  const existing = await prisma.user.findUnique({ where: { email: data.email } });
+  if (existing) {
+    throw new AppError(409, 'A user with this email already exists');
+  }
+
+  const passwordHash = await hashPassword(data.password);
+
+  const user = await prisma.$transaction(async (tx) => {
+    const created = await tx.user.create({
+      data: {
+        email: data.email,
+        passwordHash,
+        displayName: data.displayName,
+        avatarUrl: data.avatarUrl,
+        bio: data.bio,
+        gender: data.gender,
+        nationality: data.nationality,
+        language: data.language ?? [],
+        budgetLevel: data.budgetLevel,
+        arrivalDate: data.arrivalDate ? new Date(data.arrivalDate) : null,
+        departureDate: data.departureDate ? new Date(data.departureDate) : null,
+        travelStyle: data.travelStyle,
+        interests: data.interests ?? [],
+        accommodationType: data.accommodationType,
+        roleId: data.roleId ?? 1,
+      },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        avatarUrl: true,
+        bio: true,
+        gender: true,
+        nationality: true,
+        language: true,
+        budgetLevel: true,
+        arrivalDate: true,
+        departureDate: true,
+        travelStyle: true,
+        interests: true,
+        accommodationType: true,
+        isEmailVerified: true,
+        isActive: true,
+        isBanned: true,
+        isDeleted: true,
+        roleId: true,
+        xp: true,
+        level: true,
+        createdAt: true,
+        updatedAt: true,
+        role: {
+          select: {
+            id: true,
+            name: true,
+            permissions: true,
+          },
+        },
+      },
+    });
+
+    await tx.tokenWallet.create({
+      data: {
+        userId: created.id,
+        tokenBalance: 0,
+        status: 'ACTIVE',
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorId,
+        targetUserId: created.id,
+        action: 'user_created',
+        metadata: toInputJsonObject({
+          email: data.email,
+          displayName: data.displayName,
+          gender: data.gender,
+          nationality: data.nationality,
+          roleId: data.roleId ?? 1,
+        }),
+      },
+    });
+
+    return created;
+  });
+
+  logDashboardAction('user_created', { actorId, targetUserId: user.id, email: data.email });
+
+  return user as BasicUserRow;
+}
+
+export async function updateUser(userId: string, data: DashboardUpdateUserInput, actorId: string): Promise<BasicUserRow> {
+  const currentUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      email: true,
+      displayName: true,
+      avatarUrl: true,
+      bio: true,
+      gender: true,
+      nationality: true,
+      language: true,
+      budgetLevel: true,
+      arrivalDate: true,
+      departureDate: true,
+      travelStyle: true,
+      interests: true,
+      accommodationType: true,
+      isEmailVerified: true,
+      isActive: true,
+      isBanned: true,
+      isDeleted: true,
+      roleId: true,
+      xp: true,
+      level: true,
+      lastLoginAt: true,
+      tokenWallet: {
+        select: {
+          tokenBalance: true,
+          status: true,
+        },
+      },
+    },
+  });
+
+  if (!currentUser) {
+    throw new AppError(404, 'User not found');
+  }
+
+  const updateData: Prisma.UserUpdateInput = {};
+
+  if (data.email !== undefined) updateData.email = data.email;
+  if (data.displayName !== undefined) updateData.displayName = data.displayName;
+  if (data.avatarUrl !== undefined) updateData.avatarUrl = data.avatarUrl;
+  if (data.bio !== undefined) updateData.bio = data.bio;
+  if (data.gender !== undefined) updateData.gender = data.gender;
+  if (data.nationality !== undefined) updateData.nationality = data.nationality;
+  if (data.language !== undefined) updateData.language = data.language;
+  if (data.budgetLevel !== undefined) updateData.budgetLevel = data.budgetLevel;
+  if (data.arrivalDate !== undefined) updateData.arrivalDate = data.arrivalDate ? new Date(data.arrivalDate) : null;
+  if (data.departureDate !== undefined) updateData.departureDate = data.departureDate ? new Date(data.departureDate) : null;
+  if (data.travelStyle !== undefined) updateData.travelStyle = data.travelStyle;
+  if (data.interests !== undefined) updateData.interests = data.interests;
+  if (data.accommodationType !== undefined) updateData.accommodationType = data.accommodationType;
+  if (data.roleId !== undefined) updateData.role = { connect: { id: data.roleId } };
+  if (data.isActive !== undefined) updateData.isActive = data.isActive;
+  if (data.isEmailVerified !== undefined) updateData.isEmailVerified = data.isEmailVerified;
+  if (data.isBanned !== undefined) updateData.isBanned = data.isBanned;
+  if (data.xp !== undefined) updateData.xp = data.xp;
+  if (data.level !== undefined) updateData.level = data.level;
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.update({
+      where: { id: userId },
+      data: updateData,
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        avatarUrl: true,
+        bio: true,
+        gender: true,
+        nationality: true,
+        language: true,
+        budgetLevel: true,
+        arrivalDate: true,
+        departureDate: true,
+        travelStyle: true,
+        interests: true,
+        accommodationType: true,
+        isEmailVerified: true,
+        isActive: true,
+        isBanned: true,
+        isDeleted: true,
+        roleId: true,
+        xp: true,
+        level: true,
+        createdAt: true,
+        updatedAt: true,
+        lastLoginAt: true,
+        role: {
+          select: {
+            id: true,
+            name: true,
+            permissions: true,
+          },
+        },
+      },
+    });
+
+    const metadata: Record<string, unknown> = {};
+    const previous: Record<string, unknown> = {
+      email: currentUser.email,
+      displayName: currentUser.displayName,
+      avatarUrl: currentUser.avatarUrl,
+      bio: currentUser.bio,
+      gender: currentUser.gender,
+      nationality: currentUser.nationality,
+      language: currentUser.language,
+      budgetLevel: currentUser.budgetLevel,
+      arrivalDate: currentUser.arrivalDate,
+      departureDate: currentUser.departureDate,
+      travelStyle: currentUser.travelStyle,
+      interests: currentUser.interests,
+      accommodationType: currentUser.accommodationType,
+      isEmailVerified: currentUser.isEmailVerified,
+      isActive: currentUser.isActive,
+      isBanned: currentUser.isBanned,
+      roleId: currentUser.roleId,
+      xp: currentUser.xp,
+      level: currentUser.level,
+    };
+
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined && JSON.stringify(value) !== JSON.stringify(previous[key])) {
+        metadata[key] = { previous: previous[key], new: value };
+      }
+    }
+
+    if (Object.keys(metadata).length > 0) {
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          targetUserId: userId,
+          action: 'user_updated',
+          metadata: toInputJsonObject(metadata),
+        },
+      });
+    }
+
+    return user;
+  });
+
+  logDashboardAction('user_updated', { actorId, targetUserId: userId });
+
+  return updated as BasicUserRow;
 }

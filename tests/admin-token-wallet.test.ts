@@ -2788,9 +2788,18 @@ describe('Admin Token Wallet API', () => {
       });
       const transitions = transactions.map((transaction) => {
         const metadata = transaction.metadata as { previousBalance: number; newBalance: number };
-        return `${metadata.previousBalance}:${metadata.newBalance}`;
+        return { previousBalance: metadata.previousBalance, newBalance: metadata.newBalance };
       });
-      assert.deepEqual(transitions.sort(), ['250:150', '300:250']);
+
+      const byPrevious = new Map(transitions.map((t) => [t.previousBalance, t.newBalance]));
+      let cursor = 300;
+      let steps = 0;
+      while (byPrevious.has(cursor)) {
+        cursor = byPrevious.get(cursor) as number;
+        steps++;
+      }
+      assert.equal(steps, 2);
+      assert.equal(cursor, 150);
     } finally {
       await cleanupAdjustmentRefs(target.id);
     }

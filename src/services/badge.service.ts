@@ -42,8 +42,12 @@ export async function checkAndAwardBadges(userId: string): Promise<void> {
     }
 
     if (earned) {
-      await prisma.userBadge.create({
-        data: { userId, badgeId: badge.id },
+      // Upsert guards against a P2002 race when two addXp calls award the
+      // same badge concurrently.
+      await prisma.userBadge.upsert({
+        where: { userId_badgeId: { userId, badgeId: badge.id } },
+        create: { userId, badgeId: badge.id },
+        update: {},
       });
     }
   }

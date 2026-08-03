@@ -7,6 +7,7 @@ import { env } from './config/env.js';
 import { swaggerSpec } from './config/swagger.js';
 import { getAdminRouter } from './config/admin.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { apiLogMiddleware } from './middleware/api-log.js';
 import routes from './routes/index.js';
 
 const app = express();
@@ -33,6 +34,7 @@ app.use(
 );
 app.use(cookieParser());
 app.use(express.json());
+app.use(apiLogMiddleware);
 
 app.use('/api', routes);
 

@@ -8,18 +8,22 @@ import * as userController from '../controllers/user.controller.js';
 const router = Router();
 
 const updateProfileSchema = z.object({
-  display_name: z.string().min(1).max(100).optional(),
+  display_name: z.string().trim().min(1).max(100).optional(),
   avatar_url: z.string().url().optional(),
   bio: z.string().max(500).optional(),
   gender: z.enum(['MALE', 'FEMALE']).optional(),
-  nationality: z.string().min(1).max(100).optional(),
-  language: z.array(z.string().min(2).max(10)).optional(),
+  nationality: z.string().trim().min(1).max(100).optional(),
+  language: z.array(z.string().trim().min(2).max(10)).max(20).optional(),
   budget_level: z.string().max(50).optional(),
   arrival_date: z.string().datetime().optional(),
   departure_date: z.string().datetime().optional(),
   travel_style: z.string().max(50).optional(),
-  interests: z.array(z.string()).optional(),
+  interests: z.array(z.string().max(100)).max(50).optional(),
   accommodation_type: z.string().max(50).optional(),
+});
+
+const userBadgesParamsSchema = z.object({
+  id: z.string().uuid(),
 });
 
 /**
@@ -147,6 +151,25 @@ router.delete('/me', authenticate, userController.deleteAccount);
  *               items:
  *                 $ref: '#/components/schemas/Badge'
  */
-router.get('/:id/badges', userController.getUserBadges);
+router.get('/:id/badges', validate(userBadgesParamsSchema, 'params'), userController.getUserBadges);
+
+// all roles endpoint
+/**
+ * @openapi
+ * /roles:
+ *   get:
+ *     tags: [Users]
+ *     summary: Get all roles
+ *     responses:
+ *       200:
+ *         description: List of roles
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Role'
+ */
+router.get('/roles', userController.getAllRoles);
 
 export default router;
