@@ -1,6 +1,9 @@
 import { prisma } from '../config/prisma.js';
 import { computeAiCost } from '../config/ai-pricing.js';
 import { normalizeProviderCalls } from '../utils/ai-usage.js';
+import { shadowPricingService } from './ai-shadow-pricing.service.js';
+import type { ShadowPricingOutcome, ShadowPricingRequestContext } from './ai-shadow-pricing.service.js';
+import type { Prisma } from '@prisma/client';
 import type { ProviderCallUsage } from '../types/ai.js';
 
 export interface AiUsage {
@@ -8,6 +11,17 @@ export interface AiUsage {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+}
+
+export interface AiUsageLogRow {
+  userId: string;
+  conversationId: string | null;
+  source: string;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cost: number;
 }
 
 type Sums = {
@@ -20,23 +34,72 @@ type Sums = {
   _count: number;
 };
 
-export async function recordAiUsage(params: {
+export interface RecordAiUsageParams {
   userId: string;
   conversationId?: string | null;
   source?: string;
   usage?: AiUsage | null;
   providerCalls?: unknown;
-}) {
+}
+
+/**
+ * Public recordAiUsage — production-only. Delegates to the injectable variant
+ * with real Prisma and the production shadow service.
+ */
+export async function recordAiUsage(params: RecordAiUsageParams): Promise<number | null | undefined> {
+  return recordAiUsageWith(params, {
+    writeAiUsageLogRows: async (rows) => {
+      const created = await prisma.aiUsageLog.createMany({
+        data: rows as unknown as Prisma.AiUsageLogCreateManyInput[],
+      });
+      return created.count;
+    },
+writeAiUsageLog: async (data) => {
+      await prisma.aiUsageLog.create({
+        data: data as unknown as Prisma.AiUsageLogCreateInput,
+      });
+    },
+    runShadowPricing: (providerCalls: unknown, ctx: ShadowPricingRequestContext): ShadowPricingOutcome => {
+      return shadowPricingService.record(providerCalls, ctx);
+    },
+  });
+}
+
+/** Injectable production-wrapper for recordAiUsage (test seam). */
+export interface RecordAiUsageDeps {
+  writeAiUsageLogRows: (rows: AiUsageLogRow[]) => Promise<number>;
+  writeAiUsageLog: (data: AiUsageLogRow) => Promise<void>;
+  runShadowPricing: (providerCalls: unknown, ctx: ShadowPricingRequestContext) => ShadowPricingOutcome;
+}
+
+/**
+ * Exported-for-test helper that implements the same logic as recordAiUsage
+ * with injected dependencies. The public recordAiUsage calls this with real
+ * Prisma and the production shadow service.
+ */
+export async function recordAiUsageWith(
+  params: RecordAiUsageParams,
+  deps: RecordAiUsageDeps,
+): Promise<number | null | undefined> {
+  // Shadow-pricing integration (Phase 2D-A): authoritative providerCalls are
+  // priced exactly once per invocation, before the userId guard, so missing-
+  // userId requests still produce shadow observations. The shadow service
+  // independently classifies absent/invalid as skipped.
+  try {
+    deps.runShadowPricing(params.providerCalls, {
+      source: params.source,
+      conversationId: params.conversationId,
+    });
+  } catch {
+    // Belt-and-suspenders: never let shadow break the request path.
+  }
+
   if (!params.userId) return;
 
   const providerCalls = normalizeProviderCalls(params.providerCalls);
 
   if (providerCalls && providerCalls.length > 0) {
-    // Prefer per-provider-call telemetry rows. Each row is written only when a
-    // real provider call reported a totalTokens > 0; calls without reported
-    // usage produce no fabricated row, and totalTokens is never derived. The
-    // current AiUsageLog schema has no operation/providerCallId column, so that
-    // identity is not persisted yet (documented limitation).
+    // Prefer per-provider-call telemetry rows.
     const rows = providerCalls
       .filter((call: ProviderCallUsage) => typeof call.totalTokens === 'number' && call.totalTokens > 0)
       .map((call: ProviderCallUsage) => {
@@ -56,8 +119,8 @@ export async function recordAiUsage(params: {
         };
       });
     if (rows.length > 0) {
-      const created = await prisma.aiUsageLog.createMany({ data: rows });
-      return created.count;
+      const count = await deps.writeAiUsageLogRows(rows);
+      return count;
     }
     return null;
   }
@@ -69,17 +132,15 @@ export async function recordAiUsage(params: {
   const outputTokens = usage.outputTokens ?? 0;
   const cost = computeAiCost(usage.model, inputTokens, outputTokens);
 
-  await prisma.aiUsageLog.create({
-    data: {
-      userId: params.userId,
-      conversationId: params.conversationId ?? null,
-      source: params.source ?? 'chat',
-      model: usage.model ?? null,
-      inputTokens,
-      outputTokens,
-      totalTokens: usage.totalTokens,
-      cost,
-    },
+  await deps.writeAiUsageLog({
+    userId: params.userId,
+    conversationId: params.conversationId ?? null,
+    source: params.source ?? 'chat',
+    model: usage.model ?? null,
+    inputTokens,
+    outputTokens,
+    totalTokens: usage.totalTokens,
+    cost,
   });
   return 1;
 }
