@@ -1,6 +1,9 @@
 import { env } from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { executeWithBusinessTokenCharge } from './tokenized-service-execution.service.js';
+import { recordAiUsage } from './ai-usage.service.js';
+import { upstreamError } from '../utils/http-client.js';
+import type { TokenExemptUser } from '../utils/token-exempt.js';
 
 export interface IdentifyResponse {
   name: string;
@@ -12,12 +15,14 @@ export interface IdentifyResponse {
   image_url?: string | null;
   nearby_sites?: unknown[] | null;
   cached: boolean;
+  usage?: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
 }
 
 export async function identifyLandmark(
   imageBuffer: Buffer,
   imageMimeType: string,
   options?: {
+    userId: string;
     lat?: number;
     lon?: number;
     radius?: number;
@@ -43,10 +48,20 @@ export async function identifyLandmark(
   });
 
   if (!response.ok) {
-    throw new AppError(502, 'AI identification service unavailable');
+    throw new AppError(502, await upstreamError('AI identification service unavailable', response));
   }
 
-  return response.json() as Promise<IdentifyResponse>;
+  const result = (await response.json()) as IdentifyResponse;
+
+  if (!result.cached) {
+    await recordAiUsage({
+      userId: options!.userId,
+      source: 'identify',
+      usage: result.usage,
+    });
+  }
+
+  return result;
 }
 
 export interface IdentifyLandmarkWithTokensInput {
@@ -58,18 +73,21 @@ export interface IdentifyLandmarkWithTokensInput {
   lon?: number;
   radius?: number;
   authorization?: string;
+  user?: TokenExemptUser;
 }
 
 export async function identifyLandmarkWithTokens(
   input: IdentifyLandmarkWithTokensInput,
 ): Promise<IdentifyResponse> {
   return executeWithBusinessTokenCharge({
+    user: input.user,
     userId: input.userId,
     feature: 'AI_IMAGE_ANALYSIS',
     source: 'IMAGE',
     idempotencyKey: input.businessRequestId,
     idempotentReplayMessage: 'Image analysis request already processed',
     execute: () => identifyLandmark(input.image, input.mimeType, {
+      userId: input.userId,
       lat: input.lat,
       lon: input.lon,
       radius: input.radius,

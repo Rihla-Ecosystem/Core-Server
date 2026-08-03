@@ -1147,9 +1147,8 @@ test('46. Fixed fallback mode reserves and settles the fixed amount', async () =
   const { deps, calls } = makeDeps();
   const result = expectSettled(await runAIBillingOrchestration(input, deps));
   const quote = expectedQuote(input);
-  assert.equal(quote.reservationTokens, 2);
-  assert.equal(result.billing.actualTokens, 2);
-  assert.equal(calls.settleInputs[0].actualTokens, 2);
+  assert.equal(result.billing.actualTokens, quote.reservationTokens);
+  assert.equal(calls.settleInputs[0].actualTokens, quote.reservationTokens);
 });
 
 test('47. Partial settlement returns unused reservation', async () => {
@@ -1167,7 +1166,7 @@ test('48. Full settlement returns zero unused tokens', async () => {
   const input = buildInput({ requestedMode: 'FIXED_FALLBACK', provider: undefined, model: undefined });
   const { deps } = makeDeps();
   const result = expectSettled(await runAIBillingOrchestration(input, deps));
-  assert.equal(result.billing.actualTokens, 2);
+  assert.equal(result.billing.actualTokens, expectedQuote(input).reservationTokens);
   assert.equal(result.billing.releasedTokens, 0);
 });
 
@@ -1179,7 +1178,7 @@ test('49. Zero actual price is passed unchanged to settlement', async () => {
   const result = expectSettled(await runAIBillingOrchestration(input, deps));
   assert.equal(result.billing.actualTokens, 0);
   assert.equal(calls.settleInputs[0].actualTokens, 0);
-  assert.equal(result.billing.releasedTokens, 2);
+  assert.equal(result.billing.releasedTokens, expectedQuote(input).reservationTokens);
 });
 
 test('50. Actual price above reservation is rejected before settlement', async () => {
@@ -1434,7 +1433,7 @@ test('70. Fixed mode does not switch to provider pricing because usage exists', 
   const { deps } = makeDeps();
   const result = expectSettled(await runAIBillingOrchestration(input, deps));
   assert.equal(result.billing.appliedMode, 'FIXED_FALLBACK');
-  assert.equal(result.billing.actualTokens, 2);
+  assert.equal(result.billing.actualTokens, expectedQuote(input).reservationTokens);
 });
 
 // --- Separation -------------------------------------------------------------

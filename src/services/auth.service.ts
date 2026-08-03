@@ -4,6 +4,7 @@ import { signAccessToken, generateOpaqueToken, getRefreshTokenExpiry } from '../
 import { sendVerificationEmail, sendPasswordResetEmail } from '../utils/email.js';
 import { addXp } from './xp.service.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { env } from '../config/env.js';
 
 export async function registerUser(data: {
   email: string;
@@ -54,7 +55,39 @@ export async function registerUser(data: {
 
   await addXp(user.id, 5, 'registration');
 
+  await grantSignupTokens(user.id);
+
   return user;
+}
+
+/**
+ * Free tier: create the user's token wallet and credit the configured signup
+ * grant (env SIGNUP_TOKEN_GRANT, default 20). Idempotent via the
+ * (source, referenceId) unique constraint.
+ */
+export async function grantSignupTokens(userId: string): Promise<void> {
+  const grant = env.SIGNUP_TOKEN_GRANT;
+  if (grant <= 0) return;
+
+  await prisma.$transaction(async (tx) => {
+    const wallet = await tx.tokenWallet.upsert({
+      where: { userId },
+      create: { userId, tokenBalance: grant, status: 'ACTIVE' },
+      update: {},
+    });
+    await tx.tokenTransaction.create({
+      data: {
+        walletId: wallet.id,
+        userId,
+        type: 'GRANT',
+        tokens: grant,
+        source: 'ADMIN',
+        paymentId: null,
+        referenceId: `signup-grant:${userId}`,
+        metadata: { reason: 'SIGNUP_GRANT' },
+      },
+    });
+  });
 }
 
 export async function verifyEmail(token: string) {

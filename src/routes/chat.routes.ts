@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
 import { AppError } from '../middleware/errorHandler.js';
-import { chat } from '../services/chat.service.js';
+import { chat, getConversations, getMessages, deleteConversation } from '../services/chat.service.js';
+import { userRateLimit } from '../utils/rate-limit.js';
 
 const router = Router();
 
@@ -31,7 +32,12 @@ function readIdempotencyKey(req: Request): string {
   return parsed.data;
 }
 
-router.post('/', authenticate, validate(chatSchema), async (req, res, next) => {
+router.post(
+  '/',
+  authenticate,
+  userRateLimit({ windowMs: 60 * 1000, max: 60 }),
+  validate(chatSchema),
+  async (req, res, next) => {
   try {
     const { message, lat, lon, conversation_id, base_currency, persona } = req.body;
     const businessRequestId = readIdempotencyKey(req);
@@ -45,6 +51,33 @@ router.post('/', authenticate, validate(chatSchema), async (req, res, next) => {
       persona,
     });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/conversations', authenticate, async (req, res, next) => {
+  try {
+    const convs = await getConversations(req.user!.userId);
+    res.json({ conversations: convs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/conversations/:id/messages', authenticate, async (req, res, next) => {
+  try {
+    const msgs = await getMessages(req.user!.userId, req.params.id as string);
+    res.json({ messages: msgs });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/conversations/:id', authenticate, async (req, res, next) => {
+  try {
+    await deleteConversation(req.user!.userId, req.params.id as string);
+    res.status(204).end();
   } catch (err) {
     next(err);
   }

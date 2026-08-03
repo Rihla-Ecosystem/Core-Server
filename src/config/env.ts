@@ -38,7 +38,7 @@ const envSchema = z.object({
     (value) => value === '' ? undefined : value,
     z.string().min(1).optional(),
   ),
-  EXCHANGE_RATES_API_URL: z.string().url().default('https://api.exchangerate.host/latest'),
+  EXCHANGE_RATES_API_URL: z.string().url().default('https://v6.exchangerate-api.com/v6'),
   EXCHANGE_RATES_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(900),
   WEATHER_SERVICE_URL: z.string().url().optional(),
   AIR_QUALITY_SERVICE_URL: z.string().url().optional(),
@@ -51,6 +51,12 @@ const envSchema = z.object({
   PAYMOB_REDIRECTION_URL: z.string().url(),
   PAYMOB_NOTIFICATION_URL: z.string().url(),
   PAYMOB_API_BASE_URL: z.string().url().default('https://accept.paymob.com'),
+
+  // Optional JSON override for AI pricing, e.g. '{"gemini-3.6-flash":{"input":0.3,"output":2.5}}'
+  AI_PRICING_JSON: z.string().optional(),
+
+  // Free tier: tokens granted to a new account on registration.
+  SIGNUP_TOKEN_GRANT: z.coerce.number().int().min(0).default(20),
 });
 
 export const env = envSchema.parse(process.env);

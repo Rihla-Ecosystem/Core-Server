@@ -8,6 +8,7 @@ import type {
   AIWalletPricingPolicy,
 } from '../src/types/ai-pricing.js';
 import type { BusinessTokenFeature } from '../src/config/business-token-features.js';
+import { getBusinessTokenCost } from '../src/config/business-token-features.js';
 import {
   AIUsagePricingError,
   calculateAIUsagePrice,
@@ -38,6 +39,8 @@ const BASE_POLICY: AIWalletPricingPolicy = {
   version: 'policy-v1',
 };
 
+const CHAT_COST = getBusinessTokenCost('AI_CHAT_QUERY');
+
 function price(overrides: Partial<AIUsagePricingInput> = {}): AIUsagePricingResult {
   return calculateAIUsagePrice({
     feature: 'AI_CHAT_QUERY',
@@ -61,8 +64,8 @@ test('1. Explicit FIXED_FALLBACK returns the existing feature fixed cost', () =>
     rateCard: [],
     walletPolicy: BASE_POLICY,
   });
-  assert.equal(result.walletTokens, 2);
-  assert.equal(result.fixedFallbackTokens, 2);
+  assert.equal(result.walletTokens, CHAT_COST);
+  assert.equal(result.fixedFallbackTokens, CHAT_COST);
   assert.equal(result.appliedMode, 'FIXED_FALLBACK');
 });
 
@@ -74,7 +77,7 @@ test('2. Explicit FIXED_FALLBACK does not require usage', () => {
     walletPolicy: BASE_POLICY,
   });
   assert.equal(result.appliedMode, 'FIXED_FALLBACK');
-  assert.equal(result.walletTokens, 2);
+  assert.equal(result.walletTokens, CHAT_COST);
 });
 
 test('3. Explicit FIXED_FALLBACK does not require a matching rate', () => {
@@ -85,7 +88,7 @@ test('3. Explicit FIXED_FALLBACK does not require a matching rate', () => {
     walletPolicy: BASE_POLICY,
   });
   assert.equal(result.appliedMode, 'FIXED_FALLBACK');
-  assert.equal(result.walletTokens, 2);
+  assert.equal(result.walletTokens, CHAT_COST);
 });
 
 test('4. Explicit FIXED_FALLBACK has no fallbackReason', () => {
@@ -113,7 +116,7 @@ test('5. Explicit FIXED_FALLBACK ignores invalid runtime usage', () => {
     walletPolicy: BASE_POLICY,
   });
   assert.equal(result.appliedMode, 'FIXED_FALLBACK');
-  assert.equal(result.walletTokens, 2);
+  assert.equal(result.walletTokens, CHAT_COST);
 });
 
 // --- Provider usage fallback ------------------------------------------------
@@ -122,15 +125,15 @@ test('6. Missing usage produces USAGE_MISSING', () => {
   const result = price();
   assert.equal(result.appliedMode, 'FIXED_FALLBACK');
   assert.equal(result.fallbackReason, 'USAGE_MISSING');
-  assert.equal(result.walletTokens, 2);
-  assert.equal(result.fixedFallbackTokens, 2);
+  assert.equal(result.walletTokens, CHAT_COST);
+  assert.equal(result.fixedFallbackTokens, CHAT_COST);
 });
 
 test('7. Empty provider produces USAGE_INVALID', () => {
   const result = price({ usage: usage({ provider: '   ' }) });
   assert.equal(result.appliedMode, 'FIXED_FALLBACK');
   assert.equal(result.fallbackReason, 'USAGE_INVALID');
-  assert.equal(result.walletTokens, 2);
+  assert.equal(result.walletTokens, CHAT_COST);
 });
 
 test('8. Empty model produces USAGE_INVALID', () => {
@@ -180,7 +183,7 @@ test('15. Missing exact provider/model rate produces RATE_CARD_NOT_FOUND', () =>
   const result = price({ usage: usage(), rateCard: [] });
   assert.equal(result.appliedMode, 'FIXED_FALLBACK');
   assert.equal(result.fallbackReason, 'RATE_CARD_NOT_FOUND');
-  assert.equal(result.walletTokens, 2);
+  assert.equal(result.walletTokens, CHAT_COST);
 });
 
 test('16. A different model rate is never used', () => {
@@ -551,7 +554,7 @@ test('55. The error type extends Error with a stable name', () => {
 test('56. Successful PROVIDER_USAGE reports the AI_CHAT_QUERY fixed cost', () => {
   const result = price({ usage: usage() });
   assert.equal(result.appliedMode, 'PROVIDER_USAGE');
-  assert.equal(result.fixedFallbackTokens, 2);
+  assert.equal(result.fixedFallbackTokens, CHAT_COST);
 });
 
 test('57. Successful PROVIDER_USAGE reports the AI_IMAGE_ANALYSIS fixed cost', () => {
@@ -566,7 +569,7 @@ test('57. Successful PROVIDER_USAGE reports the AI_IMAGE_ANALYSIS fixed cost', (
 test('58. Provider-usage walletTokens may differ from fixedFallbackTokens', () => {
   const result = price({ usage: usage() });
   assert.equal(result.walletTokens, 30);
-  assert.equal(result.fixedFallbackTokens, 2);
+  assert.equal(result.fixedFallbackTokens, CHAT_COST);
   assert.notEqual(result.walletTokens, result.fixedFallbackTokens);
 });
 

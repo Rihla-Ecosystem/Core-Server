@@ -50,6 +50,7 @@ function buildWrappedStream(
 
 export interface StreamChatResult {
   body: ReadableStream<Uint8Array>;
+  conversationId: string;
 }
 
 export async function streamChat(
@@ -76,11 +77,13 @@ export async function streamChat(
       travelStyle: true,
       interests: true,
       accommodationType: true,
+      role: { select: { name: true } },
     },
   });
   if (!user) throw new AppError(404, 'User not found');
 
   const charge = await beginBusinessTokenCharge({
+    user,
     userId,
     feature: 'AI_CHAT_QUERY',
     source: 'CHAT',
@@ -107,6 +110,13 @@ export async function streamChat(
     }
 
     let conversationId = options?.conversationId;
+    if (conversationId) {
+      const existing = await prisma.conversation.findFirst({
+        where: { id: conversationId, userId },
+        select: { id: true },
+      });
+      if (!existing) conversationId = undefined;
+    }
     if (!conversationId) {
       const conv = await prisma.conversation.create({
         data: { userId, title: message.slice(0, 100) },
@@ -122,6 +132,7 @@ export async function streamChat(
       message,
       conversation_id: conversationId,
       persona: options?.persona ?? 'auto',
+      user_id: userId,
       user: {
         display_name: user.displayName,
         gender: user.gender,
@@ -159,6 +170,7 @@ export async function streamChat(
 
     return {
       body: buildWrappedStream(charge, aiResponse.body),
+      conversationId: conversationId!,
     };
   } catch (err) {
     await refundBusinessTokenCharge(charge, err);

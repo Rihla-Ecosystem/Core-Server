@@ -41,6 +41,8 @@ import {
   getBusinessTokenCost,
 } from '../src/config/business-token-features.js';
 
+const CHAT_COST = getBusinessTokenCost('AI_CHAT_QUERY');
+
 describe('Token Reservation Service', () => {
   before(async () => {
     await prisma.role.upsert({
@@ -163,11 +165,11 @@ describe('Token Reservation Service', () => {
       assert.equal(result.userId, userId);
       assert.equal(result.feature, 'AI_CHAT_QUERY');
       assert.equal(result.source, 'CHAT');
-      assert.equal(result.tokens, 2);
+      assert.equal(result.tokens, CHAT_COST);
       assert.equal(result.pricingVersion, BUSINESS_TOKEN_PRICING_VERSION);
       assert.equal(result.status, TokenReservationStatus.PENDING);
-      assert.equal(result.availableBalance, 8);
-      assert.equal(result.reservedBalance, 2);
+      assert.equal(result.availableBalance, 10 - CHAT_COST);
+      assert.equal(result.reservedBalance, CHAT_COST);
       assert.equal(result.totalBalance, 10);
       assert.equal(result.idempotentReplay, false);
       assert.ok(result.expiresAt.getTime() > Date.now());
@@ -181,7 +183,7 @@ describe('Token Reservation Service', () => {
       assert.equal(reservation.userId, userId);
       assert.equal(reservation.feature, 'AI_CHAT_QUERY');
       assert.equal(reservation.source, TokenTransactionSource.CHAT);
-      assert.equal(reservation.tokens, 2);
+      assert.equal(reservation.tokens, CHAT_COST);
       assert.equal(reservation.pricingVersion, BUSINESS_TOKEN_PRICING_VERSION);
       assert.equal(reservation.idempotencyKey, input.idempotencyKey);
       assert.equal(reservation.referenceId, `${userId}:AI_CHAT_QUERY:${input.idempotencyKey}`);
@@ -192,15 +194,15 @@ describe('Token Reservation Service', () => {
       assert.deepEqual(reservation.metadata, { requestId: 'abc' });
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
-      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
+      assert.equal(wallet.reservedBalance, CHAT_COST);
     } finally {
       await cleanupUser(userId);
     }
   });
 
   test('2. Insufficient balance rejects and reserves nothing', async () => {
-    const { userId } = await createUserWithWallet(1);
+    const { userId } = await createUserWithWallet(CHAT_COST - 1);
 
     try {
       await expectAppError(
@@ -210,7 +212,7 @@ describe('Token Reservation Service', () => {
       );
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 1);
+      assert.equal(wallet.tokenBalance, CHAT_COST - 1);
       assert.equal(wallet.reservedBalance, 0);
       assert.equal(await prisma.tokenReservation.count({ where: { userId } }), 0);
     } finally {
@@ -278,8 +280,8 @@ describe('Token Reservation Service', () => {
       assert.equal(second.tokens, first.tokens);
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
-      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
+      assert.equal(wallet.reservedBalance, CHAT_COST);
       assert.equal(await prisma.tokenReservation.count({ where: { userId } }), 1);
     } finally {
       await cleanupUser(userId);
@@ -304,8 +306,8 @@ describe('Token Reservation Service', () => {
       assert.equal(originals.length, 1);
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
-      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
+      assert.equal(wallet.reservedBalance, CHAT_COST);
       assert.equal(await prisma.tokenReservation.count({ where: { userId } }), 1);
     } finally {
       await cleanupUser(userId);
@@ -313,7 +315,7 @@ describe('Token Reservation Service', () => {
   });
 
   test('7. Concurrent distinct requests cannot overspend the available balance', async () => {
-    const { userId } = await createUserWithWallet(2);
+    const { userId } = await createUserWithWallet(CHAT_COST);
 
     try {
       const [first, second] = await Promise.allSettled([
@@ -334,7 +336,7 @@ describe('Token Reservation Service', () => {
       const wallet = await getWallet(userId);
       assert.ok(wallet.tokenBalance >= 0);
       assert.equal(wallet.tokenBalance, 0);
-      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(wallet.reservedBalance, CHAT_COST);
       assert.equal(await prisma.tokenReservation.count({ where: { userId } }), 1);
     } finally {
       await cleanupUser(userId);
@@ -354,7 +356,7 @@ describe('Token Reservation Service', () => {
       assert.equal(settled.reservationId, reserved.reservationId);
       assert.equal(settled.referenceId, reserved.referenceId);
       assert.equal(settled.status, TokenReservationStatus.COMPLETED);
-      assert.equal(settled.tokens, 2);
+      assert.equal(settled.tokens, CHAT_COST);
       assert.equal(settled.feature, 'AI_CHAT_QUERY');
       assert.equal(settled.source, 'CHAT');
       assert.equal(settled.pricingVersion, BUSINESS_TOKEN_PRICING_VERSION);
@@ -375,7 +377,7 @@ describe('Token Reservation Service', () => {
       const consume = transactions[0];
       assert.equal(consume.walletId, walletId);
       assert.equal(consume.userId, userId);
-      assert.equal(consume.tokens, 2);
+      assert.equal(consume.tokens, CHAT_COST);
       assert.equal(consume.source, TokenTransactionSource.CHAT);
       assert.equal(consume.referenceId, `${reserved.referenceId}:settle`);
       assert.deepEqual(consume.metadata, {
@@ -386,7 +388,7 @@ describe('Token Reservation Service', () => {
       });
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
       assert.equal(wallet.reservedBalance, 0);
     } finally {
       await cleanupUser(userId);
@@ -421,7 +423,7 @@ describe('Token Reservation Service', () => {
       assert.notEqual(consume.id, reserved.reservationId);
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
       assert.equal(wallet.reservedBalance, 0);
     } finally {
       await cleanupUser(userId);
@@ -580,7 +582,7 @@ describe('Token Reservation Service', () => {
 
         const wallet = await getWallet(userId);
         assert.equal(wallet.status, status);
-        assert.equal(wallet.tokenBalance, 8);
+        assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
         assert.equal(wallet.reservedBalance, 0);
       } finally {
         await cleanupUser(userId);
@@ -706,7 +708,7 @@ describe('Token Reservation Service', () => {
 
       await prisma.tokenWallet.update({
         where: { userId },
-        data: { reservedBalance: 1 },
+        data: { reservedBalance: CHAT_COST - 1 },
       });
 
       await expectAppError(
@@ -727,7 +729,7 @@ describe('Token Reservation Service', () => {
 
       await prisma.tokenWallet.update({
         where: { userId },
-        data: { reservedBalance: 1 },
+        data: { reservedBalance: CHAT_COST - 1 },
       });
 
       await expectAppError(
@@ -746,8 +748,8 @@ describe('Token Reservation Service', () => {
       assert.equal(await countConsumeTransactions(userId), 0);
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
-      assert.equal(wallet.reservedBalance, 1);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
+      assert.equal(wallet.reservedBalance, CHAT_COST - 1);
     } finally {
       await cleanupUser(userId);
     }
@@ -761,7 +763,7 @@ describe('Token Reservation Service', () => {
 
       await prisma.tokenWallet.update({
         where: { userId },
-        data: { reservedBalance: 1 },
+        data: { reservedBalance: CHAT_COST - 1 },
       });
 
       await expectAppError(
@@ -785,7 +787,7 @@ describe('Token Reservation Service', () => {
 
       await prisma.tokenWallet.update({
         where: { userId },
-        data: { reservedBalance: 1 },
+        data: { reservedBalance: CHAT_COST - 1 },
       });
 
       await expectAppError(
@@ -805,8 +807,8 @@ describe('Token Reservation Service', () => {
       assert.equal(reservation.releasedAt, null);
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
-      assert.equal(wallet.reservedBalance, 1);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
+      assert.equal(wallet.reservedBalance, CHAT_COST - 1);
       assert.equal(await countConsumeTransactions(userId), 0);
     } finally {
       await cleanupUser(userId);
@@ -853,8 +855,8 @@ describe('Token Reservation Service', () => {
       );
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
-      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
+      assert.equal(wallet.reservedBalance, CHAT_COST);
       assert.equal(await countConsumeTransactions(userId), 0);
     } finally {
       await cleanupUser(userId);
@@ -964,12 +966,12 @@ describe('Token Reservation Service', () => {
 
       const settled = await settleBusinessTokenReservationForAmount({
         reservationId: reserved.reservationId,
-        actualTokens: 2,
+        actualTokens: CHAT_COST,
       });
 
       assert.equal(settled.status, TokenReservationStatus.COMPLETED);
-      assert.equal(settled.tokens, 2);
-      assert.equal(settled.actualTokens, 2);
+      assert.equal(settled.tokens, CHAT_COST);
+      assert.equal(settled.actualTokens, CHAT_COST);
       assert.equal(settled.releasedTokens, 0);
       assert.equal(settled.idempotentReplay, false);
       assert.ok(settled.consumeTransactionId);
@@ -979,17 +981,17 @@ describe('Token Reservation Service', () => {
       });
       assert.ok(reservation);
       assert.equal(reservation.status, TokenReservationStatus.COMPLETED);
-      assert.equal(reservation.tokens, 2);
+      assert.equal(reservation.tokens, CHAT_COST);
 
       const transactions = await prisma.tokenTransaction.findMany({
         where: { userId, type: TokenTransactionType.CONSUME },
       });
       assert.equal(transactions.length, 1);
       assert.equal(transactions[0].walletId, walletId);
-      assert.equal(transactions[0].tokens, 2);
+      assert.equal(transactions[0].tokens, CHAT_COST);
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
       assert.equal(wallet.reservedBalance, 0);
     } finally {
       await cleanupUser(userId);
@@ -1003,13 +1005,13 @@ describe('Token Reservation Service', () => {
       const reserved = await reserveBusinessTokens(buildInput(userId));
       await settleBusinessTokenReservationForAmount({
         reservationId: reserved.reservationId,
-        actualTokens: 2,
+        actualTokens: CHAT_COST,
       });
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
       assert.equal(wallet.reservedBalance, 0);
-      assert.equal(wallet.tokenBalance + wallet.reservedBalance, 8);
+      assert.equal(wallet.tokenBalance + wallet.reservedBalance, 10 - CHAT_COST);
       assert.equal(await countConsumeTransactions(userId), 1);
     } finally {
       await cleanupUser(userId);
@@ -1027,9 +1029,9 @@ describe('Token Reservation Service', () => {
         actualTokens: 1,
       });
 
-      assert.equal(settled.tokens, 2);
+      assert.equal(settled.tokens, CHAT_COST);
       assert.equal(settled.actualTokens, 1);
-      assert.equal(settled.releasedTokens, 1);
+      assert.equal(settled.releasedTokens, 0);
       assert.equal(settled.status, TokenReservationStatus.COMPLETED);
       assert.equal(settled.idempotentReplay, false);
 
@@ -1037,7 +1039,7 @@ describe('Token Reservation Service', () => {
         where: { id: reserved.reservationId },
       });
       assert.ok(reservation);
-      assert.equal(reservation.tokens, 2);
+      assert.equal(reservation.tokens, CHAT_COST);
 
       const transactions = await prisma.tokenTransaction.findMany({
         where: { userId, type: TokenTransactionType.CONSUME },
@@ -1084,9 +1086,9 @@ describe('Token Reservation Service', () => {
       });
 
       assert.equal(settled.status, TokenReservationStatus.COMPLETED);
-      assert.equal(settled.tokens, 2);
+      assert.equal(settled.tokens, CHAT_COST);
       assert.equal(settled.actualTokens, 0);
-      assert.equal(settled.releasedTokens, 2);
+      assert.equal(settled.releasedTokens, CHAT_COST);
       assert.equal(settled.idempotentReplay, false);
 
       const reservation = await prisma.tokenReservation.findUnique({
@@ -1095,7 +1097,7 @@ describe('Token Reservation Service', () => {
       assert.ok(reservation);
       assert.equal(reservation.status, TokenReservationStatus.COMPLETED);
       assert.equal(reservation.releasedAt, null);
-      assert.equal(reservation.tokens, 2);
+      assert.equal(reservation.tokens, CHAT_COST);
 
       const transactions = await prisma.tokenTransaction.findMany({
         where: { userId, type: TokenTransactionType.CONSUME },
@@ -1189,8 +1191,8 @@ describe('Token Reservation Service', () => {
       assert.equal(reservation.settledAt, null);
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
-      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
+      assert.equal(wallet.reservedBalance, CHAT_COST);
       assert.equal(await countConsumeTransactions(userId), 0);
     } finally {
       await cleanupUser(userId);
@@ -1213,8 +1215,8 @@ describe('Token Reservation Service', () => {
       );
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
-      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
+      assert.equal(wallet.reservedBalance, CHAT_COST);
       assert.equal(wallet.tokenBalance + wallet.reservedBalance, 10);
     } finally {
       await cleanupUser(userId);
@@ -1240,7 +1242,7 @@ describe('Token Reservation Service', () => {
       assert.equal(second.idempotentReplay, true);
       assert.equal(second.consumeTransactionId, first.consumeTransactionId);
       assert.equal(second.actualTokens, 1);
-      assert.equal(second.releasedTokens, 1);
+      assert.equal(second.releasedTokens, 0);
 
       const wallet = await getWallet(userId);
       assert.equal(wallet.tokenBalance, 9);
@@ -1368,7 +1370,7 @@ describe('Token Reservation Service', () => {
 
       await prisma.tokenWallet.update({
         where: { userId },
-        data: { reservedBalance: 1 },
+        data: { reservedBalance: CHAT_COST - 1 },
       });
 
       await expectAppError(
@@ -1392,7 +1394,7 @@ describe('Token Reservation Service', () => {
 
       await prisma.tokenWallet.update({
         where: { userId },
-        data: { reservedBalance: 1 },
+        data: { reservedBalance: CHAT_COST - 1 },
       });
 
       await expectAppError(
@@ -1412,8 +1414,8 @@ describe('Token Reservation Service', () => {
       assert.equal(reservation.settledAt, null);
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
-      assert.equal(wallet.reservedBalance, 1);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
+      assert.equal(wallet.reservedBalance, CHAT_COST - 1);
       assert.equal(await countConsumeTransactions(userId), 0);
     } finally {
       await cleanupUser(userId);
@@ -1525,7 +1527,7 @@ describe('Token Reservation Service', () => {
   });
 
   test('50. Balances never become negative after variable settlement', async () => {
-    const { userId } = await createUserWithWallet(2);
+    const { userId } = await createUserWithWallet(CHAT_COST);
 
     try {
       const reserved = await reserveBusinessTokens(buildInput(userId));
@@ -1536,13 +1538,13 @@ describe('Token Reservation Service', () => {
       });
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 2);
+      assert.equal(wallet.tokenBalance, CHAT_COST);
       assert.equal(wallet.reservedBalance, 0);
 
       const second = await reserveBusinessTokens(buildInput(userId));
       await settleBusinessTokenReservationForAmount({
         reservationId: second.reservationId,
-        actualTokens: 2,
+        actualTokens: CHAT_COST,
       });
 
       const finalWallet = await getWallet(userId);
@@ -1760,7 +1762,9 @@ describe('Token Reservation Service', () => {
         assert.equal(settled.releasedTokens, settled.tokens - settled.actualTokens);
       };
 
-      const partial = await reserveBusinessTokens(buildInput(userId));
+      const partial = await reserveBusinessTokensForAmount(
+        buildAmountInput(userId, { tokens: 2 }),
+      );
       const partialSettled = await settleBusinessTokenReservationForAmount({
         reservationId: partial.reservationId,
         actualTokens: 1,
@@ -1774,14 +1778,18 @@ describe('Token Reservation Service', () => {
       assert.equal(partialReplay.idempotentReplay, true);
       assertInvariant(partialReplay);
 
-      const full = await reserveBusinessTokens(buildInput(userId));
+      const full = await reserveBusinessTokensForAmount(
+        buildAmountInput(userId, { tokens: 2 }),
+      );
       const fullSettled = await settleBusinessTokenReservationForAmount({
         reservationId: full.reservationId,
         actualTokens: 2,
       });
       assertInvariant(fullSettled);
 
-      const zero = await reserveBusinessTokens(buildInput(userId));
+      const zero = await reserveBusinessTokensForAmount(
+        buildAmountInput(userId, { tokens: 2 }),
+      );
       const zeroSettled = await settleBusinessTokenReservationForAmount({
         reservationId: zero.reservationId,
         actualTokens: 0,
@@ -1817,8 +1825,8 @@ describe('Token Reservation Service', () => {
       assert.equal(reservation.settledAt, null);
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
-      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
+      assert.equal(wallet.reservedBalance, CHAT_COST);
       assert.equal(await countConsumeTransactions(userId), 0);
     } finally {
       await cleanupUser(userId);
@@ -1853,8 +1861,8 @@ describe('Token Reservation Service', () => {
       assert.equal(reservation.settledAt, null);
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
-      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
+      assert.equal(wallet.reservedBalance, CHAT_COST);
       assert.equal(await countConsumeTransactions(userId), 0);
     } finally {
       await cleanupUser(userId);
@@ -1890,15 +1898,15 @@ describe('Token Reservation Service', () => {
       assert.equal(reservation.tokens, -1);
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
-      assert.equal(wallet.reservedBalance, 2);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
+      assert.equal(wallet.reservedBalance, CHAT_COST);
       assert.equal(await countConsumeTransactions(userId), 0);
     } finally {
       await cleanupUser(userId);
     }
   });
 
-  test('59. Normal backward-compatible full settlement still works with A = R', async () => {
+  test('59. Normal backward-compatible full territory still works with A = R', async () => {
     const { userId, walletId } = await createUserWithWallet(10);
 
     try {
@@ -1908,8 +1916,8 @@ describe('Token Reservation Service', () => {
         reservationId: reserved.reservationId,
       });
 
-      assert.equal(settled.tokens, 2);
-      assert.equal(settled.actualTokens, 2);
+      assert.equal(settled.tokens, CHAT_COST);
+      assert.equal(settled.actualTokens, CHAT_COST);
       assert.equal(settled.releasedTokens, 0);
       assert.equal(settled.status, TokenReservationStatus.COMPLETED);
       assert.equal(settled.idempotentReplay, false);
@@ -1919,18 +1927,18 @@ describe('Token Reservation Service', () => {
       });
       assert.ok(consume);
       assert.equal(consume.walletId, walletId);
-      assert.equal(consume.tokens, 2);
+      assert.equal(consume.tokens, CHAT_COST);
       assert.equal(consume.source, TokenTransactionSource.CHAT);
 
       const wallet = await getWallet(userId);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 10 - CHAT_COST);
       assert.equal(wallet.reservedBalance, 0);
 
       const replay = await settleBusinessTokenReservation({
         reservationId: reserved.reservationId,
       });
       assert.equal(replay.idempotentReplay, true);
-      assert.equal(replay.actualTokens, 2);
+      assert.equal(replay.actualTokens, CHAT_COST);
       assert.equal(replay.releasedTokens, 0);
       assert.equal(replay.consumeTransactionId, settled.consumeTransactionId);
       assert.equal(await countConsumeTransactions(userId), 1);
@@ -2331,12 +2339,12 @@ describe('Token Reservation Service', () => {
 
     try {
       const reserved = await reserveBusinessTokens(buildInput(userId));
-      assert.equal(reserved.tokens, 2);
+      assert.equal(reserved.tokens, CHAT_COST);
       const reservation = await prisma.tokenReservation.findUnique({
         where: { id: reserved.reservationId },
       });
       assert.ok(reservation);
-      assert.equal(reservation.tokens, 2);
+      assert.equal(reservation.tokens, CHAT_COST);
     } finally {
       await cleanupUser(userId);
     }
@@ -2369,12 +2377,12 @@ describe('Token Reservation Service', () => {
       assert.equal(reserved.userId, userId);
       assert.equal(reserved.feature, 'AI_CHAT_QUERY');
       assert.equal(reserved.source, 'CHAT');
-      assert.equal(reserved.tokens, 2);
+      assert.equal(reserved.tokens, CHAT_COST);
       assert.equal(reserved.pricingVersion, BUSINESS_TOKEN_PRICING_VERSION);
       assert.equal(reserved.status, TokenReservationStatus.PENDING);
       assert.equal(reserved.idempotentReplay, false);
-      assert.equal(reserved.availableBalance, 8);
-      assert.equal(reserved.reservedBalance, 2);
+      assert.equal(reserved.availableBalance, 10 - CHAT_COST);
+      assert.equal(reserved.reservedBalance, CHAT_COST);
       assert.ok(reserved.expiresAt.getTime() > Date.now());
     } finally {
       await cleanupUser(userId);

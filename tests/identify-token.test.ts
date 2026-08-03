@@ -323,7 +323,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       const res = await identifyRequest(token, key);
       assert.equal(res.status, 502);
       const body = await res.json();
-      assert.equal(body.error, 'AI identification service unavailable');
+      assert.equal(body.error, 'AI identification service unavailable: boom');
 
       assert.equal(await getBalance(userId), 10);
 
@@ -477,7 +477,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       const res = await pending;
       assert.equal(res.status, 502);
       const body = await res.json();
-      assert.equal(body.error, 'AI identification service unavailable');
+      assert.equal(body.error, 'AI identification service unavailable: boom');
 
       assert.equal(
         await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.REFUND } }),

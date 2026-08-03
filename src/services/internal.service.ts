@@ -3,6 +3,7 @@ import { fetchEnvContext } from './env.service.js';
 import { fetchFullGeoContext } from './geo.service.js';
 import { fetchSafetyContext } from './risk.service.js';
 import { getCurrencyInfo, getExchangeRates, isSupportedCurrency } from './currency.service.js';
+import { comparePassword } from '../utils/hash.js';
 
 export async function getFullGeoContext(lat: number, lon: number, authorization?: string) {
   return fetchFullGeoContext(lat, lon, undefined, undefined, authorization);
@@ -53,6 +54,33 @@ export async function getJourneyProgress(userId: string) {
       })),
     };
   });
+}
+
+/**
+ * Verify app-admin credentials for the GeoContext SQLAdmin dashboard.
+ * No tokens are minted and no login side effects occur — this is a pure
+ * credential + role check against the Core-Server user store.
+ */
+export async function verifyAdminLogin(email: string, password: string) {
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: {
+      id: true,
+      displayName: true,
+      passwordHash: true,
+      isBanned: true,
+      isDeleted: true,
+      isActive: true,
+      role: { select: { name: true } },
+    },
+  });
+
+  if (!user || user.isBanned || user.isDeleted || !user.isActive) return { ok: false };
+  if (user.role?.name !== 'admin') return { ok: false };
+  if (!user.passwordHash) return { ok: false };
+  if (!(await comparePassword(password, user.passwordHash))) return { ok: false };
+
+  return { ok: true, userId: user.id, displayName: user.displayName };
 }
 
 export async function getUserContext(userId: string) {

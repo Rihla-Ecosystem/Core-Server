@@ -7,12 +7,14 @@ import {
   getFullSafetyContext,
   getUserContext,
   getJourneyProgress,
+  verifyAdminLogin,
 } from '../services/internal.service.js';
 
 const router = Router();
 const locationSchema = z.object({ lat: z.coerce.number().min(-90).max(90), lon: z.coerce.number().min(-180).max(180) });
 const userSchema = z.object({ user_id: z.string().uuid() });
 const combinedSchema = userSchema.merge(locationSchema.partial()).extend({ base_currency: z.string().optional() });
+const adminLoginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
 
 router.use(requireInternalApiKey);
 
@@ -30,6 +32,9 @@ router.get('/journeys', async (req, res, next) => {
 });
 router.get('/combined-context', async (req, res, next) => {
   try { const input = combinedSchema.parse(req.query); res.json(await getCombinedContext(input.user_id, input.lat, input.lon, req.headers.authorization, input.base_currency)); } catch (e) { next(e); }
+});
+router.post('/verify-admin-login', async (req, res, next) => {
+  try { const { email, password } = adminLoginSchema.parse(req.body); res.json(await verifyAdminLogin(email, password)); } catch (e) { next(e); }
 });
 
 export default router;

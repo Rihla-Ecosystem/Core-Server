@@ -261,6 +261,7 @@ enum TokenTransactionSource {
   FILE_UPLOAD
   OCR
   VOICE
+  ITINERARY
   PURCHASE
   ADMIN
 }
@@ -358,6 +359,7 @@ model User {
   tokenTransactions       TokenTransaction[]
   tokenReservations       TokenReservation[]
   journeyProgress         UserJourney[]
+  aiUsageLogs             AiUsageLog[]
 
   @@map("users")
 }
@@ -604,4 +606,24 @@ model UserJourneyStep {
   @@unique([userJourneyId, stepId])
   @@index([userJourneyId])
   @@map("user_journey_steps")
+}
+
+model AiUsageLog {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  conversationId String?   @map("conversation_id") @db.Uuid
+  source         String    @default("chat") @db.VarChar(20)
+  model          String?   @db.VarChar(100)
+  inputTokens    Int       @default(0) @map("input_tokens")
+  outputTokens   Int       @default(0) @map("output_tokens")
+  totalTokens    Int       @default(0) @map("total_tokens")
+  cost           Decimal   @default(0) @db.Decimal(12, 6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@index([source])
+  @@map("ai_usage_logs")
 }

@@ -17,9 +17,12 @@ import { AppError } from '../src/middleware/errorHandler.js';
 import { Gender, TokenTransactionType, TokenTransactionSource, WalletStatus } from '@prisma/client';
 import {
   consumeBusinessTokens,
+  consumeBusinessTokensOrExempt,
   isBusinessConsumptionSource,
   reverseBusinessTokens,
+  reverseBusinessTokensOrExempt,
 } from '../src/services/business-token-consumption.service.js';
+import { isTokenExemptUser, type TokenExemptUser } from '../src/utils/token-exempt.js';
 import type {
   ConsumeBusinessTokensInput,
   BusinessConsumptionSource,
@@ -131,8 +134,8 @@ describe('Business Token Consumption Service', () => {
       assert.equal(result.walletId, walletId);
       assert.equal(result.feature, 'AI_CHAT_QUERY');
       assert.equal(result.source, 'CHAT');
-      assert.equal(result.tokensConsumed, 2);
-      assert.equal(result.walletBalance, 8);
+      assert.equal(result.tokensConsumed, 1);
+      assert.equal(result.walletBalance, 9);
       assert.equal(result.idempotentReplay, false);
 
       const transaction = await prisma.tokenTransaction.findUnique({
@@ -142,7 +145,7 @@ describe('Business Token Consumption Service', () => {
       assert.equal(transaction.walletId, walletId);
       assert.equal(transaction.userId, userId);
       assert.equal(transaction.type, TokenTransactionType.CONSUME);
-      assert.equal(transaction.tokens, 2);
+      assert.equal(transaction.tokens, 1);
       assert.equal(transaction.source, TokenTransactionSource.CHAT);
       assert.equal(transaction.paymentId, null);
       assert.equal(
@@ -156,7 +159,7 @@ describe('Business Token Consumption Service', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 9);
     } finally {
       await prisma.tokenTransaction.deleteMany({ where: { userId } });
       await prisma.tokenWallet.deleteMany({ where: { userId } });
@@ -196,12 +199,12 @@ describe('Business Token Consumption Service', () => {
       assert.equal(second.transactionId, first.transactionId);
       assert.equal(second.walletId, first.walletId);
       assert.equal(second.tokensConsumed, first.tokensConsumed);
-      assert.equal(second.walletBalance, 8);
+      assert.equal(second.walletBalance, 9);
       assert.equal(await countConsumeTransactions(userId), 1);
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 9);
     } finally {
       await prisma.tokenTransaction.deleteMany({ where: { userId } });
       await prisma.tokenWallet.deleteMany({ where: { userId } });
@@ -223,7 +226,7 @@ describe('Business Token Consumption Service', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 6);
+      assert.equal(wallet.tokenBalance, 8);
     } finally {
       await prisma.tokenTransaction.deleteMany({ where: { userId } });
       await prisma.tokenWallet.deleteMany({ where: { userId } });
@@ -232,7 +235,7 @@ describe('Business Token Consumption Service', () => {
   });
 
   test('5. Insufficient balance rejects and deducts nothing', async () => {
-    const { userId, walletId } = await createUserWithWallet(1);
+    const { userId, walletId } = await createUserWithWallet(0);
 
     try {
       await expectAppError(
@@ -243,7 +246,7 @@ describe('Business Token Consumption Service', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 1);
+      assert.equal(wallet.tokenBalance, 0);
       assert.equal(await countConsumeTransactions(userId), 0);
     } finally {
       await prisma.tokenTransaction.deleteMany({ where: { userId } });
@@ -321,13 +324,13 @@ describe('Business Token Consumption Service', () => {
   });
 
   test('9. Exact-balance consumption succeeds with zero remaining', async () => {
-    const { userId } = await createUserWithWallet(2);
+    const { userId } = await createUserWithWallet(1);
 
     try {
       const result = await consumeBusinessTokens(buildInput(userId));
 
       assert.equal(result.idempotentReplay, false);
-      assert.equal(result.tokensConsumed, 2);
+      assert.equal(result.tokensConsumed, 1);
       assert.equal(result.walletBalance, 0);
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
@@ -342,7 +345,7 @@ describe('Business Token Consumption Service', () => {
   });
 
   test('10. Concurrent distinct requests cannot overspend', async () => {
-    const { userId } = await createUserWithWallet(2);
+    const { userId } = await createUserWithWallet(1);
 
     try {
       const first = consumeBusinessTokens(buildInput(userId));
@@ -397,7 +400,7 @@ describe('Business Token Consumption Service', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 9);
       assert.equal(await countConsumeTransactions(userId), 1);
     } finally {
       await prisma.tokenTransaction.deleteMany({ where: { userId } });
@@ -495,7 +498,7 @@ describe('Business Token Consumption Service', () => {
       const consumed = await consumeBusinessTokens(
         buildInput(userId, { businessRequestId }),
       );
-      assert.equal(consumed.walletBalance, 8);
+      assert.equal(consumed.walletBalance, 9);
 
       const refunded = await reverseBusinessTokens({
         userId,
@@ -507,7 +510,7 @@ describe('Business Token Consumption Service', () => {
       assert.equal(refunded.walletId, walletId);
       assert.equal(refunded.feature, 'AI_CHAT_QUERY');
       assert.equal(refunded.source, 'CHAT');
-      assert.equal(refunded.tokensRefunded, 2);
+      assert.equal(refunded.tokensRefunded, 1);
       assert.equal(refunded.walletBalance, 10);
       assert.equal(refunded.idempotentReplay, false);
 
@@ -518,7 +521,7 @@ describe('Business Token Consumption Service', () => {
       assert.equal(transaction.walletId, walletId);
       assert.equal(transaction.userId, userId);
       assert.equal(transaction.type, TokenTransactionType.REFUND);
-      assert.equal(transaction.tokens, 2);
+      assert.equal(transaction.tokens, 1);
       assert.equal(transaction.source, TokenTransactionSource.CHAT);
       assert.equal(transaction.paymentId, null);
       assert.equal(
@@ -622,7 +625,7 @@ describe('Business Token Consumption Service', () => {
           businessRequestId,
         });
 
-        assert.equal(refunded.tokensRefunded, 2);
+        assert.equal(refunded.tokensRefunded, 1);
         assert.equal(refunded.walletBalance, 10);
 
         const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
@@ -814,6 +817,95 @@ describe('Business Token Consumption Service', () => {
       assert.equal(logs[0][0], '[tokens] compensation_failed');
     } finally {
       console.error = originalConsoleError;
+      await prisma.tokenTransaction.deleteMany({ where: { userId } });
+      await prisma.tokenWallet.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('25. isTokenExemptUser recognises DB- and JWT-shaped admin principals', async () => {
+    const dbAdmin: TokenExemptUser = { role: { name: 'admin' } };
+    const jwtAdmin: TokenExemptUser = { role: 'admin' };
+    const dbUser: TokenExemptUser = { role: { name: 'USER' } };
+    const jwtUser: TokenExemptUser = { role: 'USER' };
+    const noRole: TokenExemptUser = {};
+    const nullUser: TokenExemptUser | null = null;
+
+    assert.equal(isTokenExemptUser(dbAdmin), true);
+    assert.equal(isTokenExemptUser(jwtAdmin), true);
+    assert.equal(isTokenExemptUser(dbUser), false);
+    assert.equal(isTokenExemptUser(jwtUser), false);
+    assert.equal(isTokenExemptUser(noRole), false);
+    assert.equal(isTokenExemptUser(nullUser), false);
+  });
+
+  test('26. Admin-exempt consumption debits nothing and writes nothing', async () => {
+    const { userId } = await createUserWithWallet(10);
+    const adminUser: TokenExemptUser = { role: { name: 'admin' } };
+    const callsBefore = await countConsumeTransactions(userId);
+
+    try {
+      const result = await consumeBusinessTokensOrExempt(
+        adminUser,
+        buildInput(userId),
+      );
+
+      assert.equal(result.exempt, true);
+      assert.equal(result.tokensConsumed, 0);
+      assert.equal(result.idempotentReplay, false);
+      assert.equal(await countConsumeTransactions(userId), callsBefore);
+
+      const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+      assert.ok(wallet);
+      assert.equal(wallet.tokenBalance, 10);
+    } finally {
+      await prisma.tokenTransaction.deleteMany({ where: { userId } });
+      await prisma.tokenWallet.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('27. Non-admin consumption through the exempt wrapper still debits', async () => {
+    const { userId } = await createUserWithWallet(10);
+    const regularUser: TokenExemptUser = { role: { name: 'USER' } };
+
+    try {
+      const result = await consumeBusinessTokensOrExempt(
+        regularUser,
+        buildInput(userId),
+      );
+
+      assert.equal(result.exempt, false);
+      assert.equal(result.tokensConsumed, 1);
+      assert.equal(result.walletBalance, 9);
+
+      const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+      assert.ok(wallet);
+      assert.equal(wallet.tokenBalance, 9);
+    } finally {
+      await prisma.tokenTransaction.deleteMany({ where: { userId } });
+      await prisma.tokenWallet.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('28. Admin-exempt refund is a no-op even with no consume record', async () => {
+    const { userId } = await createUserWithWallet(10);
+    const adminUser: TokenExemptUser = { role: 'admin' };
+
+    try {
+      await reverseBusinessTokensOrExempt(
+        adminUser,
+        buildInput(userId),
+      );
+
+      assert.equal(await countConsumeTransactions(userId), 0);
+      assert.equal(await countRefundTransactions(userId), 0);
+
+      const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+      assert.ok(wallet);
+      assert.equal(wallet.tokenBalance, 10);
+    } finally {
       await prisma.tokenTransaction.deleteMany({ where: { userId } });
       await prisma.tokenWallet.deleteMany({ where: { userId } });
       await prisma.user.deleteMany({ where: { id: userId } });

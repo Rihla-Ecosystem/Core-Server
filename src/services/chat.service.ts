@@ -8,6 +8,7 @@ import { getExchangeRates, isSupportedCurrency } from './currency.service.js';
 import { getJourneyProgress } from './internal.service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { executeWithBusinessTokenCharge } from './tokenized-service-execution.service.js';
+import { recordAiUsage } from './ai-usage.service.js';
 
 export type ChatPersona = 'auto' | 'tour_guide' | 'local_expert' | 'safety_guru';
 
@@ -36,11 +37,13 @@ export async function chat(
       travelStyle: true,
       interests: true,
       accommodationType: true,
+      role: { select: { name: true } },
     },
   });
   if (!user) throw new AppError(404, 'User not found');
 
   return executeWithBusinessTokenCharge({
+    user,
     userId,
     feature: 'AI_CHAT_QUERY',
     source: 'CHAT',
@@ -94,6 +97,7 @@ export async function chat(
       message,
       conversation_id: cid,
       persona: options?.persona ?? 'auto',
+      user_id: userId,
       user: {
         display_name: user.displayName,
         gender: user.gender,
@@ -115,7 +119,7 @@ export async function chat(
     if (currencyContext) aiPayload.currency = currencyContext;
     if (journeyProgress) aiPayload.user_journeys = journeyProgress;
 
-    const aiResponse = await post<{ response: string; context?: unknown; persona?: string; blocked?: boolean; reason?: string | null }>(
+    const aiResponse = await post<{ response: string; context?: unknown; persona?: string; blocked?: boolean; reason?: string | null; usage?: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null }>(
       `${env.AI_SERVICE_URL}/chat`,
       aiPayload,
       {
@@ -124,6 +128,13 @@ export async function chat(
       },
     ).catch(() => {
       throw new AppError(502, 'AI service unavailable');
+    });
+
+    await recordAiUsage({
+      userId,
+      conversationId: cid,
+      source: 'chat',
+      usage: aiResponse.usage,
     });
 
     await prisma.message.create({
@@ -150,4 +161,33 @@ export async function chat(
       return result;
     },
   });
+}
+
+export async function getConversations(userId: string) {
+  return prisma.conversation.findMany({
+    where: { userId },
+    orderBy: { updatedAt: 'desc' },
+    include: { _count: { select: { messages: true } } },
+  });
+}
+
+export async function getMessages(userId: string, conversationId: string) {
+  const conv = await prisma.conversation.findFirst({
+    where: { id: conversationId, userId },
+    select: { id: true },
+  });
+  if (!conv) throw new AppError(404, 'Conversation not found');
+  return prisma.message.findMany({
+    where: { conversationId },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, role: true, content: true, createdAt: true },
+  });
+}
+
+export async function deleteConversation(userId: string, id: string) {
+  const conv = await prisma.conversation.findFirst({
+    where: { id, userId },
+  });
+  if (!conv) throw new AppError(404, 'Conversation not found');
+  await prisma.conversation.delete({ where: { id } });
 }

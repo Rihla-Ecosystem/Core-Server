@@ -11,11 +11,14 @@ import type {
   AIReservationQuoteResult,
 } from '../src/types/ai-reservation-quote.js';
 import type { BusinessTokenFeature } from '../src/config/business-token-features.js';
+import { getBusinessTokenCost } from '../src/config/business-token-features.js';
 import {
   AIReservationQuoteError,
   calculateAIReservationQuote,
 } from '../src/utils/ai-reservation-quote.js';
 import { AIUsagePricingError } from '../src/utils/ai-usage-pricing.js';
+
+const CHAT_COST = getBusinessTokenCost('AI_CHAT_QUERY');
 
 const BASE_CHAT_LIMITS: ChatLimitsConfig = {
   maxInputTokens: 12000,
@@ -106,8 +109,8 @@ function expectQuoteError(
 
 test('1. FIXED_FALLBACK reserves the existing fixed feature cost', () => {
   const result = quote({ requestedMode: 'FIXED_FALLBACK' });
-  assert.equal(result.reservationTokens, 2);
-  assert.equal(result.fixedFallbackTokens, 2);
+  assert.equal(result.reservationTokens, CHAT_COST);
+  assert.equal(result.fixedFallbackTokens, CHAT_COST);
 });
 
 test('2. FIXED_FALLBACK reports requestedMode and appliedMode correctly', () => {
@@ -134,7 +137,7 @@ test('5. FIXED_FALLBACK does not require provider or model', () => {
     rateCard: [],
     walletPolicy: BASE_POLICY,
   });
-  assert.equal(result.reservationTokens, 2);
+  assert.equal(result.reservationTokens, CHAT_COST);
   assert.equal('provider' in result, false);
   assert.equal('model' in result, false);
 });
@@ -291,11 +294,12 @@ test('20. Provider maximum greater than fixed reserves the provider maximum', ()
 
 test('21. Provider maximum less than fixed reserves the fixed cost', () => {
   const result = quote({
+    feature: 'AI_TRIP_ITINERARY',
     chatLimits: SMALL_CHAT_LIMITS,
     walletPolicy: { ...BASE_POLICY, walletTokenValueMicros: 1_000_000 },
   });
   assert.equal(result.maximumUsageWalletTokens, 1);
-  assert.equal(result.reservationTokens, 2);
+  assert.equal(result.reservationTokens, getBusinessTokenCost('AI_TRIP_ITINERARY'));
 });
 
 test('22. Provider maximum equal to fixed reserves that value', () => {
@@ -339,8 +343,8 @@ test('27. Missing exact model rate returns RATE_CARD_NOT_FOUND', () => {
 
 test('28. RATE_CARD_NOT_FOUND reserves fixedFallbackTokens', () => {
   const result = quote({ rateCard: [] });
-  assert.equal(result.reservationTokens, 2);
-  assert.equal(result.fixedFallbackTokens, 2);
+  assert.equal(result.reservationTokens, CHAT_COST);
+  assert.equal(result.fixedFallbackTokens, CHAT_COST);
 });
 
 test('29. RATE_CARD_NOT_FOUND omits maximumUsageWalletTokens', () => {
@@ -498,8 +502,8 @@ test('49. requestedMode and appliedMode are correct', () => {
 });
 
 test('50. fixedFallbackTokens always reflects the existing feature fixed cost', () => {
-  assert.equal(quote().fixedFallbackTokens, 2);
-  assert.equal(quote({ requestedMode: 'FIXED_FALLBACK' }).fixedFallbackTokens, 2);
+  assert.equal(quote().fixedFallbackTokens, CHAT_COST);
+  assert.equal(quote({ requestedMode: 'FIXED_FALLBACK' }).fixedFallbackTokens, CHAT_COST);
   assert.equal(quote({ feature: 'AI_IMAGE_ANALYSIS' }).fixedFallbackTokens, 5);
   assert.equal(quote({ feature: 'AI_TRIP_ITINERARY' }).fixedFallbackTokens, 10);
 });

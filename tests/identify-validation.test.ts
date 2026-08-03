@@ -292,15 +292,15 @@ describe('Identify validation - pre-charge request identity and image validation
     const { userId, token } = await createUser(10);
     const callsBefore = aiCallCount;
     try {
-      const webp = new Blob([Buffer.from([0x52, 0x49, 0x46, 0x46])], { type: 'image/webp' });
+      const unsupported = new Blob([Buffer.from([0x4d, 0x49, 0x4d, 0x45])], { type: 'application/octet-stream' });
       const res = await fetch(`${baseUrl}/api/identify`, {
         method: 'POST',
         headers: authHeaders(token, crypto.randomUUID()),
-        body: buildForm('image', webp, 'test.webp'),
+        body: buildForm('image', unsupported, 'test.bin'),
       });
       assert.equal(res.status, 400);
       const body = await res.json();
-      assert.equal(body.error, 'Only JPEG and PNG image files are allowed');
+      assert.equal(body.error, 'Only JPEG, PNG, WebP, HEIC, GIF, BMP, AVIF and TIFF images are allowed');
       assert.equal(aiCallCount, callsBefore);
       await assertNoCharge(userId, 10);
     } finally {

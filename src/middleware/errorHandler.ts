@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { Prisma } from '@prisma/client';
+import multer from 'multer';
 
 export class AppError extends Error {
   constructor(
@@ -40,8 +41,19 @@ export function errorHandler(
     }
   }
 
+  if (err instanceof multer.MulterError) {
+    res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: err.message });
+    return;
+  }
+
   if (err instanceof AppError) {
     res.status(err.statusCode).json({ error: err.message });
+    return;
+  }
+
+  const statusCode = (err as Error & { statusCode?: number }).statusCode;
+  if (statusCode) {
+    res.status(statusCode).json({ error: err.message });
     return;
   }
 
