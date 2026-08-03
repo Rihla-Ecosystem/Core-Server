@@ -83,3 +83,14 @@ export async function getLeaderboard(req: Request, res: Response, next: NextFunc
     next(err);
   }
 }
+
+
+// return all roles
+export async function getAllRoles(req: Request, res: Response, next: NextFunction) {
+  try {
+    const roles = await userService.getAllRoles();
+    res.json(roles);
+  } catch (err) {
+    next(err);
+  }
+}

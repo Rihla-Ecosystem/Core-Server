@@ -298,3 +298,14 @@ export async function getAuditLogs(page = 1, limit = 50) {
     },
   };
 }
+
+
+// return all roles
+
+export async function getAllRoles() {
+  const roles = await prisma.role.findMany({
+    orderBy: { name: 'asc' },
+    select: { id: true, name: true },
+  });
+  return roles;
+}

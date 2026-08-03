@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/prisma.js';
 import { AppError } from '../../middleware/errorHandler.js';
+import { hashPassword } from '../../utils/hash.js';
 
 export type DashboardOrder = 'asc' | 'desc';
 export type DashboardSortField = 'createdAt' | 'lastLoginAt' | 'displayName' | 'email' | 'xp' | 'level' | 'id' | 'walletBalance';
@@ -2728,4 +2729,284 @@ export async function bulkExport(ids: string[], actorId: string, format: Dashboa
     contentType: format === 'csv' ? 'text/csv; charset=utf-8' : 'application/vnd.ms-excel; charset=utf-8',
     data,
   };
+}
+
+export interface DashboardCreateUserInput {
+  email: string;
+  password: string;
+  displayName: string;
+  avatarUrl?: string;
+  bio?: string;
+  gender: 'MALE' | 'FEMALE';
+  nationality: string;
+  language?: string[];
+  budgetLevel?: string;
+  arrivalDate?: string;
+  departureDate?: string;
+  travelStyle?: string;
+  interests?: string[];
+  accommodationType?: string;
+  roleId?: number;
+}
+
+export interface DashboardUpdateUserInput {
+  email?: string;
+  displayName?: string;
+  avatarUrl?: string;
+  bio?: string;
+  gender?: 'MALE' | 'FEMALE';
+  nationality?: string;
+  language?: string[];
+  budgetLevel?: string;
+  arrivalDate?: string;
+  departureDate?: string;
+  travelStyle?: string;
+  interests?: string[];
+  accommodationType?: string;
+  roleId?: number;
+  isActive?: boolean;
+  isEmailVerified?: boolean;
+  isBanned?: boolean;
+  xp?: number;
+  level?: number;
+}
+
+export async function createUser(data: DashboardCreateUserInput, actorId: string): Promise<BasicUserRow> {
+  const existing = await prisma.user.findUnique({ where: { email: data.email } });
+  if (existing) {
+    throw new AppError(409, 'A user with this email already exists');
+  }
+
+  const passwordHash = await hashPassword(data.password);
+
+  const user = await prisma.$transaction(async (tx) => {
+    const created = await tx.user.create({
+      data: {
+        email: data.email,
+        passwordHash,
+        displayName: data.displayName,
+        avatarUrl: data.avatarUrl,
+        bio: data.bio,
+        gender: data.gender,
+        nationality: data.nationality,
+        language: data.language ?? [],
+        budgetLevel: data.budgetLevel,
+        arrivalDate: data.arrivalDate ? new Date(data.arrivalDate) : null,
+        departureDate: data.departureDate ? new Date(data.departureDate) : null,
+        travelStyle: data.travelStyle,
+        interests: data.interests ?? [],
+        accommodationType: data.accommodationType,
+        roleId: data.roleId ?? 1,
+      },
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        avatarUrl: true,
+        bio: true,
+        gender: true,
+        nationality: true,
+        language: true,
+        budgetLevel: true,
+        arrivalDate: true,
+        departureDate: true,
+        travelStyle: true,
+        interests: true,
+        accommodationType: true,
+        isEmailVerified: true,
+        isActive: true,
+        isBanned: true,
+        isDeleted: true,
+        roleId: true,
+        xp: true,
+        level: true,
+        createdAt: true,
+        updatedAt: true,
+        role: {
+          select: {
+            id: true,
+            name: true,
+            permissions: true,
+          },
+        },
+      },
+    });
+
+    await tx.tokenWallet.create({
+      data: {
+        userId: created.id,
+        tokenBalance: 0,
+        status: 'ACTIVE',
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorId,
+        targetUserId: created.id,
+        action: 'user_created',
+        metadata: toInputJsonObject({
+          email: data.email,
+          displayName: data.displayName,
+          gender: data.gender,
+          nationality: data.nationality,
+          roleId: data.roleId ?? 1,
+        }),
+      },
+    });
+
+    return created;
+  });
+
+  logDashboardAction('user_created', { actorId, targetUserId: user.id, email: data.email });
+
+  return user as BasicUserRow;
+}
+
+export async function updateUser(userId: string, data: DashboardUpdateUserInput, actorId: string): Promise<BasicUserRow> {
+  const currentUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      email: true,
+      displayName: true,
+      avatarUrl: true,
+      bio: true,
+      gender: true,
+      nationality: true,
+      language: true,
+      budgetLevel: true,
+      arrivalDate: true,
+      departureDate: true,
+      travelStyle: true,
+      interests: true,
+      accommodationType: true,
+      isEmailVerified: true,
+      isActive: true,
+      isBanned: true,
+      isDeleted: true,
+      roleId: true,
+      xp: true,
+      level: true,
+      lastLoginAt: true,
+      tokenWallet: {
+        select: {
+          tokenBalance: true,
+          status: true,
+        },
+      },
+    },
+  });
+
+  if (!currentUser) {
+    throw new AppError(404, 'User not found');
+  }
+
+  const updateData: Prisma.UserUpdateInput = {};
+
+  if (data.email !== undefined) updateData.email = data.email;
+  if (data.displayName !== undefined) updateData.displayName = data.displayName;
+  if (data.avatarUrl !== undefined) updateData.avatarUrl = data.avatarUrl;
+  if (data.bio !== undefined) updateData.bio = data.bio;
+  if (data.gender !== undefined) updateData.gender = data.gender;
+  if (data.nationality !== undefined) updateData.nationality = data.nationality;
+  if (data.language !== undefined) updateData.language = data.language;
+  if (data.budgetLevel !== undefined) updateData.budgetLevel = data.budgetLevel;
+  if (data.arrivalDate !== undefined) updateData.arrivalDate = data.arrivalDate ? new Date(data.arrivalDate) : null;
+  if (data.departureDate !== undefined) updateData.departureDate = data.departureDate ? new Date(data.departureDate) : null;
+  if (data.travelStyle !== undefined) updateData.travelStyle = data.travelStyle;
+  if (data.interests !== undefined) updateData.interests = data.interests;
+  if (data.accommodationType !== undefined) updateData.accommodationType = data.accommodationType;
+  if (data.roleId !== undefined) updateData.role = { connect: { id: data.roleId } };
+  if (data.isActive !== undefined) updateData.isActive = data.isActive;
+  if (data.isEmailVerified !== undefined) updateData.isEmailVerified = data.isEmailVerified;
+  if (data.isBanned !== undefined) updateData.isBanned = data.isBanned;
+  if (data.xp !== undefined) updateData.xp = data.xp;
+  if (data.level !== undefined) updateData.level = data.level;
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.update({
+      where: { id: userId },
+      data: updateData,
+      select: {
+        id: true,
+        email: true,
+        displayName: true,
+        avatarUrl: true,
+        bio: true,
+        gender: true,
+        nationality: true,
+        language: true,
+        budgetLevel: true,
+        arrivalDate: true,
+        departureDate: true,
+        travelStyle: true,
+        interests: true,
+        accommodationType: true,
+        isEmailVerified: true,
+        isActive: true,
+        isBanned: true,
+        isDeleted: true,
+        roleId: true,
+        xp: true,
+        level: true,
+        createdAt: true,
+        updatedAt: true,
+        lastLoginAt: true,
+        role: {
+          select: {
+            id: true,
+            name: true,
+            permissions: true,
+          },
+        },
+      },
+    });
+
+    const metadata: Record<string, unknown> = {};
+    const previous: Record<string, unknown> = {
+      email: currentUser.email,
+      displayName: currentUser.displayName,
+      avatarUrl: currentUser.avatarUrl,
+      bio: currentUser.bio,
+      gender: currentUser.gender,
+      nationality: currentUser.nationality,
+      language: currentUser.language,
+      budgetLevel: currentUser.budgetLevel,
+      arrivalDate: currentUser.arrivalDate,
+      departureDate: currentUser.departureDate,
+      travelStyle: currentUser.travelStyle,
+      interests: currentUser.interests,
+      accommodationType: currentUser.accommodationType,
+      isEmailVerified: currentUser.isEmailVerified,
+      isActive: currentUser.isActive,
+      isBanned: currentUser.isBanned,
+      roleId: currentUser.roleId,
+      xp: currentUser.xp,
+      level: currentUser.level,
+    };
+
+    for (const [key, value] of Object.entries(data)) {
+      if (value !== undefined && JSON.stringify(value) !== JSON.stringify(previous[key])) {
+        metadata[key] = { previous: previous[key], new: value };
+      }
+    }
+
+    if (Object.keys(metadata).length > 0) {
+      await tx.auditLog.create({
+        data: {
+          actorId,
+          targetUserId: userId,
+          action: 'user_updated',
+          metadata: toInputJsonObject(metadata),
+        },
+      });
+    }
+
+    return user;
+  });
+
+  logDashboardAction('user_updated', { actorId, targetUserId: userId });
+
+  return updated as BasicUserRow;
 }

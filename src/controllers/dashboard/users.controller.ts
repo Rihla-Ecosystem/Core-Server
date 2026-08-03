@@ -464,3 +464,23 @@ export async function adminTimeline(req: Request, res: Response, next: NextFunct
     next(err);
   }
 }
+
+export async function createUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const actorId = requireActorId(req);
+    const data = await usersService.createUser(req.body, actorId);
+    sendSuccess(res, data, 'User created', 201);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const actorId = requireActorId(req);
+    const data = await usersService.updateUser(getSingleParam(req.params.id, 'id'), req.body, actorId);
+    sendSuccess(res, data, 'User updated');
+  } catch (err) {
+    next(err);
+  }
+}

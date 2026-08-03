@@ -153,4 +153,23 @@ router.delete('/me', authenticate, userController.deleteAccount);
  */
 router.get('/:id/badges', validate(userBadgesParamsSchema, 'params'), userController.getUserBadges);
 
+// all roles endpoint
+/**
+ * @openapi
+ * /roles:
+ *   get:
+ *     tags: [Users]
+ *     summary: Get all roles
+ *     responses:
+ *       200:
+ *         description: List of roles
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Role'
+ */
+router.get('/roles', userController.getAllRoles);
+
 export default router;

@@ -277,6 +277,130 @@ router.get('/export', requireRole('admin', 'moderator'), validate(exportQuerySch
  */
 router.get('/admin-timeline', requireRole('admin', 'moderator'), usersController.adminTimeline);
 
+const createUserSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8).max(128),
+  displayName: z.string().trim().min(1).max(100),
+  avatarUrl: z.string().url().optional(),
+  bio: z.string().max(500).optional(),
+  gender: z.enum(['MALE', 'FEMALE']),
+  nationality: z.string().trim().min(1).max(100),
+  language: z.array(z.string().trim().min(2).max(10)).max(20).optional(),
+  budgetLevel: z.string().max(50).optional(),
+  arrivalDate: z.string().datetime().optional(),
+  departureDate: z.string().datetime().optional(),
+  travelStyle: z.string().max(50).optional(),
+  interests: z.array(z.string().max(100)).max(50).optional(),
+  accommodationType: z.string().max(50).optional(),
+  roleId: z.coerce.number().int().positive().optional(),
+});
+
+const updateUserSchema = z.object({
+  email: z.string().email().optional(),
+  displayName: z.string().trim().min(1).max(100).optional(),
+  avatarUrl: z.string().url().optional(),
+  bio: z.string().max(500).optional(),
+  gender: z.enum(['MALE', 'FEMALE']).optional(),
+  nationality: z.string().trim().min(1).max(100).optional(),
+  language: z.array(z.string().trim().min(2).max(10)).max(20).optional(),
+  budgetLevel: z.string().max(50).optional(),
+  arrivalDate: z.string().datetime().optional(),
+  departureDate: z.string().datetime().optional(),
+  travelStyle: z.string().max(50).optional(),
+  interests: z.array(z.string().max(100)).max(50).optional(),
+  accommodationType: z.string().max(50).optional(),
+  roleId: z.coerce.number().int().positive().optional(),
+  isActive: z.boolean().optional(),
+  isEmailVerified: z.boolean().optional(),
+  isBanned: z.boolean().optional(),
+  xp: z.coerce.number().int().min(0).optional(),
+  level: z.coerce.number().int().min(1).optional(),
+});
+
+/**
+ * @openapi
+ * /dashboard/users:
+ *   post:
+ *     tags: [Dashboard Users]
+ *     summary: Create user
+ *     description: Creates a new user with the provided details.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password, displayName, gender, nationality]
+ *             properties:
+ *               email: { type: string, format: email }
+ *               password: { type: string, minLength: 8, maxLength: 128 }
+ *               displayName: { type: string, maxLength: 100 }
+ *               avatarUrl: { type: string, format: uri }
+ *               bio: { type: string, maxLength: 500 }
+ *               gender: { type: string, enum: [MALE, FEMALE] }
+ *               nationality: { type: string, maxLength: 100 }
+ *               language: { type: array, items: { type: string } }
+ *               budgetLevel: { type: string, maxLength: 50 }
+ *               arrivalDate: { type: string, format: date-time }
+ *               departureDate: { type: string, format: date-time }
+ *               travelStyle: { type: string, maxLength: 50 }
+ *               interests: { type: array, items: { type: string } }
+ *               accommodationType: { type: string, maxLength: 50 }
+ *               roleId: { type: integer, minimum: 1 }
+ *     responses:
+ *       201:
+ *         description: User created
+ */
+router.post('/', requireRole('admin'), validate(createUserSchema), usersController.createUser);
+
+/**
+ * @openapi
+ * /dashboard/users/{id}:
+ *   patch:
+ *     tags: [Dashboard Users]
+ *     summary: Update user
+ *     description: Updates a user's profile and settings.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email: { type: string, format: email }
+ *               displayName: { type: string, maxLength: 100 }
+ *               avatarUrl: { type: string, format: uri }
+ *               bio: { type: string, maxLength: 500 }
+ *               gender: { type: string, enum: [MALE, FEMALE] }
+ *               nationality: { type: string, maxLength: 100 }
+ *               language: { type: array, items: { type: string } }
+ *               budgetLevel: { type: string, maxLength: 50 }
+ *               arrivalDate: { type: string, format: date-time }
+ *               departureDate: { type: string, format: date-time }
+ *               travelStyle: { type: string, maxLength: 50 }
+ *               interests: { type: array, items: { type: string } }
+ *               accommodationType: { type: string, maxLength: 50 }
+ *               roleId: { type: integer, minimum: 1 }
+ *               isActive: { type: boolean }
+ *               isEmailVerified: { type: boolean }
+ *               isBanned: { type: boolean }
+ *               xp: { type: integer, minimum: 0 }
+ *               level: { type: integer, minimum: 1 }
+ *     responses:
+ *       200:
+ *         description: User updated
+ */
+router.patch('/:id', requireRole('admin'), validate(updateUserSchema), usersController.updateUser);
+
 /**
  * @openapi
  * /dashboard/users/{id}:
