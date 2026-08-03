@@ -14,6 +14,7 @@ export interface VoiceResponse {
   audio_url?: string | null;
   conversation_id?: string | null;
   usage?: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
+  providerCalls?: unknown;
 }
 
 export async function processVoice(
@@ -57,6 +58,7 @@ export async function processVoice(
     conversationId: options?.conversationId,
     source: 'voice',
     usage: result.usage,
+    providerCalls: result.providerCalls,
   });
 
   return result;

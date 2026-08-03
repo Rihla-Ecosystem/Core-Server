@@ -16,6 +16,7 @@ export interface IdentifyResponse {
   nearby_sites?: unknown[] | null;
   cached: boolean;
   usage?: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
+  providerCalls?: unknown;
 }
 
 export async function identifyLandmark(
@@ -58,6 +59,7 @@ export async function identifyLandmark(
       userId: options!.userId,
       source: 'identify',
       usage: result.usage,
+      providerCalls: result.providerCalls,
     });
   }
 

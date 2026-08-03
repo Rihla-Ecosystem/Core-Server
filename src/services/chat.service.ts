@@ -119,7 +119,7 @@ export async function chat(
     if (currencyContext) aiPayload.currency = currencyContext;
     if (journeyProgress) aiPayload.user_journeys = journeyProgress;
 
-    const aiResponse = await post<{ response: string; context?: unknown; persona?: string; blocked?: boolean; reason?: string | null; usage?: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null }>(
+    const aiResponse = await post<{ response: string; context?: unknown; persona?: string; blocked?: boolean; reason?: string | null; usage?: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null; providerCalls?: unknown }>(
       `${env.AI_SERVICE_URL}/chat`,
       aiPayload,
       {
@@ -135,6 +135,7 @@ export async function chat(
       conversationId: cid,
       source: 'chat',
       usage: aiResponse.usage,
+      providerCalls: aiResponse.providerCalls,
     });
 
     await prisma.message.create({

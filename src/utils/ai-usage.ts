@@ -1,4 +1,31 @@
-import type { AIProviderUsage, RawAIProviderUsage } from '../types/ai.js';
+import type {
+  AIProviderUsage,
+  ProviderCallUsage,
+  RawAIProviderUsage,
+  RawProviderCall,
+} from '../types/ai.js';
+
+const PROVIDER_CALL_TOKEN_FIELDS = [
+  'inputTokens',
+  'outputTokens',
+  'totalTokens',
+  'cachedInputTokens',
+  'cachedOutputTokens',
+  'cacheWriteInputTokens',
+  'reasoningTokens',
+  'imageInputTokens',
+  'imageOutputTokens',
+  'audioInputTokens',
+  'audioOutputTokens',
+  'cachedAudioInputTokens',
+  'cachedAudioOutputTokens',
+  'audioInputSeconds',
+  'audioOutputSeconds',
+  'transcriptionSeconds',
+  'inputCharacters',
+  'outputCharacters',
+  'generatedImageCount',
+] as const;
 
 interface FieldRead {
   present: boolean;
@@ -106,4 +133,74 @@ function isNonNegativeSeconds(value: unknown): value is number {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+/**
+ * Pure adapter that normalizes an arbitrary array of ProviderCallUsage records
+ * into the internal ProviderCallUsage[] contract, or undefined when the input
+ * is unusable.
+ *
+ * Documented rules:
+ * - Input must be a non-empty array of objects; otherwise undefined.
+ * - Every element must be a plain object with a non-empty `provider` string and
+ *   a boolean `providerCallMade`; otherwise the whole array is rejected.
+ * - Optional string fields (requestedModel, actualModel, operation, ...) are
+ *   trimmed when present and dropped when empty/whitespace.
+ * - Optional token/seconds counts must be finite non-negative integers (or
+ *   finite non-negative numbers for the seconds fields); a present-but-invalid
+ *   value rejects the whole array (no silent coercion, never fabricated zeros).
+ * - Unknown values are left absent; input is never mutated.
+ */
+export function normalizeProviderCalls(
+  raw: unknown,
+): ProviderCallUsage[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const normalized: ProviderCallUsage[] = [];
+  for (const element of raw) {
+    if (element === null || typeof element !== 'object' || Array.isArray(element)) {
+      return undefined;
+    }
+    const record = element as RawProviderCall;
+    if (!isNonEmptyString(record.provider)) return undefined;
+    const provider = record.provider.trim();
+    if (typeof record.providerCallMade !== 'boolean') return undefined;
+    const providerCallMade = record.providerCallMade;
+
+    const call: ProviderCallUsage = { provider, providerCallMade };
+
+    const optionalString: Array<keyof RawProviderCall> = [
+      'providerCallId',
+      'providerRequestId',
+      'requestedModel',
+      'actualModel',
+      'operation',
+      'usageSource',
+      'usageCompleteness',
+      'accountingSemantics',
+    ];
+    for (const key of optionalString) {
+      const value = record[key];
+      if (value === undefined) continue;
+      if (!isNonEmptyString(value)) return undefined;
+      (call as unknown as Record<string, string | boolean | number | undefined>)[key] = value.trim();
+    }
+
+    for (const field of PROVIDER_CALL_TOKEN_FIELDS) {
+      const value = record[field];
+      if (value === undefined) continue;
+      const isSecondsField =
+        field === 'audioInputSeconds' ||
+        field === 'audioOutputSeconds' ||
+        field === 'transcriptionSeconds';
+      if (isSecondsField ? !isNonNegativeSeconds(value) : !isTokenCount(value)) {
+        return undefined;
+      }
+      (call as unknown as Record<string, string | boolean | number | undefined>)[field] = value as number;
+    }
+
+    normalized.push(call);
+  }
+  return normalized;
 }

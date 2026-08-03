@@ -18,6 +18,7 @@ export interface ItineraryResult {
     outputTokens?: number;
     totalTokens?: number;
   } | null;
+  providerCalls?: unknown;
 }
 
 export interface GenerateItineraryInput {
@@ -103,6 +104,7 @@ export async function generateItineraryWithTokens(
       userId: input.userId,
       source: 'itinerary',
       usage: result.usage,
+      providerCalls: result.providerCalls,
     });
 
     return result;

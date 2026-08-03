@@ -89,6 +89,7 @@ router.post(
 
     let fullResponse = '';
     let usage: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null = null;
+    let providerCalls: unknown = undefined;
     let buffer = '';
 
     readable.on('data', (chunk: Buffer) => {
@@ -109,6 +110,9 @@ router.post(
             if (payload.usage && typeof payload.usage === 'object') {
               usage = payload.usage;
             }
+            if (Array.isArray(payload.providerCalls)) {
+              providerCalls = payload.providerCalls;
+            }
           } catch {
             // ignore malformed event
           }
@@ -128,6 +132,7 @@ router.post(
           conversationId,
           source: 'stream',
           usage,
+          providerCalls,
         });
       } catch (err) {
         console.error('Failed to persist stream output', err);

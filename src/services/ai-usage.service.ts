@@ -1,5 +1,7 @@
 import { prisma } from '../config/prisma.js';
 import { computeAiCost } from '../config/ai-pricing.js';
+import { normalizeProviderCalls } from '../utils/ai-usage.js';
+import type { ProviderCallUsage } from '../types/ai.js';
 
 export interface AiUsage {
   model?: string | null;
@@ -23,9 +25,45 @@ export async function recordAiUsage(params: {
   conversationId?: string | null;
   source?: string;
   usage?: AiUsage | null;
+  providerCalls?: unknown;
 }) {
+  if (!params.userId) return;
+
+  const providerCalls = normalizeProviderCalls(params.providerCalls);
+
+  if (providerCalls && providerCalls.length > 0) {
+    // Prefer per-provider-call telemetry rows. Each row is written only when a
+    // real provider call reported a totalTokens > 0; calls without reported
+    // usage produce no fabricated row, and totalTokens is never derived. The
+    // current AiUsageLog schema has no operation/providerCallId column, so that
+    // identity is not persisted yet (documented limitation).
+    const rows = providerCalls
+      .filter((call: ProviderCallUsage) => typeof call.totalTokens === 'number' && call.totalTokens > 0)
+      .map((call: ProviderCallUsage) => {
+        const inputTokens = call.inputTokens ?? 0;
+        const outputTokens = call.outputTokens ?? 0;
+        const model = call.actualModel ?? call.requestedModel ?? null;
+        const cost = computeAiCost(model, inputTokens, outputTokens);
+        return {
+          userId: params.userId,
+          conversationId: params.conversationId ?? null,
+          source: params.source ?? 'chat',
+          model,
+          inputTokens,
+          outputTokens,
+          totalTokens: call.totalTokens!,
+          cost,
+        };
+      });
+    if (rows.length > 0) {
+      const created = await prisma.aiUsageLog.createMany({ data: rows });
+      return created.count;
+    }
+    return null;
+  }
+
   const usage = params.usage;
-  if (!usage || !usage.totalTokens || usage.totalTokens <= 0) return;
+  if (!usage || !usage.totalTokens || usage.totalTokens <= 0) return null;
 
   const inputTokens = usage.inputTokens ?? 0;
   const outputTokens = usage.outputTokens ?? 0;
@@ -43,6 +81,7 @@ export async function recordAiUsage(params: {
       cost,
     },
   });
+  return 1;
 }
 
 export async function getAiUsageSummary() {

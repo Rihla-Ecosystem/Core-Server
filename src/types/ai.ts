@@ -10,6 +10,77 @@ export interface AIProviderUsage {
   audioSeconds?: number;
 }
 
+/**
+ * Provider-neutral record of a single provider call, mirroring the AI Service
+ * ProviderCallUsage contract. Unknown numeric fields are absent (never zero).
+ * All optional token counts are validated as non-negative integers when present.
+ * This contract is intentionally provider-neutral (no Gemini-native fields).
+ */
+export interface ProviderCallUsage {
+  provider: string;
+  providerCallMade: boolean;
+  providerCallId?: string;
+  providerRequestId?: string;
+  requestedModel?: string;
+  actualModel?: string;
+  operation?: string;
+  usageSource?: string;
+  usageCompleteness?: string;
+  accountingSemantics?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cachedInputTokens?: number;
+  cachedOutputTokens?: number;
+  cacheWriteInputTokens?: number;
+  reasoningTokens?: number;
+  imageInputTokens?: number;
+  imageOutputTokens?: number;
+  audioInputTokens?: number;
+  audioOutputTokens?: number;
+  cachedAudioInputTokens?: number;
+  cachedAudioOutputTokens?: number;
+  audioInputSeconds?: number;
+  audioOutputSeconds?: number;
+  transcriptionSeconds?: number;
+  inputCharacters?: number;
+  outputCharacters?: number;
+  generatedImageCount?: number;
+}
+
+export interface RawProviderCall {
+  provider?: unknown;
+  providerCallMade?: unknown;
+  providerCallId?: unknown;
+  providerRequestId?: unknown;
+  requestedModel?: unknown;
+  actualModel?: unknown;
+  operation?: unknown;
+  usageSource?: unknown;
+  usageCompleteness?: unknown;
+  accountingSemantics?: unknown;
+  inputTokens?: unknown;
+  outputTokens?: unknown;
+  totalTokens?: unknown;
+  cachedInputTokens?: unknown;
+  cachedOutputTokens?: unknown;
+  cacheWriteInputTokens?: unknown;
+  reasoningTokens?: unknown;
+  imageInputTokens?: unknown;
+  imageOutputTokens?: unknown;
+  audioInputTokens?: unknown;
+  audioOutputTokens?: unknown;
+  cachedAudioInputTokens?: unknown;
+  cachedAudioOutputTokens?: unknown;
+  audioInputSeconds?: unknown;
+  audioOutputSeconds?: unknown;
+  transcriptionSeconds?: unknown;
+  inputCharacters?: unknown;
+  outputCharacters?: unknown;
+  generatedImageCount?: unknown;
+  [key: string]: unknown;
+}
+
 export interface RawAIProviderUsage {
   provider?: unknown;
   model?: unknown;
@@ -71,6 +142,7 @@ export interface AIChatResponse {
   currency?: unknown;
   user_journeys?: unknown;
   usage?: AIProviderUsage;
+  providerCalls?: ProviderCallUsage[];
 }
 
 type _AssertTrue<T extends true> = T;
