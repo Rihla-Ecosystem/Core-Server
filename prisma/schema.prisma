@@ -100,8 +100,9 @@ enum WalletStatus {
 model TokenWallet {
   id String @id @default(uuid()) @db.Uuid
 
-  userId       String @unique @db.Uuid
-  tokenBalance Int    @default(0)
+  userId          String @unique @db.Uuid
+  tokenBalance    Int    @default(0)
+  reservedBalance Int    @default(0)
 
   status WalletStatus @default(ACTIVE)
 
@@ -110,6 +111,148 @@ model TokenWallet {
 
   user         User               @relation(fields: [userId], references: [id], onDelete: Restrict)
   transactions TokenTransaction[]
+  reservations TokenReservation[]
+}
+
+enum TokenReservationStatus {
+  PENDING
+  COMPLETED
+  RELEASED
+}
+
+model TokenReservation {
+  id String @id @default(uuid()) @db.Uuid
+
+  walletId String @db.Uuid
+  userId   String @db.Uuid
+
+  feature String
+  source  TokenTransactionSource
+
+  tokens Int
+
+  pricingVersion Int @default(1)
+
+  idempotencyKey String
+
+  referenceId String
+
+  status TokenReservationStatus @default(PENDING)
+
+  expiresAt  DateTime
+  settledAt  DateTime?
+  releasedAt DateTime?
+
+  releaseReason String?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  wallet TokenWallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  billingOperation AIBillingOperation?
+
+  @@unique([referenceId])
+  @@unique([userId, feature, idempotencyKey])
+  @@index([walletId])
+  @@index([userId])
+  @@index([status])
+  @@index([expiresAt])
+  @@index([userId, status])
+}
+
+enum AIBillingOperationStatus {
+  RESERVED
+  EXECUTION_SUCCEEDED
+  PRICED
+  NON_BILLABLE_CONFIRMED
+  INDETERMINATE
+  REVIEW_REQUIRED
+  SETTLED
+  RELEASED
+}
+
+enum AIBillingOperationFailureKind {
+  NON_BILLABLE
+  INDETERMINATE
+}
+
+model AIBillingOperation {
+  id String @id @default(uuid()) @db.Uuid
+
+  operationId String @unique
+
+  reservationId String @unique @db.Uuid
+
+  walletId String @db.Uuid
+  userId   String @db.Uuid
+
+  feature String
+  source  TokenTransactionSource
+
+  status AIBillingOperationStatus @default(RESERVED)
+
+  // Immutable reservation snapshot
+  reservedTokens            Int
+  reservationPricingVersion Int
+
+  // Requested identity
+  requestedProvider String?
+  requestedModel    String?
+
+  // Actual execution identity evidence
+  actualProvider      String?
+  actualModel         String?
+  providerRequestId   String?
+  providerRequestSent Boolean?
+
+  // Canonical usage evidence
+  inputTokens  Int?
+  outputTokens Int?
+  totalTokens  Int?
+  cached       Boolean?
+  audioSeconds Float?
+
+  // Pricing evidence (safe subset only)
+  pricingMode           String?
+  pricingFallbackReason String?
+  actualWalletTokens    Int?
+  billingCurrency       String?
+  rateCardVersion       String?
+  walletPolicyVersion   String?
+
+  // Failure evidence
+  failureKind AIBillingOperationFailureKind?
+  failureCode String?
+  retryable   Boolean?
+
+  // Review evidence
+  reviewReasonCode String?
+
+  // Finalization evidence
+  consumeTransactionId String?
+
+  // Lifecycle timestamps
+  executedAt DateTime?
+  pricedAt   DateTime?
+  failedAt   DateTime?
+  reviewedAt DateTime?
+  settledAt  DateTime?
+  releasedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservation TokenReservation @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+
+  @@index([status, updatedAt])
+  @@index([walletId, status])
+  @@index([userId, createdAt])
+  @@map("AIBillingOperation")
 }
 
 enum TokenTransactionType {
@@ -126,6 +269,7 @@ enum TokenTransactionSource {
   FILE_UPLOAD
   OCR
   VOICE
+  ITINERARY
   PURCHASE
   ADMIN
 }
@@ -240,8 +384,13 @@ model User {
   payments                Payment[]
   tokenWallet             TokenWallet?
   tokenTransactions       TokenTransaction[]
+  tokenReservations       TokenReservation[]
   journeyProgress         UserJourney[]
+
   notifications           Notification[]
+
+  aiUsageLogs             AiUsageLog[]
+
 
   @@map("users")
 }
@@ -496,4 +645,24 @@ model UserJourneyStep {
   @@unique([userJourneyId, stepId])
   @@index([userJourneyId])
   @@map("user_journey_steps")
+}
+
+model AiUsageLog {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  conversationId String?   @map("conversation_id") @db.Uuid
+  source         String    @default("chat") @db.VarChar(20)
+  model          String?   @db.VarChar(100)
+  inputTokens    Int       @default(0) @map("input_tokens")
+  outputTokens   Int       @default(0) @map("output_tokens")
+  totalTokens    Int       @default(0) @map("total_tokens")
+  cost           Decimal   @default(0) @db.Decimal(12, 6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@index([source])
+  @@map("ai_usage_logs")
 }

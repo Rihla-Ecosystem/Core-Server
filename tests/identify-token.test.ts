@@ -323,7 +323,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       const res = await identifyRequest(token, key);
       assert.equal(res.status, 502);
       const body = await res.json();
-      assert.equal(body.error, 'AI identification service unavailable');
+      assert.equal(body.error, 'AI identification service unavailable: boom');
 
       assert.equal(await getBalance(userId), 10);
 
@@ -475,9 +475,9 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       await prisma.tokenTransaction.delete({ where: { id: consumeRow.id } });
 
       const res = await pending;
-      assert.equal(res.status, 500);
+      assert.equal(res.status, 502);
       const body = await res.json();
-      assert.equal(body.error, 'Unable to restore consumed tokens');
+      assert.equal(body.error, 'AI identification service unavailable: boom');
 
       assert.equal(
         await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.REFUND } }),
@@ -486,9 +486,11 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       assert.equal(aiCallCount, callsBefore + 1);
 
       const logs = capturedLogs.join('\n');
-      assert.ok(logs.includes('Failed to restore consumed tokens'));
+      assert.ok(logs.includes('[tokens] compensation_failed'));
       assert.ok(logs.includes('"userId"'));
-      assert.ok(logs.includes('"businessRequestId"'));
+      assert.ok(logs.includes('"idempotencyKey"'));
+      assert.ok(logs.includes('"consumeTransactionId"'));
+      assert.ok(logs.includes('"consumeReferenceId"'));
       assert.ok(logs.includes('"originalError"'));
       assert.ok(logs.includes('"refundError"'));
       assert.ok(!logs.includes('"image"'));

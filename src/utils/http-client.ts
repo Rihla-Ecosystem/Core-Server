@@ -51,3 +51,17 @@ export async function post<T = unknown>(
   }
   return (await res.json()) as T;
 }
+
+export async function upstreamError(
+  fallback: string,
+  response: Response,
+): Promise<string> {
+  try {
+    const body = (await response.json()) as { detail?: string; error?: string };
+    const detail = body.detail || body.error;
+    if (detail) return `${fallback}: ${detail}`;
+  } catch {
+    // ignore unparseable bodies
+  }
+  return fallback;
+}

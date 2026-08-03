@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { env } from '../config/env.js';
 import { prisma } from '../config/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { MAX_TOKEN_BALANCE } from '../config/business-token-features.js';
 
 export interface ValidatedPaymobWebhookData {
   transactionId: string;
@@ -407,25 +408,49 @@ export async function processPaymobWebhook(payload: unknown, hmacParam: unknown)
       return;
     }
 
-    // Upsert TokenWallet
-    const wallet = await tx.tokenWallet.upsert({
+    // Credit the TokenWallet, respecting MAX_TOKEN_BALANCE. If crediting would
+    // push the wallet over the cap, the payment is marked FAILED (no tokens
+    // granted) so Paymob does not retry the same transaction forever.
+    let wallet = await tx.tokenWallet.findUnique({
       where: { userId: payment.userId },
-      create: {
-        userId: payment.userId,
-        tokenBalance: payment.tokensSnapshot,
-        status: 'ACTIVE',
-      },
-      update: {
-        tokenBalance: {
-          increment: payment.tokensSnapshot,
-        },
-      },
     });
+
+    if (!wallet) {
+      wallet = await tx.tokenWallet.create({
+        data: {
+          userId: payment.userId,
+          tokenBalance: payment.tokensSnapshot,
+          status: 'ACTIVE',
+        },
+      });
+    } else {
+      if (wallet.tokenBalance > MAX_TOKEN_BALANCE - payment.tokensSnapshot) {
+        await tx.payment.updateMany({
+          where: { id: payment.id, status: 'COMPLETED' },
+          data: { status: 'FAILED', failureReason: 'MAX_TOKEN_BALANCE_EXCEEDED' },
+        });
+        return;
+      }
+      const credited = await tx.tokenWallet.updateMany({
+        where: {
+          id: wallet.id,
+          tokenBalance: { lte: MAX_TOKEN_BALANCE - payment.tokensSnapshot },
+        },
+        data: { tokenBalance: { increment: payment.tokensSnapshot } },
+      });
+      if (credited.count === 0) {
+        await tx.payment.updateMany({
+          where: { id: payment.id, status: 'COMPLETED' },
+          data: { status: 'FAILED', failureReason: 'MAX_TOKEN_BALANCE_EXCEEDED' },
+        });
+        return;
+      }
+    }
 
     // Create TokenTransaction
     await tx.tokenTransaction.create({
       data: {
-        walletId: wallet.id,
+        walletId: wallet!.id,
         userId: payment.userId,
         type: 'GRANT',
         tokens: payment.tokensSnapshot,

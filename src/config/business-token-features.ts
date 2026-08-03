@@ -1,6 +1,6 @@
 export const BUSINESS_TOKEN_FEATURE_COSTS = {
   AI_TRIP_ITINERARY: 10,
-  AI_CHAT_QUERY: 2,
+  AI_CHAT_QUERY: 1,
   AI_IMAGE_ANALYSIS: 5,
   REAL_TIME_TRANSLATION: 3,
   PERSONALIZED_RECOMMENDATIONS: 5,
@@ -12,9 +12,15 @@ export const BUSINESS_TOKEN_FEATURE_COSTS = {
 
 export const MAX_TOKEN_BALANCE = 2_147_483_647;
 
+export const BUSINESS_TOKEN_PRICING_VERSION = 1;
+
 export type BusinessTokenFeature = keyof typeof BUSINESS_TOKEN_FEATURE_COSTS;
 
 export type BusinessTokenCost = (typeof BUSINESS_TOKEN_FEATURE_COSTS)[BusinessTokenFeature];
+
+export function isBusinessTokenFeature(value: string): value is BusinessTokenFeature {
+  return Object.hasOwn(BUSINESS_TOKEN_FEATURE_COSTS, value);
+}
 
 // Object.keys on the as-const catalogue returns exactly its own keys, so
 // narrowing to BusinessTokenFeature[] is the smallest safe assertion here.

@@ -121,6 +121,8 @@ router.patch('/users/:id/role', requireRole('admin'), validate(roleUpdateSchema)
  */
 router.patch('/users/:id/ban', requireRole('admin', 'moderator'), adminController.banUser);
 
+router.patch('/users/:id/unban', requireRole('admin', 'moderator'), adminController.unbanUser);
+
 /**
  * @openapi
  * /admin/audit-logs:
@@ -142,5 +144,13 @@ router.patch('/users/:id/ban', requireRole('admin', 'moderator'), adminControlle
  *         description: Insufficient permissions
  */
 router.get('/audit-logs', requireRole('admin'), adminController.getAuditLogs);
+
+router.get('/stats', requireRole('admin'), adminController.getStats);
+
+router.get('/stats/monthly', requireRole('admin'), adminController.getMonthlyStats);
+
+router.get('/ai-usage', requireRole('admin'), adminController.getAiUsage);
+
+router.get('/system/health', requireRole('admin'), adminController.getSystemHealthController);
 
 export default router;

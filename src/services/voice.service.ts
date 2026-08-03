@@ -1,16 +1,26 @@
 import { env } from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { recordAiUsage } from './ai-usage.service.js';
+import { upstreamError } from '../utils/http-client.js';
+import {
+  consumeBusinessTokensOrExempt,
+  reverseBusinessTokensOrExempt,
+} from './business-token-consumption.service.js';
+import type { TokenExemptUser } from '../utils/token-exempt.js';
 
 export interface VoiceResponse {
   text_response: string;
   audio_response?: string | null;
+  audio_url?: string | null;
   conversation_id?: string | null;
+  usage?: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
 }
 
 export async function processVoice(
   audioBuffer: Buffer,
   audioMimeType: string,
   options?: {
+    userId: string;
     lat?: number;
     lon?: number;
     conversationId?: string;
@@ -38,8 +48,84 @@ export async function processVoice(
   });
 
   if (!response.ok) {
-    throw new AppError(502, 'AI voice service unavailable');
+    throw new AppError(502, await upstreamError('AI voice service unavailable', response));
   }
 
-  return response.json() as Promise<VoiceResponse>;
+  const result = (await response.json()) as VoiceResponse;
+
+  await recordAiUsage({
+    userId: options!.userId,
+    conversationId: options?.conversationId,
+    source: 'voice',
+    usage: result.usage,
+  });
+
+  return result;
+}
+
+export interface ProcessVoiceWithTokensInput {
+  userId: string;
+  businessRequestId: string;
+  audioBuffer: Buffer;
+  audioMimeType: string;
+  lat?: number;
+  lon?: number;
+  conversationId?: string;
+  authorization?: string;
+  user?: TokenExemptUser;
+}
+
+async function revertAndRethrow(
+  userId: string,
+  user: TokenExemptUser | undefined,
+  businessRequestId: string,
+  originalError: unknown,
+): Promise<never> {
+  try {
+    await reverseBusinessTokensOrExempt(user, {
+      userId,
+      feature: 'AI_CHAT_QUERY',
+      source: 'VOICE',
+      businessRequestId,
+    });
+  } catch (refundError) {
+    console.error(
+      'Failed to restore consumed tokens',
+      {
+        userId,
+        businessRequestId,
+        originalError: originalError instanceof Error ? originalError.message : String(originalError),
+        refundError: refundError instanceof Error ? refundError.message : String(refundError),
+      },
+    );
+    throw new AppError(500, 'Unable to restore consumed tokens');
+  }
+  throw originalError;
+}
+
+export async function processVoiceWithTokens(
+  input: ProcessVoiceWithTokensInput,
+): Promise<VoiceResponse> {
+  const consumption = await consumeBusinessTokensOrExempt(input.user, {
+    userId: input.userId,
+    feature: 'AI_CHAT_QUERY',
+    source: 'VOICE',
+    businessRequestId: input.businessRequestId,
+  });
+
+  if (consumption.idempotentReplay) {
+    throw new AppError(409, 'Voice request already processed');
+  }
+
+  try {
+    return await processVoice(input.audioBuffer, input.audioMimeType, {
+      userId: input.userId,
+      lat: input.lat,
+      lon: input.lon,
+      conversationId: input.conversationId,
+      authorization: input.authorization,
+    });
+  } catch (err) {
+    return revertAndRethrow(input.userId, input.user, input.businessRequestId, err);
+  }
 }

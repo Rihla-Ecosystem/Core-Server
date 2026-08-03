@@ -150,7 +150,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
     };
   }
 
-  test('1. POST /api/chat consumes 2 tokens and persists the exchange', async () => {
+  test('1. POST /api/chat consumes 1 token and persists the exchange', async () => {
     const { userId, walletId, token } = await createChatUser(10);
     const callsBefore = aiCallCount;
 
@@ -169,7 +169,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 9);
 
       const consumeCount = await prisma.tokenTransaction.count({
         where: { userId, type: TokenTransactionType.CONSUME },
@@ -201,7 +201,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
   });
 
   test('2. POST /api/chat with insufficient balance returns 402 and writes nothing', async () => {
-    const { userId, walletId, token } = await createChatUser(1);
+    const { userId, walletId, token } = await createChatUser(0);
     const callsBefore = aiCallCount;
 
     try {
@@ -217,7 +217,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 1);
+      assert.equal(wallet.tokenBalance, 0);
 
       assert.equal(await prisma.conversation.count({ where: { userId } }), 0);
       assert.equal(await prisma.message.count({ where: { conversation: { userId } } }), 0);
@@ -268,7 +268,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
     }
   });
 
-  test('4. POST /api/chat/stream consumes 2 tokens and a completed stream stays charged', async () => {
+  test('4. POST /api/chat/stream consumes 1 token and a completed stream stays charged', async () => {
     const { userId, walletId, token } = await createChatUser(10);
     const callsBefore = aiCallCount;
 
@@ -285,7 +285,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 9);
 
       assert.equal(
         await prisma.tokenTransaction.count({
@@ -436,7 +436,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 9);
 
       assert.equal(
         await prisma.tokenTransaction.count({
@@ -480,7 +480,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 6);
+      assert.equal(wallet.tokenBalance, 8);
 
       assert.equal(
         await prisma.tokenTransaction.count({
@@ -573,7 +573,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 9);
 
       assert.equal(
         await prisma.tokenTransaction.count({
@@ -696,7 +696,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
       }
 
       const refundFailureLogged = capturedLogs.some(
-        (args) => args[0] === 'Failed to restore consumed tokens',
+        (args) => args[0] === '[tokens] compensation_failed',
       );
       assert.equal(refundFailureLogged, true);
       assert.equal(

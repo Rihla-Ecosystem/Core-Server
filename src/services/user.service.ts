@@ -295,6 +295,104 @@ export async function getAuditLogs(page = 1, limit = 50) {
       limit,
       total,
       totalPages: Math.ceil(total / limit),
+export async function unbanUser(targetUserId: string, actorId: string) {
+  const user = await prisma.user.findUnique({ where: { id: targetUserId } });
+  if (!user) {
+    throw new AppError(404, 'User not found');
+  }
+
+  const updated = await prisma.user.update({
+    where: { id: targetUserId },
+    data: { isBanned: false },
+    select: { id: true, email: true, displayName: true, isBanned: true },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      actorId,
+      action: 'user_unbanned',
+      targetUserId,
+    },
+  });
+
+  return updated;
+}
+
+export async function getAdminStats() {
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const [totalUsers, activeToday, totalChats, purchasedTokens, revenueAgg, revenueToday, paymentCounts] =
+    await Promise.all([
+      prisma.user.count(),
+      prisma.user.count({ where: { lastLoginAt: { gte: dayAgo } } }),
+      prisma.conversation.count(),
+      prisma.tokenTransaction.aggregate({
+        _sum: { tokens: true },
+        where: { source: 'PURCHASE' },
+      }),
+      prisma.payment.aggregate({
+        _sum: { amount: true },
+        where: { status: 'COMPLETED' },
+      }),
+      prisma.payment.aggregate({
+        _sum: { amount: true },
+        where: { status: 'COMPLETED', paidAt: { gte: todayStart } },
+      }),
+      prisma.payment.groupBy({
+        by: ['status'],
+        _count: true,
+      }),
+    ]);
+  const statusCounts = Object.fromEntries(paymentCounts.map((p: { status: string; _count: number }) => [p.status, p._count]));
+  return {
+    totalUsers,
+    activeToday,
+    totalChats,
+    revenue: Number(revenueAgg._sum.amount ?? 0),
+    revenueToday: Number(revenueToday._sum.amount ?? 0),
+    purchasedTokens: purchasedTokens._sum.tokens ?? 0,
+    payments: {
+      completed: statusCounts.COMPLETED ?? 0,
+      pending: statusCounts.PENDING ?? 0,
+      failed: statusCounts.FAILED ?? 0,
+      refunded: statusCounts.REFUNDED ?? 0,
+      cancelled: statusCounts.CANCELLED ?? 0,
+    },
+  };
+}
+
+export async function getMonthlyStats(months = 6) {
+  const now = new Date();
+  const data: Array<{ name: string; users: number; chats: number; revenue: number }> = [];
+  for (let i = months - 1; i >= 0; i--) {
+    const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+    const [users, chats, revenue] = await Promise.all([
+      prisma.user.count({ where: { createdAt: { gte: start, lt: end } } }),
+      prisma.conversation.count({ where: { createdAt: { gte: start, lt: end } } }),
+      prisma.payment.aggregate({
+        _sum: { amount: true },
+        where: { status: 'COMPLETED', paidAt: { gte: start, lt: end } },
+      }),
+    ]);
+    data.push({
+      name: start.toLocaleString('en', { month: 'short' }),
+      users,
+      chats,
+      revenue: Number(revenue._sum.amount ?? 0),
+    });
+  }
+  return data;
+}
+
+export async function getAuditLogs() {
+  return prisma.auditLog.findMany({
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+    include: {
+      actor: { select: { displayName: true, email: true } },
+      target: { select: { displayName: true, email: true } },
     },
   };
 }

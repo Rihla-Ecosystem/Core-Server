@@ -5,40 +5,13 @@ import { fetchEnvContext } from './env.service.js';
 import { fetchPois } from './geo.service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import {
-  consumeBusinessTokens,
-  reverseBusinessTokens,
-} from './business-token-consumption.service.js';
-
-async function revertAndRethrow(
-  userId: string,
-  businessRequestId: string,
-  originalError: unknown,
-): Promise<never> {
-  try {
-    await reverseBusinessTokens({
-      userId,
-      feature: 'AI_CHAT_QUERY',
-      source: 'CHAT',
-      businessRequestId,
-    });
-  } catch (refundError) {
-    console.error(
-      'Failed to restore consumed tokens',
-      {
-        userId,
-        businessRequestId,
-        originalError: originalError instanceof Error ? originalError.message : String(originalError),
-        refundError: refundError instanceof Error ? refundError.message : String(refundError),
-      },
-    );
-    throw new AppError(500, 'Unable to restore consumed tokens');
-  }
-  throw originalError;
-}
+  beginBusinessTokenCharge,
+  refundBusinessTokenCharge,
+} from './tokenized-service-execution.service.js';
+import type { BusinessTokenCharge } from './tokenized-service-execution.service.js';
 
 function buildWrappedStream(
-  userId: string,
-  businessRequestId: string,
+  charge: BusinessTokenCharge,
   upstream: ReadableStream<Uint8Array>,
 ): ReadableStream<Uint8Array> {
   const reader = upstream.getReader();
@@ -48,25 +21,7 @@ function buildWrappedStream(
   async function refundOnce(originalError: unknown): Promise<void> {
     if (refunded || cancelled) return;
     refunded = true;
-    try {
-      await reverseBusinessTokens({
-        userId,
-        feature: 'AI_CHAT_QUERY',
-        source: 'CHAT',
-        businessRequestId,
-      });
-    } catch (refundError) {
-      console.error(
-        'Failed to restore consumed tokens',
-        {
-          userId,
-          businessRequestId,
-          originalError: originalError instanceof Error ? originalError.message : String(originalError),
-          refundError: refundError instanceof Error ? refundError.message : String(refundError),
-        },
-      );
-      throw new AppError(500, 'Unable to restore consumed tokens');
-    }
+    await refundBusinessTokenCharge(charge, originalError);
   }
 
   return new ReadableStream<Uint8Array>({
@@ -82,12 +37,8 @@ function buildWrappedStream(
         }
       } catch (err) {
         if (cancelled) return;
-        try {
-          await refundOnce(err);
-          controller.error(err);
-        } catch (refundError) {
-          controller.error(refundError);
-        }
+        await refundOnce(err);
+        controller.error(err);
       }
     },
     cancel() {
@@ -99,6 +50,7 @@ function buildWrappedStream(
 
 export interface StreamChatResult {
   body: ReadableStream<Uint8Array>;
+  conversationId: string;
 }
 
 export async function streamChat(
@@ -125,20 +77,19 @@ export async function streamChat(
       travelStyle: true,
       interests: true,
       accommodationType: true,
+      role: { select: { name: true } },
     },
   });
   if (!user) throw new AppError(404, 'User not found');
 
-  const consumption = await consumeBusinessTokens({
+  const charge = await beginBusinessTokenCharge({
+    user,
     userId,
     feature: 'AI_CHAT_QUERY',
     source: 'CHAT',
-    businessRequestId: options.businessRequestId,
+    idempotencyKey: options.businessRequestId,
+    idempotentReplayMessage: 'Chat request already processed',
   });
-
-  if (consumption.idempotentReplay) {
-    throw new AppError(409, 'Chat request already processed');
-  }
 
   try {
     const preferences = await prisma.userPreference.findMany({
@@ -159,6 +110,13 @@ export async function streamChat(
     }
 
     let conversationId = options?.conversationId;
+    if (conversationId) {
+      const existing = await prisma.conversation.findFirst({
+        where: { id: conversationId, userId },
+        select: { id: true },
+      });
+      if (!existing) conversationId = undefined;
+    }
     if (!conversationId) {
       const conv = await prisma.conversation.create({
         data: { userId, title: message.slice(0, 100) },
@@ -174,6 +132,7 @@ export async function streamChat(
       message,
       conversation_id: conversationId,
       persona: options?.persona ?? 'auto',
+      user_id: userId,
       user: {
         display_name: user.displayName,
         gender: user.gender,
@@ -211,9 +170,11 @@ export async function streamChat(
     }
 
     return {
-      body: buildWrappedStream(userId, options.businessRequestId, aiResponse.body),
+      body: buildWrappedStream(charge, aiResponse.body),
+      conversationId: conversationId!,
     };
   } catch (err) {
-    return revertAndRethrow(userId, options.businessRequestId, err);
+    await refundBusinessTokenCharge(charge, err);
+    throw err;
   }
 }
