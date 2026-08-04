@@ -5,14 +5,18 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import app from '../src/app.js';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
 import { signAccessToken } from '../src/utils/token.js';
 import { Gender } from '@prisma/client';
+
+let USER_ROLE_ID: number;
 
 describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () => {
   let server: Server;
   let baseUrl: string;
 
   before(async () => {
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await new Promise<void>((resolve) => {
       server = app.listen(0, () => {
         const address = server.address() as AddressInfo;
@@ -60,6 +64,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
   test('3. Authenticated user with a wallet receives the actual balance', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_wallet_user_with_wallet_${Date.now()}@example.com`,
         passwordHash: 'hashed_password_123',
         displayName: 'Test User With Wallet',
@@ -105,6 +110,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
   test('4. Authenticated user without a wallet receives balance 0', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_wallet_user_no_wallet_${Date.now()}@example.com`,
         passwordHash: 'hashed_password_123',
         displayName: 'Test User Without Wallet',
@@ -141,6 +147,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
   test('5. No TokenWallet row is created for a user without a wallet', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_wallet_user_no_row_${Date.now()}@example.com`,
         passwordHash: 'hashed_password_123',
         displayName: 'Test User No Row Created',
@@ -176,6 +183,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
   test('6. A user receives only their own wallet balance (User Isolation)', async () => {
     const userA = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_wallet_usera_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User A',
@@ -193,6 +201,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
 
     const userB = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_wallet_userb_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User B',
@@ -236,6 +245,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
   test('7. Supplying userId in query parameters is ignored', async () => {
     const userA = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_wallet_query_usera_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User A Query',
@@ -249,6 +259,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
 
     const userB = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_wallet_query_userb_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User B Query Target',
@@ -287,6 +298,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
   test('8. Supplying userId in the request body is ignored', async () => {
     const userA = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_wallet_body_usera_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User A Body',
@@ -300,6 +312,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
 
     const userB = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_wallet_body_userb_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User B Body Target',
@@ -354,6 +367,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
   test('9. Response exposes only balance and status', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_wallet_fields_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Fields Test',
@@ -400,6 +414,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
   test('10. No Payment, TokenTransaction, TokenPackage, or existing wallet record is modified', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_wallet_readonly_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Read Only Test',
@@ -433,6 +448,7 @@ describe('GET /api/tokens/wallet - Authenticated Token Wallet Balance API', () =
   test('11. Repeated GET requests remain read-only and return the same result', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_wallet_repeated_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Repeated Request',

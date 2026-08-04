@@ -13,6 +13,9 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
+
+let USER_ROLE_ID: number;
 import { AppError } from '../src/middleware/errorHandler.js';
 import { Gender, TokenTransactionType, TokenTransactionSource, WalletStatus } from '@prisma/client';
 import {
@@ -32,11 +35,7 @@ import { executeWithBusinessTokenCharge } from '../src/services/tokenized-servic
 
 describe('Business Token Consumption Service', () => {
   before(async () => {
-    await prisma.role.upsert({
-      where: { id: 1 },
-      update: {},
-      create: { id: 1, name: 'USER' },
-    });
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await cleanupSuiteData();
   });
 
@@ -66,6 +65,7 @@ describe('Business Token Consumption Service', () => {
   ): Promise<{ userId: string; walletId: string }> {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_business_consume_${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: 'Business Token Consume User',
@@ -258,6 +258,7 @@ describe('Business Token Consumption Service', () => {
   test('6. Missing wallet rejects with insufficient balance and creates no rows', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_business_consume_${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: 'Business Token No Wallet User',

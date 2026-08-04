@@ -13,6 +13,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
 import { Gender, TokenTransactionSource, TokenTransactionType } from '@prisma/client';
 import { grantSignupTokens } from '../src/services/auth.service.js';
 import { env } from '../src/config/env.js';
@@ -20,7 +21,10 @@ import { env } from '../src/config/env.js';
 describe('Signup Token Grant', () => {
   const expectedGrant = env.SIGNUP_TOKEN_GRANT;
 
+  let USER_ROLE_ID: number;
+
   before(async () => {
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await cleanupSuiteData();
   });
 
@@ -47,6 +51,7 @@ describe('Signup Token Grant', () => {
   async function createUser(): Promise<string> {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_signup_grant_${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: 'Signup Grant User',

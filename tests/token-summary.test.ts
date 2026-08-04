@@ -5,19 +5,18 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import app from '../src/app.js';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
 import { signAccessToken } from '../src/utils/token.js';
 import { Gender, TokenTransactionType, TokenTransactionSource } from '@prisma/client';
+
+let USER_ROLE_ID: number;
 
 describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () => {
   let server: Server;
   let baseUrl: string;
 
   before(async () => {
-    await prisma.role.upsert({
-      where: { id: 1 },
-      update: {},
-      create: { id: 1, name: 'USER' },
-    });
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await new Promise<void>((resolve) => {
       server = app.listen(0, () => {
         const address = server.address() as AddressInfo;
@@ -66,6 +65,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('3. User with no wallet and no transactions receives all zero values', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_empty_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Summary Empty',
@@ -103,6 +103,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('4. remainingTokens matches the authenticated user\'s wallet balance', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_rem_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Remaining Tokens',
@@ -133,6 +134,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('5. purchasedTokens includes only GRANT transactions with source PURCHASE', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_purchased_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Purchased Tokens',
@@ -174,6 +176,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('6. GRANT transactions from another source are not counted as purchases', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_grant_admin_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Grant Admin',
@@ -215,6 +218,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('7. consumedTokens includes only CONSUME transactions', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_consumed_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Consumed Tokens',
@@ -267,6 +271,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('8. refundedTokens includes only REFUND transactions', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_refunded_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Refunded Tokens',
@@ -308,6 +313,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('9. bonusTokens includes only BONUS transactions', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_bonus_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Bonus Tokens',
@@ -349,6 +355,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('10. netConsumedTokens equals consumedTokens minus refundedTokens', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_net_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Net Consumed Tokens',
@@ -404,6 +411,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('11. ADJUSTMENT transactions are excluded', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_adj_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Adjustment Test',
@@ -449,6 +457,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('12. Transactions belonging to another user are excluded', async () => {
     const userA = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_usera_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User A Summary Isolation',
@@ -462,6 +471,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
 
     const userB = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_userb_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User B Summary Isolation',
@@ -508,6 +518,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('13. userId supplied through query or body is ignored', async () => {
     const userA = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_query_usera_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User A Summary Query',
@@ -521,6 +532,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
 
     const userB = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_query_userb_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User B Summary Target',
@@ -585,6 +597,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('14. Response exposes only the approved fields', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_fields_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Safe Fields',
@@ -636,6 +649,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('15. No wallet row is created for a user without a wallet', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_nowallet_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User No Wallet Created',
@@ -669,6 +683,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('16. Repeated GET requests do not modify TokenWallet, TokenTransaction, Payment, or TokenPackage records', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_repeat_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Summary Repeat GET',
@@ -730,6 +745,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('17. adjustmentCredits and adjustmentDebits are derived from ADJUSTMENT metadata operation', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_adjmetrics_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Adjustment Metrics',
@@ -791,6 +807,7 @@ describe('GET /api/tokens/summary - Authenticated Token Usage Summary API', () =
   test('18. ADJUSTMENT transactions without an operation metadata are not counted in adjustment metrics', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_summary_adjnoop_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Adjustment No Operation',

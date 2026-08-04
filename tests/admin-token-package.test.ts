@@ -16,7 +16,10 @@ import type { AddressInfo } from 'node:net';
 import app from '../src/app.js';
 import { prisma } from '../src/config/prisma.js';
 import { signAccessToken } from '../src/utils/token.js';
+import { ensureAdminRole, ensureUserRole } from './helpers/test-role-fixtures.js';
 import { Gender, Prisma } from '@prisma/client';
+
+let USER_ROLE_ID: number;
 
 const ADMIN_USER_ID = '11111111-1111-4111-8111-111111111111';
 const USER_TOKEN_SUB = '22222222-2222-4222-8222-222222222222';
@@ -72,11 +75,8 @@ describe('Admin Token Package API', () => {
   before(async () => {
     await cleanupTestData();
 
-    const adminRole = await prisma.role.upsert({
-      where: { name: 'admin' },
-      update: {},
-      create: { id: 9999, name: 'admin', permissions: [] },
-    });
+    const adminRole = await ensureAdminRole();
+    USER_ROLE_ID = (await ensureUserRole()).id;
 
     await prisma.user.upsert({
       where: { id: ADMIN_USER_ID },
@@ -627,14 +627,11 @@ type TestTokenPackageOverrides = Partial<
     const suffix = uniqueSuffix();
     const code = `TEST_ADMIN_TP_PAYCNT_${suffix}`;
 
-    await prisma.role.upsert({
-      where: { id: 1 },
-      update: { name: 'USER' },
-      create: { id: 1, name: 'USER', permissions: [] },
-    });
+    await ensureUserRole();
 
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_admin_tp_paycnt_${suffix}@example.com`,
         passwordHash: 'hash',
         displayName: 'Payment Count Test User',
@@ -2209,6 +2206,7 @@ type TestTokenPackageOverrides = Partial<
 
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_del409_${suffix}@example.com`,
         passwordHash: 'hash',
         displayName: 'Delete 409 User',

@@ -18,6 +18,9 @@ import type { AddressInfo } from 'node:net';
 import app from '../src/app.js';
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
+
+let USER_ROLE_ID: number;
 import { signAccessToken } from '../src/utils/token.js';
 import {
   Gender,
@@ -63,11 +66,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
   }
 
   before(async () => {
-    await prisma.role.upsert({
-      where: { id: 1 },
-      update: {},
-      create: { id: 1, name: 'USER' },
-    });
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await cleanupSuiteData();
 
     await new Promise<void>((resolve) => {
@@ -135,6 +134,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
   async function createUser(balance?: number): Promise<{ userId: string; token: string }> {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `${EMAIL_PREFIX}${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: 'Identify Token User',

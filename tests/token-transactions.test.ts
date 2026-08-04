@@ -5,14 +5,18 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import app from '../src/app.js';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
 import { signAccessToken } from '../src/utils/token.js';
 import { Gender, TokenTransactionType, TokenTransactionSource } from '@prisma/client';
+
+let USER_ROLE_ID: number;
 
 describe('GET /api/tokens/transactions - Authenticated Token Transactions API', () => {
   let server: Server;
   let baseUrl: string;
 
   before(async () => {
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await new Promise<void>((resolve) => {
       server = app.listen(0, () => {
         const address = server.address() as AddressInfo;
@@ -61,6 +65,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
   test('3 & 4. Authenticated user receives only their transactions; other user transactions excluded', async () => {
     const userA = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_usera_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User A Tx',
@@ -83,6 +88,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
 
     const userB = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_userb_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User B Tx',
@@ -132,6 +138,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
   test('5. Results are sorted newest first (createdAt descending)', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_sort_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Sort Test',
@@ -190,6 +197,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
   test('6. Stable secondary sorting works for equal timestamps (id descending)', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_sec_sort_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Secondary Sort Test',
@@ -251,6 +259,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
   test('7 & 13. Default pagination is page 1 and limit 20 with correct metadata', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_default_page_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Default Page Test',
@@ -282,6 +291,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
   test('8. Custom valid pagination works (page 2, limit 2)', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_custom_page_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Custom Page Test',
@@ -334,6 +344,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
   test('9. Empty result returns HTTP 200 with items: []', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_empty_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Empty Test',
@@ -363,6 +374,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
   test('10. Invalid page values (0, negative, decimal, non-numeric) return 400', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_invalid_page_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Invalid Page',
@@ -392,6 +404,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
   test('11. Invalid limit values (0, negative, decimal, non-numeric) return 400', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_invalid_limit_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Invalid Limit',
@@ -421,6 +434,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
   test('12. limit greater than 100 returns 400', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_limit_101_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Limit 101',
@@ -446,6 +460,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
   test('14. userId supplied through query or body is ignored', async () => {
     const userA = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_ignore_usera_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User A Ignore Test',
@@ -468,6 +483,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
 
     const userB = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_ignore_userb_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User B Ignore Target',
@@ -546,6 +562,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
   test('15. Response contains only approved safe fields', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_fields_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Safe Fields Test',
@@ -598,6 +615,7 @@ describe('GET /api/tokens/transactions - Authenticated Token Transactions API', 
   test('16. Repeated GET requests do not modify TokenTransaction, TokenWallet, Payment, or TokenPackage records', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_tx_repeat_${Date.now()}@example.com`,
         passwordHash: 'hash',
         displayName: 'User Repeat GET Test',
