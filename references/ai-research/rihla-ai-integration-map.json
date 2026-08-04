@@ -1,0 +1,575 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-03",
+  "auditType": "repository-aware-static-audit",
+  "auditScope": "Rihla Core Server (pricing, token-wallet billing, usage telemetry, durable billing library) + read-only AI Service (Gemini SDK integration, usage accumulation, feature endpoints)",
+  "method": "static code inspection of both repositories at pinned commits; reference baselines under references/ai-pricing/ treated as research baselines only; no provider API calls, no installs, no secrets read into output",
+  "repoSnapshots": [
+    {
+      "repo": "Core-Server-provider-model-pricing",
+      "role": "audit-subject",
+      "path": "Core-Server-provider-model-pricing",
+      "branch": "feature/provider-model-pricing",
+      "headCommit": "d7af972eac3bcab049b2818567733c7fe5eca6b4",
+      "workingTree": "clean except untracked references/"
+    },
+    {
+      "repo": "ai-service",
+      "role": "read-only-peer",
+      "path": "ai-service",
+      "branch": "default",
+      "headCommit": "3c758706c14a6dde255c31da0467c0b75f818e93",
+      "workingTree": "clean"
+    }
+  ],
+  "classifications": {
+    "enum": [
+      "ACTIVE",
+      "FALLBACK_CONFIGURED",
+      "CONFIGURED_BUT_INACTIVE",
+      "REFERENCE_ONLY",
+      "FUTURE_CANDIDATE",
+      "UNSUPPORTED"
+    ],
+    "definition": {
+      "ACTIVE": "used by a live user-facing feature on every request path",
+      "FALLBACK_CONFIGURED": "present in the runtime fallback chain, used only when the primary model/key fails",
+      "CONFIGURED_BUT_INACTIVE": "present in configuration or a library but not reachable from any live route",
+      "REFERENCE_ONLY": "present only in reference/research baselines, not integrated in code",
+      "FUTURE_CANDIDATE": "documented/listed as viable but no feature wired to it",
+      "UNSUPPORTED": "explicitly unsupported"
+    }
+  },
+  "modelInventory": [
+    {
+      "model": "gemini-3.6-flash",
+      "provider": "google",
+      "classification": "ACTIVE",
+      "role": "primary chat/vision/voice-understanding model",
+      "definedIn": [
+        "ai-service:app/config.py (gemini_model default)",
+        "ai-service:app/core/llm_client.py (GEMINI_MODEL_FALLBACKS[0])"
+      ],
+      "statusPerBaseline": "STABLE",
+      "evidenceConfidence": "REPOSITORY_OBSERVED",
+      "pricingBaselineMicrosPerMillion": {
+        "input": 1500000,
+        "output": 7500000,
+        "cachedInput": 150000,
+        "batchInput": 750000,
+        "batchOutput": 3750000,
+        "priorityInput": 2700000,
+        "priorityOutput": 13500000,
+        "contextCacheStoragePerMillionPerHour": 1000000
+      },
+      "coreTelemetryFallbackUsdPerMillion": { "input": 0.3, "output": 2.5 },
+      "matchesBaseline": false
+    },
+    {
+      "model": "gemini-3.5-flash-lite",
+      "provider": "google",
+      "classification": "FALLBACK_CONFIGURED",
+      "role": "fallback chain index 1",
+      "definedIn": [
+        "ai-service:app/core/llm_client.py (GEMINI_MODEL_FALLBACKS[1])",
+        "core:src/config/ai-pricing.ts (FALLBACK_PRICES)"
+      ],
+      "statusPerBaseline": "STABLE",
+      "evidenceConfidence": "REPOSITORY_OBSERVED",
+      "pricingBaselineMicrosPerMillion": {
+        "input": 300000,
+        "output": 2500000,
+        "cachedInput": 30000,
+        "batchInput": 150000,
+        "batchOutput": 1250000,
+        "priorityInput": 540000,
+        "priorityOutput": 4500000,
+        "contextCacheStoragePerMillionPerHour": 1000000
+      },
+      "coreTelemetryFallbackUsdPerMillion": { "input": 0.1, "output": 0.4 },
+      "matchesBaseline": false
+    },
+    {
+      "model": "gemini-3-flash-preview",
+      "provider": "google",
+      "classification": "FALLBACK_CONFIGURED",
+      "role": "fallback chain index 2",
+      "definedIn": [
+        "ai-service:app/core/llm_client.py (GEMINI_MODEL_FALLBACKS[2])",
+        "core:src/config/ai-pricing.ts (FALLBACK_PRICES)"
+      ],
+      "statusPerBaseline": "PREVIEW",
+      "evidenceConfidence": "REPOSITORY_OBSERVED",
+      "pricingBaselineMicrosPerMillion": {
+        "input": 500000,
+        "output": 3000000,
+        "cachedInput": 50000,
+        "batchInput": 250000,
+        "batchOutput": 1500000,
+        "priorityInput": 900000,
+        "priorityOutput": 5400000,
+        "contextCacheStoragePerMillionPerHour": 1000000
+      },
+      "coreTelemetryFallbackUsdPerMillion": { "input": 0.3, "output": 2.5 },
+      "matchesBaseline": false
+    },
+    {
+      "model": "gemini-2.5-flash-lite",
+      "provider": "google",
+      "classification": "FALLBACK_CONFIGURED",
+      "role": "fallback chain index 3 (last)",
+      "definedIn": [
+        "ai-service:app/core/llm_client.py (GEMINI_MODEL_FALLBACKS[3])",
+        "core:src/config/ai-pricing.ts (FALLBACK_PRICES)"
+      ],
+      "statusPerBaseline": "STABLE",
+      "evidenceConfidence": "REPOSITORY_OBSERVED",
+      "pricingBaselineMicrosPerMillion": {
+        "input": 100000,
+        "output": 400000,
+        "cachedInput": 10000,
+        "batchInput": 50000,
+        "batchOutput": 200000,
+        "priorityInput": 180000,
+        "priorityOutput": 720000,
+        "contextCacheStoragePerMillionPerHour": 1000000
+      },
+      "coreTelemetryFallbackUsdPerMillion": { "input": 0.1, "output": 0.4 },
+      "matchesBaseline": true
+    },
+    {
+      "model": "gemini-3.1-flash-tts-preview",
+      "provider": "google",
+      "classification": "ACTIVE",
+      "role": "TTS synthesis model (hardcoded in generate_speech)",
+      "definedIn": ["ai-service:app/core/llm_client.py (generate_speech)"],
+      "statusPerBaseline": null,
+      "evidenceConfidence": "REPOSITORY_OBSERVED",
+      "pricingBaselineMicrosPerMillion": null,
+      "coreTelemetryFallbackUsdPerMillion": null,
+      "matchesBaseline": null,
+      "pricingNote": "absent from pricing and usage baselines; pricing unit and rate UNKNOWN (REQUIRES_LIVE_PROBE)"
+    },
+    {
+      "model": "claude-opus-5",
+      "provider": "anthropic",
+      "classification": "REFERENCE_ONLY",
+      "role": "not integrated; research baseline only",
+      "definedIn": ["references/ai-pricing/ai-model-capabilities.json"],
+      "statusPerBaseline": "STABLE",
+      "evidenceConfidence": "DOCUMENTED"
+    },
+    {
+      "model": "claude-fable-5",
+      "provider": "anthropic",
+      "classification": "REFERENCE_ONLY",
+      "role": "not integrated; research baseline only",
+      "definedIn": ["references/ai-pricing/ai-model-capabilities.json"],
+      "statusPerBaseline": "STABLE",
+      "evidenceConfidence": "DOCUMENTED"
+    },
+    {
+      "model": "claude-mythos-5",
+      "provider": "anthropic",
+      "classification": "REFERENCE_ONLY",
+      "role": "not integrated; research baseline only",
+      "definedIn": ["references/ai-pricing/ai-model-capabilities.json"],
+      "statusPerBaseline": "LIMITED_AVAILABILITY",
+      "evidenceConfidence": "DOCUMENTED"
+    },
+    {
+      "model": "claude-opus-4-8",
+      "provider": "anthropic",
+      "classification": "REFERENCE_ONLY",
+      "role": "not integrated; research baseline only",
+      "definedIn": ["references/ai-pricing/ai-model-capabilities.json"],
+      "statusPerBaseline": "STABLE",
+      "evidenceConfidence": "DOCUMENTED"
+    },
+    {
+      "model": "jina-embeddings-v4",
+      "provider": "jina",
+      "classification": "REFERENCE_ONLY",
+      "role": "AI Service RAG embeddings (background ingest, not a user-facing priced feature in Core)",
+      "definedIn": ["ai-service:app/rag/retriever.py"],
+      "statusPerBaseline": null,
+      "evidenceConfidence": "REPOSITORY_OBSERVED",
+      "pricingNote": "not represented in Rihla pricing baseline; out of scope for Core pricing but flagged for completeness"
+    },
+    {
+      "model": "gemini-2.5-flash-image",
+      "provider": "google",
+      "classification": "FUTURE_CANDIDATE",
+      "role": "image generation baseline entry; no image-generation feature wired in Rihla",
+      "definedIn": ["references/ai-pricing/ai-provider-model-pricing.json"],
+      "statusPerBaseline": "PREVIEW",
+      "evidenceConfidence": "DOCUMENTED",
+      "pricingNote": "billed per generated image ($0.039 standard / $0.0195 batch per usage baseline), not via token usageMetadata"
+    },
+    {
+      "model": "openai-gpt-family",
+      "provider": "openai",
+      "classification": "REFERENCE_ONLY",
+      "role": "pricing baseline lists openai provider; 0 models populated in capabilities baseline; not integrated",
+      "definedIn": ["references/ai-pricing/ai-provider-model-pricing.json"],
+      "statusPerBaseline": null,
+      "evidenceConfidence": "DOCUMENTED"
+    }
+  ],
+  "providerIntegrations": [
+    {
+      "provider": "google",
+      "sdk": "google.genai (google-genai)",
+      "active": true,
+      "entrypoint": "ai-service:app/core/llm_client.py",
+      "defaultModel": "gemini-3.6-flash",
+      "fallbackChain": [
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash-lite"
+      ],
+      "keyRotation": {
+        "mechanism": "gemini_api_keys -> gemini_key_list; per-key state ACTIVE/DEGRADED/COOLDOWN",
+        "cooldownSeconds": 60,
+        "requestTimeoutSeconds": 120
+      },
+      "requestIdExposure": "UNKNOWN",
+      "requestIdNote": "provider request id not surfaced through current google.genai path; durable contract providerRequestId is never populated"
+    },
+    {
+      "provider": "jina",
+      "sdk": "REST https://api.jina.ai/v1/embeddings",
+      "active": true,
+      "entrypoint": "ai-service:app/rag/retriever.py",
+      "defaultModel": "jina-embeddings-v4",
+      "role": "RAG embeddings only",
+      "requestIdExposure": "NOT_APPLICABLE"
+    },
+    {
+      "provider": "openai",
+      "sdk": null,
+      "active": false,
+      "classification": "REFERENCE_ONLY",
+      "requestIdExposure": null
+    },
+    {
+      "provider": "anthropic",
+      "sdk": null,
+      "active": false,
+      "classification": "REFERENCE_ONLY",
+      "requestIdExposure": null
+    }
+  ],
+  "featureFlows": [
+    {
+      "feature": "chat",
+      "coreRoute": "POST /chat (src/routes/chat.routes.ts)",
+      "aiEndpoint": "/chat",
+      "debit": { "kind": "fixed", "feature": "AI_CHAT_QUERY", "tokens": 1, "active": true },
+      "usageTelemetry": { "recorded": true, "callSite": "src/services/chat.service.ts:133", "destination": "prisma.aiUsageLog" },
+      "aiCallCount": "1-2 per turn (persona generate_with_tools then optional follow-up generate)",
+      "usageMerge": "_sum_usage sums all entries; model attributed = first entry's response.model",
+      "billingStatus": "ACTIVE_FIXED",
+      "doubleCountingRisk": "NONE for distinct calls; MIS-PRICE risk if fallback model differs between calls in one turn"
+    },
+    {
+      "feature": "chat-stream",
+      "coreRoute": "POST /chat/stream (src/routes/chat-stream.routes.ts)",
+      "aiEndpoint": "/chat/stream",
+      "debit": { "kind": "fixed", "feature": "AI_CHAT_QUERY", "tokens": 1, "active": true, "mode": "begin-refund" },
+      "usageTelemetry": { "recorded": true, "callSite": "src/routes/chat-stream.routes.ts:126", "destination": "prisma.aiUsageLog" },
+      "aiCallCount": "1 streamed call; per-chunk usage recorded by _record_usage then summed at ai-service:app/api/stream.py:78-87",
+      "doubleCountingRisk": "HIGH if Gemini emits cumulative usageMetadata on every chunk (usage baseline says EVERY_EVENT_CUMULATIVE); REQUIRES_LIVE_PROBE"
+    },
+    {
+      "feature": "identify",
+      "coreRoute": "POST /identify (src/routes/identify.routes.ts)",
+      "aiEndpoint": "/identify",
+      "debit": { "kind": "fixed", "feature": "AI_IMAGE_ANALYSIS", "tokens": 5, "active": true },
+      "usageTelemetry": { "recorded": true, "callSite": "src/services/identify.service.ts:57", "destination": "prisma.aiUsageLog" },
+      "aiCallCount": "1 on cache miss; 0 on cache hit (in-memory MD5 cache returns cached=True with no usage)",
+      "cacheBehavior": "cache hit -> no provider call, no usage, no cost (correct)",
+      "doubleCountingRisk": "NONE"
+    },
+    {
+      "feature": "voice",
+      "coreRoute": "POST /voice, GET /voice/audio (src/routes/voice.routes.ts)",
+      "aiEndpoint": "/voice, /voice/audio?token=",
+      "debit": { "kind": "fixed", "feature": "REAL_TIME_TRANSLATION", "tokens": 3, "active": true },
+      "usageTelemetry": { "recorded": true, "callSite": "src/services/voice.service.ts:55", "destination": "prisma.aiUsageLog" },
+      "aiCallCount": "2 (audio-understanding generate_with_audio + generate_speech TTS)",
+      "usageSelection": "ai-service:app/api/voice.py:195 reports only usage_entries[0] (audio-understanding); TTS usage discarded",
+      "ttsModel": "gemini-3.1-flash-tts-preview (hardcoded ai-service:app/core/llm_client.py:363)",
+      "ttsSynthesisEngine": "gTTS library (non-API helper); whether billable is UNKNOWN",
+      "doubleCountingRisk": "UNDER-COUNT (TTS usage never reported); TTS rate UNKNOWN"
+    },
+    {
+      "feature": "itinerary",
+      "coreRoute": "POST /itinerary (src/routes/itinerary.routes.ts)",
+      "aiEndpoint": "/itinerary",
+      "debit": { "kind": "fixed", "feature": "AI_TRIP_ITINERARY", "tokens": 10, "active": true },
+      "usageTelemetry": { "recorded": true, "callSite": "src/services/itinerary.service.ts:102", "destination": "prisma.aiUsageLog" },
+      "aiCallCount": "1+ (generate_with_tools using _recommend_itinerary)",
+      "doubleCountingRisk": "NONE known"
+    },
+    {
+      "feature": "durable-usage-billing",
+      "coreRoute": "none (no live route)",
+      "aiEndpoint": "wraps /v1/execute/chat via ai-service-chat-executor",
+      "debit": { "kind": "usage-based", "active": false, "status": "DORMANT" },
+      "usageTelemetry": { "recorded": false },
+      "entrypoint": "runAIBillingOrchestration in src/services/ai-billing-orchestrator.service.ts",
+      "callers": [
+        "tests/ai-billing-orchestrator.test.ts",
+        "tests/ai-billing-orchestrator-durable.test.ts"
+      ],
+      "note": "no live route, controller, or service imports it; tests/ai-service-chat-executor.test.ts:682 asserts executor source excludes it; internal.routes.ts has no execute endpoint"
+    }
+  ],
+  "usageAccounting": {
+    "antiDoubleCountingRules": [
+      "Price aggregate token counts only; never aggregate + modality-specific subtotal (Gemini image input is folded into promptTokenCount AND broken out non-additively).",
+      "Streaming: take usage from the final cumulative chunk exactly once; never sum per-chunk cumulative entries.",
+      "Reasoning/thoughts tokens are folded into totalTokenCount; never add a separate reasoning charge.",
+      "Cache hits (identify) must produce zero usage and zero cost.",
+      "Voice must report audio-understanding and TTS usage as distinct entries; do not merge or drop either.",
+      "Multi-call chat turns must attribute each call's usage to its own actual model."
+    ],
+    "streamingSemantics": "Gemini usageMetadata is cumulative (EVERY_EVENT_CUMULATIVE per usage baseline); current per-chunk recording + summing is unsafe",
+    "imageTokenAccounting": {
+      "foldedIntoAggregate": true,
+      "separateBreakdownField": true,
+      "nonAdditive": true
+    },
+    "ttsAccounting": {
+      "reported": false,
+      "model": "gemini-3.1-flash-tts-preview",
+      "pricingUnit": "UNKNOWN",
+      "rates": "UNKNOWN"
+    }
+  },
+  "rateCards": {
+    "schema": {
+      "currency": "USD",
+      "unit": "micros per 1M tokens",
+      "integerOnly": true
+    },
+    "baselineSource": "references/ai-pricing/ai-provider-model-pricing.json (generatedAt 2026-08-03)",
+    "googleModels": [
+      {
+        "model": "gemini-3.6-flash",
+        "status": "STABLE",
+        "standardMicrosPerMillion": { "input": 1500000, "output": 7500000, "cachedInput": 150000 },
+        "batchMicrosPerMillion": { "input": 750000, "output": 3750000, "cachedInput": 75000 },
+        "priorityMicrosPerMillion": { "input": 2700000, "output": 13500000, "cachedInput": 270000 },
+        "contextCacheStorageMicrosPerMillionPerHour": 1000000,
+        "notes": ["Grounding with Google Search: 5000 free requests/month across Gemini 3.x, then $14/1000 requests"]
+      },
+      {
+        "model": "gemini-3.5-flash-lite",
+        "status": "STABLE",
+        "standardMicrosPerMillion": { "input": 300000, "output": 2500000, "cachedInput": 30000 },
+        "batchMicrosPerMillion": { "input": 150000, "output": 1250000, "cachedInput": 20000 },
+        "priorityMicrosPerMillion": { "input": 540000, "output": 4500000, "cachedInput": 50000 },
+        "contextCacheStorageMicrosPerMillionPerHour": 1000000
+      },
+      {
+        "model": "gemini-3-flash-preview",
+        "status": "PREVIEW",
+        "standardMicrosPerMillion": { "input": 500000, "output": 3000000, "cachedInput": 50000 },
+        "batchMicrosPerMillion": { "input": 250000, "output": 1500000, "cachedInput": 50000 },
+        "priorityMicrosPerMillion": { "input": 900000, "output": 5400000, "cachedInput": 90000 },
+        "contextCacheStorageMicrosPerMillionPerHour": 1000000
+      },
+      {
+        "model": "gemini-2.5-flash-lite",
+        "status": "STABLE",
+        "standardMicrosPerMillion": { "input": 100000, "output": 400000, "cachedInput": 10000 },
+        "batchMicrosPerMillion": { "input": 50000, "output": 200000, "cachedInput": 10000 },
+        "priorityMicrosPerMillion": { "input": 180000, "output": 720000, "cachedInput": 18000 },
+        "contextCacheStorageMicrosPerMillionPerHour": 1000000
+      },
+      {
+        "model": "gemini-3.1-flash-tts-preview",
+        "status": null,
+        "standardMicrosPerMillion": null,
+        "note": "absent from pricing baseline; REQUIRES_LIVE_PROBE"
+      }
+    ],
+    "coreFallbackComparison": {
+      "note": "src/config/ai-pricing.ts FALLBACK_PRICES are the only in-repo USD-per-M prices (telemetry cost); they match the baseline only for gemini-2.5-flash-lite",
+      "rows": [
+        { "model": "gemini-3.6-flash", "coreInputUsd": 0.3, "coreOutputUsd": 2.5, "baselineInputUsd": 1.5, "baselineOutputUsd": 7.5, "match": false },
+        { "model": "gemini-3.5-flash-lite", "coreInputUsd": 0.1, "coreOutputUsd": 0.4, "baselineInputUsd": 0.3, "baselineOutputUsd": 2.5, "match": false },
+        { "model": "gemini-3-flash-preview", "coreInputUsd": 0.3, "coreOutputUsd": 2.5, "baselineInputUsd": 0.5, "baselineOutputUsd": 3.0, "match": false },
+        { "model": "gemini-2.5-flash-lite", "coreInputUsd": 0.1, "coreOutputUsd": 0.4, "baselineInputUsd": 0.1, "baselineOutputUsd": 0.4, "match": true }
+      ]
+    }
+  },
+  "usageMappingBaseline": {
+    "baselineSource": "references/ai-pricing/ai-provider-usage-reference.json (generatedAt 2026-08-03)",
+    "gemini36Flash": {
+      "textChatNormalizedFields": [
+        "inputTokens <- promptTokenCount",
+        "outputTokens <- candidatesTokenCount",
+        "totalTokens <- totalTokenCount (= promptTokenCount + candidatesTokenCount + toolUsePromptTokenCount + thoughtsTokenCount per Google formula)",
+        "reasoningTokens <- thoughtsTokenCount",
+        "cachedInputTokens <- cachedContentTokenCount"
+      ],
+      "imageInput": "promptTokensDetails[] modality=IMAGE; folded into aggregate AND non-additive breakdown",
+      "imageGeneration": "candidatesTokensDetails[] modality=IMAGE (Nano Banana token-based); gemini-2.5-flash-image is per-image priced, NOT via token usageMetadata",
+      "audioInput": "promptTokensDetails[] modality=AUDIO (folded into aggregate)"
+    },
+    "ttsUsageReporting": "absent from baseline for gemini-3.1-flash-tts-preview; UNKNOWN"
+  },
+  "fixedWalletPricing": {
+    "active": true,
+    "mustRemainUnchanged": true,
+    "source": "src/config/business-token-features.ts",
+    "pricingVersion": 1,
+    "maxTokenBalance": 2147483647,
+    "signupGrant": { "envVar": "SIGNUP_TOKEN_GRANT", "defaultTokens": 20 },
+    "featureCosts": {
+      "AI_TRIP_ITINERARY": 10,
+      "AI_CHAT_QUERY": 1,
+      "AI_IMAGE_ANALYSIS": 5,
+      "REAL_TIME_TRANSLATION": 3,
+      "PERSONALIZED_RECOMMENDATIONS": 5,
+      "OFFLINE_MAP_DOWNLOAD": 8,
+      "SMART_BUDGET_PLANNER": 6,
+      "LOCAL_AUDIO_GUIDE": 12,
+      "BOOKING_PRICE_COMPARISON": 4
+    },
+    "debitMechanisms": [
+      "src/services/business-token-consumption.service.ts (consume/reverse)",
+      "src/services/tokenized-service-execution.service.ts (fixed-charge wrapper)",
+      "src/services/token-reservation.service.ts (15 min TTL reserve/settle/release)"
+    ]
+  },
+  "chatLimits": {
+    "source": "src/config/chat-limits.ts",
+    "defaults": {
+      "maxInputTokens": 12000,
+      "maxCurrentMessageTokens": 3000,
+      "maxMessageCharacters": 10000,
+      "maxRecentMessages": 10,
+      "historyTokenBudget": 5500,
+      "summaryTokenBudget": 1000,
+      "maxOutputTokens": 1200,
+      "inputHeadroomTokens": 2500
+    },
+    "envVars": [
+      "CHAT_MAX_INPUT_TOKENS",
+      "CHAT_MAX_CURRENT_MESSAGE_TOKENS",
+      "CHAT_MAX_MESSAGE_CHARACTERS",
+      "CHAT_MAX_RECENT_MESSAGES",
+      "CHAT_HISTORY_TOKEN_BUDGET",
+      "CHAT_SUMMARY_TOKEN_BUDGET",
+      "CHAT_MAX_OUTPUT_TOKENS"
+    ],
+    "note": "provisional Rihla application-level defaults, not official Gemini limits; used by ai-reservation-quote (dormant path)"
+  },
+  "architectureViolations": [
+    "core:src/config/ai-pricing.ts uses Gemini model strings and 'lite'/'flash' substring heuristics inside generic pricing",
+    "ai-service:app/core/llm_client.py hardcodes provider model gemini-3.1-flash-tts-preview inside the TTS call",
+    "No provider-adapter boundary: google.genai SDK is used directly by chat/voice orchestration",
+    "Canonical usage contract (src/types/ai.ts AIProviderUsage) lacks modality breakdown, actual-vs-requested model split, and per-call multiplicity",
+    "providerRequestId is never populated (UNKNOWN)"
+  ],
+  "unknownItems": [
+    {
+      "item": "whether Gemini emits cumulative usageMetadata on every streamed chunk",
+      "status": "REQUIRES_LIVE_PROBE",
+      "impact": "double-count risk in stream usage summing"
+    },
+    {
+      "item": "gemini-3.1-flash-tts-preview pricing unit and rate",
+      "status": "UNKNOWN",
+      "impact": "voice TTS cost cannot be priced"
+    },
+    {
+      "item": "whether gTTS synthesis is a billable provider call",
+      "status": "UNKNOWN",
+      "impact": "voice billing completeness"
+    },
+    {
+      "item": "Gemini provider request id exposure via google.genai",
+      "status": "UNKNOWN",
+      "impact": "providerRequestId never populated in durable contract"
+    },
+    {
+      "item": "exact format of response.model returned by google.genai",
+      "status": "REQUIRES_LIVE_PROBE",
+      "impact": "model attribution accuracy in usage contract"
+    }
+  ],
+  "recommendations": [
+    "Fix stream usage to last-chunk-only semantics; never sum cumulative per-chunk entries.",
+    "Report voice audio-understanding and TTS usage as distinct entries; do not discard TTS usage.",
+    "Attribute each chat call's usage to its own actual model; emit perCall array when a turn makes multiple provider calls.",
+    "Materialize provider-neutral rate cards (integer micros) from the baseline; reconcile the stale telemetry fallback prices (gemini-3.6-flash and gemini-3.5-flash-lite understate vs baseline).",
+    "Populate google_gemini entries in ai-model-capabilities.json; add TTS model pricing/usage baseline entries.",
+    "Extract a googleGeminiAdapter behind the canonical usage contract; keep generic pricing free of provider strings.",
+    "Keep fixed Wallet prices unchanged; keep usage-based durable billing dormant until Phases 1-3 pass acceptance.",
+    "Surface request id via the adapter when the SDK exposes it (langfuse/otel may be the source)."
+  ],
+  "phasedPlan": [
+    {
+      "phase": 1,
+      "name": "Fix accounting correctness",
+      "work": [
+        "stream usage last-chunk-only semantics",
+        "voice reports audio-understanding + TTS usage explicitly",
+        "chat per-call usage with per-call model attribution"
+      ],
+      "billingImpact": "none (fixed prices unchanged)"
+    },
+    {
+      "phase": 2,
+      "name": "Rate card and usage contract hardening",
+      "work": [
+        "provider-neutral rate cards from baseline (integer micros, tiers)",
+        "extend canonical usage contract with modality + actual/requested model + request id slot",
+        "populate capabilities baseline for google_gemini"
+      ],
+      "billingImpact": "none"
+    },
+    {
+      "phase": 3,
+      "name": "Adapter boundary extraction",
+      "work": [
+        "googleGeminiAdapter behind canonical contract",
+        "stub adapters for openai/anthropic",
+        "move computeAiCost fallback logic out of generic config"
+      ],
+      "billingImpact": "none"
+    },
+    {
+      "phase": 4,
+      "name": "Activate durable usage billing (optional, gated)",
+      "work": [
+        "feature-flag runAIBillingOrchestration on the five routes",
+        "reconcile telemetry cost with rate card",
+        "run live probe plan",
+        "flip to usage-based pricing after acceptance"
+      ],
+      "billingImpact": "usage-based billing (Wallet fixed prices unchanged)"
+    }
+  ],
+  "acceptanceCriteria": [
+    "All five live features still debit unchanged fixed Wallet prices; no regression in token-wallet / business-token-* tests",
+    "Stream usage reported exactly once from final cumulative chunk; no double-count",
+    "Voice reports audio-understanding + TTS usage explicitly; TTS rate resolvable or explicitly UNKNOWN pending probe",
+    "Generic Core pricing contains no provider model strings or substrings",
+    "All pricing arithmetic uses integer micros / BigInt; no floating-point money",
+    "Reference baselines and integration map consistent (schemaVersion, enums, null-for-unknown)",
+    "Any durable-path activation is feature-flagged and covered by existing orchestrator tests"
+  ],
+  "verdict": "NOT_READY_FOR_RIHLA_AI_PRICING_IMPLEMENTATION_REVIEW",
+  "relatedDeliverables": {
+    "auditDoc": "docs/ai-multimodal-pricing-audit.md",
+    "thisFile": "references/ai-research/rihla-ai-integration-map.json",
+    "baselineDir": "references/ai-pricing/"
+  }
+}

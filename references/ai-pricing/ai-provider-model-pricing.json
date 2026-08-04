@@ -1,0 +1,2167 @@
+{
+  "schemaVersion": 1,
+  "currency": "USD",
+  "monetaryUnit": "MICROS",
+  "tokenRateUnit": "PER_1_MILLION_TOKENS",
+  "generatedAt": "2026-08-03",
+  "providers": [
+    {
+      "provider": "anthropic",
+      "verifiedAt": "2026-08-03",
+      "officialPricingSource": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "models": [
+        {
+          "model": "claude-fable-5",
+          "displayName": "Claude Fable 5",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 10000000,
+            "outputRateMicrosPerMillion": 50000000,
+            "cachedInputRateMicrosPerMillion": 1000000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 12500000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 20000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 5000000,
+              "outputRateMicrosPerMillion": 25000000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "Mythos-tier model; safety-hardened variant of the Fable/Mythos generation. Uses newer tokenizer (~30% more tokens than pre-4.7 models for same text).",
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-mythos-5",
+          "displayName": "Claude Mythos 5",
+          "status": "LIMITED_AVAILABILITY",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 10000000,
+            "outputRateMicrosPerMillion": 50000000,
+            "cachedInputRateMicrosPerMillion": 1000000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 12500000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 20000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 5000000,
+              "outputRateMicrosPerMillion": 25000000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "Limited availability, see anthropic.com/glasswing. Same rate card as Claude Fable 5. Uses newer tokenizer.",
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-opus-5",
+          "displayName": "Claude Opus 5",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 5000000,
+            "outputRateMicrosPerMillion": 25000000,
+            "cachedInputRateMicrosPerMillion": 500000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 6250000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 10000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 2500000,
+              "outputRateMicrosPerMillion": 12500000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            },
+            {
+              "tier": "fast_mode",
+              "inputRateMicrosPerMillion": 10000000,
+              "outputRateMicrosPerMillion": 50000000,
+              "conditions": "Fast mode (research preview), first-party Claude API only, not available with Batch API"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "Current Opus flagship. Fast mode (research preview) available at $10/$50 per MTok input/output. Uses newer tokenizer.",
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-opus-4-8",
+          "displayName": "Claude Opus 4.8",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 5000000,
+            "outputRateMicrosPerMillion": 25000000,
+            "cachedInputRateMicrosPerMillion": 500000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 6250000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 10000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 2500000,
+              "outputRateMicrosPerMillion": 12500000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            },
+            {
+              "tier": "fast_mode",
+              "inputRateMicrosPerMillion": 10000000,
+              "outputRateMicrosPerMillion": 50000000,
+              "conditions": "Fast mode (research preview), first-party Claude API only, not available with Batch API"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "Fast mode (research preview) available at $10/$50 per MTok input/output. Uses newer tokenizer.",
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-opus-4-7",
+          "displayName": "Claude Opus 4.7",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 5000000,
+            "outputRateMicrosPerMillion": 25000000,
+            "cachedInputRateMicrosPerMillion": 500000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 6250000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 10000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 2500000,
+              "outputRateMicrosPerMillion": 12500000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "Fast mode not available (errors if requested). Uses newer tokenizer.",
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-opus-4-6",
+          "displayName": "Claude Opus 4.6",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 5000000,
+            "outputRateMicrosPerMillion": 25000000,
+            "cachedInputRateMicrosPerMillion": 500000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 6250000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 10000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 2500000,
+              "outputRateMicrosPerMillion": 12500000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "Fast mode requests run at standard speed/price (no premium).",
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-opus-4-5",
+          "displayName": "Claude Opus 4.5",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 5000000,
+            "outputRateMicrosPerMillion": 25000000,
+            "cachedInputRateMicrosPerMillion": 500000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 6250000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 10000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 2500000,
+              "outputRateMicrosPerMillion": 12500000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-opus-4-1",
+          "displayName": "Claude Opus 4.1",
+          "status": "DEPRECATED",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 15000000,
+            "outputRateMicrosPerMillion": 75000000,
+            "cachedInputRateMicrosPerMillion": 1500000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 18750000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 30000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 7500000,
+              "outputRateMicrosPerMillion": 37500000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "Deprecated; see model-deprecations page for retirement timeline.",
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-opus-4",
+          "displayName": "Claude Opus 4",
+          "status": "RETIRED",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 15000000,
+            "outputRateMicrosPerMillion": 75000000,
+            "cachedInputRateMicrosPerMillion": 1500000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 18750000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 30000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 7500000,
+              "outputRateMicrosPerMillion": 37500000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "Retired on the Claude API; still available via Google Cloud Vertex AI.",
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-sonnet-5",
+          "displayName": "Claude Sonnet 5",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 2000000,
+            "outputRateMicrosPerMillion": 10000000,
+            "cachedInputRateMicrosPerMillion": 200000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 2500000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 4000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": 5000000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            },
+            {
+              "tier": "standard_from_2026-09-01",
+              "inputRateMicrosPerMillion": 3000000,
+              "outputRateMicrosPerMillion": 15000000,
+              "conditions": "Standard pricing effective 2026-09-01, replacing introductory $2/$10 rate"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "INTRODUCTORY pricing shown here, valid through 2026-08-31. Standard pricing of $3/$15 (base input/output) takes effect 2026-09-01 \u2014 see pricingTiers.",
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-sonnet-4-6",
+          "displayName": "Claude Sonnet 4.6",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 3000000,
+            "outputRateMicrosPerMillion": 15000000,
+            "cachedInputRateMicrosPerMillion": 300000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 3750000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 6000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 1500000,
+              "outputRateMicrosPerMillion": 7500000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-sonnet-4-5",
+          "displayName": "Claude Sonnet 4.5",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 3000000,
+            "outputRateMicrosPerMillion": 15000000,
+            "cachedInputRateMicrosPerMillion": 300000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 3750000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 6000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 1500000,
+              "outputRateMicrosPerMillion": 7500000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-sonnet-4",
+          "displayName": "Claude Sonnet 4",
+          "status": "RETIRED",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 3000000,
+            "outputRateMicrosPerMillion": 15000000,
+            "cachedInputRateMicrosPerMillion": 300000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 3750000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 6000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 1500000,
+              "outputRateMicrosPerMillion": 7500000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "Retired on the Claude API; still available via Amazon Bedrock and Google Cloud Vertex AI.",
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "displayName": "Claude Haiku 4.5",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 1000000,
+            "outputRateMicrosPerMillion": 5000000,
+            "cachedInputRateMicrosPerMillion": 100000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 1250000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 2000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 500000,
+              "outputRateMicrosPerMillion": 2500000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        },
+        {
+          "model": "claude-haiku-3-5",
+          "displayName": "Claude Haiku 3.5",
+          "status": "RETIRED",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "DOCUMENT_INPUT"
+          ],
+          "contextLimit": "1,000,000 tokens (Claude 4.6+ and Claude Mythos Preview); 200,000 tokens (earlier models)",
+          "rates": {
+            "inputRateMicrosPerMillion": 800000,
+            "outputRateMicrosPerMillion": 4000000,
+            "cachedInputRateMicrosPerMillion": 80000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "cache_write_5m",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "5-minute prompt-cache write (1.25x base input)"
+            },
+            {
+              "tier": "cache_write_1h",
+              "inputRateMicrosPerMillion": 1600000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1-hour prompt-cache write (2x base input)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 400000,
+              "outputRateMicrosPerMillion": 2000000,
+              "conditions": "Message Batches API, 50% off standard input/output"
+            },
+            {
+              "tier": "data_residency_us",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "1.1x multiplier on all token categories when inference_geo='us' (Claude 4.6+ only)"
+            }
+          ],
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "notes": [
+            "Retired on the Claude API; still available via Amazon Bedrock and Google Cloud Vertex AI.",
+            "No native image-generation output; image/PDF are input-only modalities billed at standard input token rates.",
+            "Web search tool: $10 per 1,000 searches plus standard token rates for retrieved content."
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "openai",
+      "verifiedAt": "2026-08-03",
+      "officialPricingSource": "https://developers.openai.com/api/docs/pricing",
+      "models": [
+        {
+          "model": "gpt-5.6-sol",
+          "displayName": "GPT-5.6 Sol",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT"
+          ],
+          "contextLimit": "1,000,000 tokens",
+          "rates": {
+            "inputRateMicrosPerMillion": 5000000,
+            "outputRateMicrosPerMillion": 30000000,
+            "cachedInputRateMicrosPerMillion": 500000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_long_context",
+              "inputRateMicrosPerMillion": 10000000,
+              "outputRateMicrosPerMillion": 45000000,
+              "cachedInputRateMicrosPerMillion": 1000000,
+              "cacheWriteRateMicrosPerMillion": 12500000,
+              "conditions": "Long-context tier (prompts above ~270k input tokens)"
+            },
+            {
+              "tier": "batch_short_context",
+              "inputRateMicrosPerMillion": 2500000,
+              "outputRateMicrosPerMillion": 15000000,
+              "cachedInputRateMicrosPerMillion": 250000,
+              "cacheWriteRateMicrosPerMillion": 3125000,
+              "conditions": "Batch API, 50% off standard"
+            },
+            {
+              "tier": "batch_long_context",
+              "inputRateMicrosPerMillion": 5000000,
+              "outputRateMicrosPerMillion": 22500000,
+              "cachedInputRateMicrosPerMillion": 500000,
+              "cacheWriteRateMicrosPerMillion": 6250000,
+              "conditions": "Batch API, long-context tier"
+            },
+            {
+              "tier": "fast_mode",
+              "inputRateMicrosPerMillion": 10000000,
+              "outputRateMicrosPerMillion": 60000000,
+              "cachedInputRateMicrosPerMillion": 1000000,
+              "cacheWriteRateMicrosPerMillion": 12500000,
+              "conditions": "Fast mode (formerly Priority processing, renamed 2026-07-30)"
+            },
+            {
+              "tier": "data_residency",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "10% uplift for regional/data-residency endpoints on models released on or after 2026-03-05"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "Flagship, GA 2026-07-09. 1.05M token context window. Long-context threshold ~270k input tokens (2x input, 1.5x output).",
+            "Cache-write rate (5-min cache) shown as a pricing-tier row where OpenAI publishes one."
+          ]
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "displayName": "GPT-5.6 Terra",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT"
+          ],
+          "contextLimit": "1,000,000 tokens",
+          "rates": {
+            "inputRateMicrosPerMillion": 2000000,
+            "outputRateMicrosPerMillion": 12000000,
+            "cachedInputRateMicrosPerMillion": 200000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_long_context",
+              "inputRateMicrosPerMillion": 4000000,
+              "outputRateMicrosPerMillion": 18000000,
+              "cachedInputRateMicrosPerMillion": 400000,
+              "cacheWriteRateMicrosPerMillion": 5000000,
+              "conditions": "Long-context tier (prompts above ~270k input tokens)"
+            },
+            {
+              "tier": "batch_short_context",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": 6000000,
+              "cachedInputRateMicrosPerMillion": 100000,
+              "cacheWriteRateMicrosPerMillion": 1250000,
+              "conditions": "Batch API, 50% off standard"
+            },
+            {
+              "tier": "batch_long_context",
+              "inputRateMicrosPerMillion": 2000000,
+              "outputRateMicrosPerMillion": 9000000,
+              "cachedInputRateMicrosPerMillion": 200000,
+              "cacheWriteRateMicrosPerMillion": 2500000,
+              "conditions": "Batch API, long-context tier"
+            },
+            {
+              "tier": "fast_mode",
+              "inputRateMicrosPerMillion": 4000000,
+              "outputRateMicrosPerMillion": 24000000,
+              "cachedInputRateMicrosPerMillion": 400000,
+              "cacheWriteRateMicrosPerMillion": 5000000,
+              "conditions": "Fast mode (formerly Priority processing, renamed 2026-07-30)"
+            },
+            {
+              "tier": "data_residency",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "10% uplift for regional/data-residency endpoints on models released on or after 2026-03-05"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "GA 2026-07-09; price cut ~20% on 2026-07-30. 1.05M token context window.",
+            "Cache-write rate (5-min cache) shown as a pricing-tier row where OpenAI publishes one."
+          ]
+        },
+        {
+          "model": "gpt-5.6-luna",
+          "displayName": "GPT-5.6 Luna",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT"
+          ],
+          "contextLimit": "1,000,000 tokens",
+          "rates": {
+            "inputRateMicrosPerMillion": 200000,
+            "outputRateMicrosPerMillion": 1200000,
+            "cachedInputRateMicrosPerMillion": 20000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_long_context",
+              "inputRateMicrosPerMillion": 400000,
+              "outputRateMicrosPerMillion": 1800000,
+              "cachedInputRateMicrosPerMillion": 40000,
+              "cacheWriteRateMicrosPerMillion": 500000,
+              "conditions": "Long-context tier (prompts above ~270k input tokens)"
+            },
+            {
+              "tier": "batch_short_context",
+              "inputRateMicrosPerMillion": 100000,
+              "outputRateMicrosPerMillion": 600000,
+              "cachedInputRateMicrosPerMillion": 10000,
+              "cacheWriteRateMicrosPerMillion": 125000,
+              "conditions": "Batch API, 50% off standard"
+            },
+            {
+              "tier": "batch_long_context",
+              "inputRateMicrosPerMillion": 200000,
+              "outputRateMicrosPerMillion": 900000,
+              "cachedInputRateMicrosPerMillion": 20000,
+              "cacheWriteRateMicrosPerMillion": 250000,
+              "conditions": "Batch API, long-context tier"
+            },
+            {
+              "tier": "fast_mode",
+              "inputRateMicrosPerMillion": 400000,
+              "outputRateMicrosPerMillion": 2400000,
+              "cachedInputRateMicrosPerMillion": 40000,
+              "cacheWriteRateMicrosPerMillion": 500000,
+              "conditions": "Fast mode (formerly Priority processing, renamed 2026-07-30)"
+            },
+            {
+              "tier": "data_residency",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "10% uplift for regional/data-residency endpoints on models released on or after 2026-03-05"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "GA 2026-07-09; price cut ~80% on 2026-07-30. 1.05M token context window.",
+            "Cache-write rate (5-min cache) shown as a pricing-tier row where OpenAI publishes one."
+          ]
+        },
+        {
+          "model": "gpt-5.5",
+          "displayName": "GPT-5.5",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT"
+          ],
+          "contextLimit": "not confirmed in pricing page (see model catalog)",
+          "rates": {
+            "inputRateMicrosPerMillion": 5000000,
+            "outputRateMicrosPerMillion": 30000000,
+            "cachedInputRateMicrosPerMillion": 500000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_long_context",
+              "inputRateMicrosPerMillion": 10000000,
+              "outputRateMicrosPerMillion": 45000000,
+              "cachedInputRateMicrosPerMillion": 1000000,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Long-context tier (prompts above ~270k input tokens)"
+            },
+            {
+              "tier": "batch_short_context",
+              "inputRateMicrosPerMillion": 2500000,
+              "outputRateMicrosPerMillion": 15000000,
+              "cachedInputRateMicrosPerMillion": 250000,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Batch API, 50% off standard"
+            },
+            {
+              "tier": "batch_long_context",
+              "inputRateMicrosPerMillion": 5000000,
+              "outputRateMicrosPerMillion": 22500000,
+              "cachedInputRateMicrosPerMillion": 500000,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Batch API, long-context tier"
+            },
+            {
+              "tier": "fast_mode",
+              "inputRateMicrosPerMillion": 12500000,
+              "outputRateMicrosPerMillion": 75000000,
+              "cachedInputRateMicrosPerMillion": 1250000,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Fast mode (formerly Priority processing, renamed 2026-07-30)"
+            },
+            {
+              "tier": "data_residency",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "10% uplift for regional/data-residency endpoints on models released on or after 2026-03-05"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "No dedicated cache-write rate published (cache reads only).",
+            "Cache-write rate (5-min cache) shown as a pricing-tier row where OpenAI publishes one."
+          ]
+        },
+        {
+          "model": "gpt-5.5-pro",
+          "displayName": "GPT-5.5 Pro",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT"
+          ],
+          "contextLimit": "not confirmed in pricing page (see model catalog)",
+          "rates": {
+            "inputRateMicrosPerMillion": 30000000,
+            "outputRateMicrosPerMillion": 180000000,
+            "cachedInputRateMicrosPerMillion": null,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_long_context",
+              "inputRateMicrosPerMillion": 60000000,
+              "outputRateMicrosPerMillion": 270000000,
+              "cachedInputRateMicrosPerMillion": null,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Long-context tier (prompts above ~270k input tokens)"
+            },
+            {
+              "tier": "batch_short_context",
+              "inputRateMicrosPerMillion": 15000000,
+              "outputRateMicrosPerMillion": 90000000,
+              "cachedInputRateMicrosPerMillion": null,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Batch API, 50% off standard"
+            },
+            {
+              "tier": "data_residency",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "10% uplift for regional/data-residency endpoints on models released on or after 2026-03-05"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "No cached-input rate published. Premium reasoning tier.",
+            "Cache-write rate (5-min cache) shown as a pricing-tier row where OpenAI publishes one."
+          ]
+        },
+        {
+          "model": "gpt-5.4",
+          "displayName": "GPT-5.4",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT"
+          ],
+          "contextLimit": "not confirmed in pricing page (see model catalog)",
+          "rates": {
+            "inputRateMicrosPerMillion": 2500000,
+            "outputRateMicrosPerMillion": 15000000,
+            "cachedInputRateMicrosPerMillion": 250000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_long_context",
+              "inputRateMicrosPerMillion": 5000000,
+              "outputRateMicrosPerMillion": 22500000,
+              "cachedInputRateMicrosPerMillion": 500000,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Long-context tier (prompts above ~270k input tokens)"
+            },
+            {
+              "tier": "batch_short_context",
+              "inputRateMicrosPerMillion": 1250000,
+              "outputRateMicrosPerMillion": 7500000,
+              "cachedInputRateMicrosPerMillion": 130000,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Batch API, 50% off standard"
+            },
+            {
+              "tier": "batch_long_context",
+              "inputRateMicrosPerMillion": 2500000,
+              "outputRateMicrosPerMillion": 11250000,
+              "cachedInputRateMicrosPerMillion": 250000,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Batch API, long-context tier"
+            },
+            {
+              "tier": "fast_mode",
+              "inputRateMicrosPerMillion": 5000000,
+              "outputRateMicrosPerMillion": 30000000,
+              "cachedInputRateMicrosPerMillion": 500000,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Fast mode (formerly Priority processing, renamed 2026-07-30)"
+            },
+            {
+              "tier": "data_residency",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "10% uplift for regional/data-residency endpoints on models released on or after 2026-03-05"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "Cached-input batch rate ($0.13) rounded by OpenAI on its pricing page.",
+            "Cache-write rate (5-min cache) shown as a pricing-tier row where OpenAI publishes one."
+          ]
+        },
+        {
+          "model": "gpt-5.4-mini",
+          "displayName": "GPT-5.4 Mini",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT"
+          ],
+          "contextLimit": "not confirmed in pricing page (see model catalog)",
+          "rates": {
+            "inputRateMicrosPerMillion": 750000,
+            "outputRateMicrosPerMillion": 4500000,
+            "cachedInputRateMicrosPerMillion": 75000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "batch_short_context",
+              "inputRateMicrosPerMillion": 375000,
+              "outputRateMicrosPerMillion": 2250000,
+              "cachedInputRateMicrosPerMillion": 37500,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Batch API, 50% off standard"
+            },
+            {
+              "tier": "fast_mode",
+              "inputRateMicrosPerMillion": 1500000,
+              "outputRateMicrosPerMillion": 9000000,
+              "cachedInputRateMicrosPerMillion": 150000,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Fast mode (formerly Priority processing, renamed 2026-07-30)"
+            },
+            {
+              "tier": "data_residency",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "10% uplift for regional/data-residency endpoints on models released on or after 2026-03-05"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "No long-context tier published.",
+            "Cache-write rate (5-min cache) shown as a pricing-tier row where OpenAI publishes one."
+          ]
+        },
+        {
+          "model": "gpt-5.4-nano",
+          "displayName": "GPT-5.4 Nano",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT"
+          ],
+          "contextLimit": "not confirmed in pricing page (see model catalog)",
+          "rates": {
+            "inputRateMicrosPerMillion": 200000,
+            "outputRateMicrosPerMillion": 1250000,
+            "cachedInputRateMicrosPerMillion": 20000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "batch_short_context",
+              "inputRateMicrosPerMillion": 100000,
+              "outputRateMicrosPerMillion": 625000,
+              "cachedInputRateMicrosPerMillion": 10000,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Batch API, 50% off standard"
+            },
+            {
+              "tier": "data_residency",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "10% uplift for regional/data-residency endpoints on models released on or after 2026-03-05"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "No long-context tier or Fast mode rate published.",
+            "Cache-write rate (5-min cache) shown as a pricing-tier row where OpenAI publishes one."
+          ]
+        },
+        {
+          "model": "gpt-5.4-pro",
+          "displayName": "GPT-5.4 Pro",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT"
+          ],
+          "contextLimit": "not confirmed in pricing page (see model catalog)",
+          "rates": {
+            "inputRateMicrosPerMillion": 30000000,
+            "outputRateMicrosPerMillion": 180000000,
+            "cachedInputRateMicrosPerMillion": null,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_long_context",
+              "inputRateMicrosPerMillion": 60000000,
+              "outputRateMicrosPerMillion": 270000000,
+              "cachedInputRateMicrosPerMillion": null,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Long-context tier (prompts above ~270k input tokens)"
+            },
+            {
+              "tier": "batch_short_context",
+              "inputRateMicrosPerMillion": 15000000,
+              "outputRateMicrosPerMillion": 90000000,
+              "cachedInputRateMicrosPerMillion": null,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Batch API, 50% off standard"
+            },
+            {
+              "tier": "batch_long_context",
+              "inputRateMicrosPerMillion": 30000000,
+              "outputRateMicrosPerMillion": 135000000,
+              "cachedInputRateMicrosPerMillion": null,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Batch API, long-context tier"
+            },
+            {
+              "tier": "data_residency",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "10% uplift for regional/data-residency endpoints on models released on or after 2026-03-05"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "No cached-input rate published. Premium reasoning tier.",
+            "Cache-write rate (5-min cache) shown as a pricing-tier row where OpenAI publishes one."
+          ]
+        },
+        {
+          "model": "chat-latest",
+          "displayName": "ChatGPT model (chat-latest)",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT"
+          ],
+          "contextLimit": "not confirmed in pricing page",
+          "rates": {
+            "inputRateMicrosPerMillion": 5000000,
+            "outputRateMicrosPerMillion": 30000000,
+            "cachedInputRateMicrosPerMillion": 500000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "Snapshot alias used by ChatGPT; pricing tracked separately from the numbered GPT-5.x API models."
+          ]
+        },
+        {
+          "model": "gpt-5.3-codex",
+          "displayName": "GPT-5.3 Codex",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "CODE"
+          ],
+          "contextLimit": "not confirmed in pricing page",
+          "rates": {
+            "inputRateMicrosPerMillion": 1750000,
+            "outputRateMicrosPerMillion": 14000000,
+            "cachedInputRateMicrosPerMillion": 175000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "fast_mode",
+              "inputRateMicrosPerMillion": 3500000,
+              "outputRateMicrosPerMillion": 28000000,
+              "cachedInputRateMicrosPerMillion": 350000,
+              "cacheWriteRateMicrosPerMillion": null,
+              "conditions": "Fast mode"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "Specialized coding model."
+          ]
+        },
+        {
+          "model": "gpt-5.4-cyber",
+          "displayName": "GPT-5.4 Cyber",
+          "status": "NOT_PUBLICLY_PRICED",
+          "modalities": [
+            "TEXT"
+          ],
+          "contextLimit": "not confirmed in pricing page",
+          "rates": {
+            "inputRateMicrosPerMillion": null,
+            "outputRateMicrosPerMillion": null,
+            "cachedInputRateMicrosPerMillion": null,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "Listed on the OpenAI pricing page with no published rate (dash in all columns); NOT_PUBLICLY_AVAILABLE."
+          ]
+        },
+        {
+          "model": "gpt-image-2",
+          "displayName": "GPT Image 2",
+          "status": "STABLE",
+          "modalities": [
+            "IMAGE",
+            "TEXT"
+          ],
+          "contextLimit": null,
+          "rates": {
+            "inputRateMicrosPerMillion": 8000000,
+            "outputRateMicrosPerMillion": 30000000,
+            "cachedInputRateMicrosPerMillion": 2000000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_text_input",
+              "inputRateMicrosPerMillion": 5000000,
+              "outputRateMicrosPerMillion": null,
+              "cachedInputRateMicrosPerMillion": 1250000,
+              "conditions": "Text-modality input/output tokens (image tokens use the primary rate)"
+            },
+            {
+              "tier": "batch_image",
+              "inputRateMicrosPerMillion": 4000000,
+              "outputRateMicrosPerMillion": 15000000,
+              "cachedInputRateMicrosPerMillion": 1000000,
+              "conditions": "Batch API, image-modality tokens, 50% off standard"
+            },
+            {
+              "tier": "batch_text",
+              "inputRateMicrosPerMillion": 2500000,
+              "outputRateMicrosPerMillion": null,
+              "cachedInputRateMicrosPerMillion": 625000,
+              "conditions": "Batch API, text-modality tokens, 50% off standard"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "Image-generation model; rates are per 1M tokens, not per image. See OpenAI's image-generation guide calculator for per-image cost estimates at common resolutions."
+          ]
+        },
+        {
+          "model": "gpt-image-1.5",
+          "displayName": "GPT Image 1.5",
+          "status": "STABLE",
+          "modalities": [
+            "IMAGE",
+            "TEXT"
+          ],
+          "contextLimit": null,
+          "rates": {
+            "inputRateMicrosPerMillion": 8000000,
+            "outputRateMicrosPerMillion": 32000000,
+            "cachedInputRateMicrosPerMillion": 2000000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_text_input",
+              "inputRateMicrosPerMillion": 5000000,
+              "outputRateMicrosPerMillion": 10000000,
+              "cachedInputRateMicrosPerMillion": 1250000,
+              "conditions": "Text-modality input/output tokens (image tokens use the primary rate)"
+            },
+            {
+              "tier": "batch_image",
+              "inputRateMicrosPerMillion": 4000000,
+              "outputRateMicrosPerMillion": 16000000,
+              "cachedInputRateMicrosPerMillion": 1000000,
+              "conditions": "Batch API, image-modality tokens, 50% off standard"
+            },
+            {
+              "tier": "batch_text",
+              "inputRateMicrosPerMillion": 2500000,
+              "outputRateMicrosPerMillion": 5000000,
+              "cachedInputRateMicrosPerMillion": 630000,
+              "conditions": "Batch API, text-modality tokens, 50% off standard"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "Image-generation model; rates are per 1M tokens, not per image. See OpenAI's image-generation guide calculator for per-image cost estimates at common resolutions."
+          ]
+        },
+        {
+          "model": "gpt-image-1-mini",
+          "displayName": "GPT Image 1 Mini",
+          "status": "STABLE",
+          "modalities": [
+            "IMAGE",
+            "TEXT"
+          ],
+          "contextLimit": null,
+          "rates": {
+            "inputRateMicrosPerMillion": 2500000,
+            "outputRateMicrosPerMillion": 8000000,
+            "cachedInputRateMicrosPerMillion": 250000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_text_input",
+              "inputRateMicrosPerMillion": 2000000,
+              "outputRateMicrosPerMillion": null,
+              "cachedInputRateMicrosPerMillion": 200000,
+              "conditions": "Text-modality input/output tokens (image tokens use the primary rate)"
+            },
+            {
+              "tier": "batch_image",
+              "inputRateMicrosPerMillion": 1250000,
+              "outputRateMicrosPerMillion": 4000000,
+              "cachedInputRateMicrosPerMillion": 130000,
+              "conditions": "Batch API, image-modality tokens, 50% off standard"
+            },
+            {
+              "tier": "batch_text",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": null,
+              "cachedInputRateMicrosPerMillion": 100000,
+              "conditions": "Batch API, text-modality tokens, 50% off standard"
+            }
+          ],
+          "source": "https://developers.openai.com/api/docs/pricing",
+          "notes": [
+            "Image-generation model; rates are per 1M tokens, not per image. See OpenAI's image-generation guide calculator for per-image cost estimates at common resolutions."
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "google",
+      "verifiedAt": "2026-08-03",
+      "officialPricingSource": "https://ai.google.dev/gemini-api/docs/pricing",
+      "models": [
+        {
+          "model": "gemini-3.6-flash",
+          "displayName": "Gemini 3.6 Flash",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "VIDEO_INPUT",
+            "AUDIO_INPUT"
+          ],
+          "contextLimit": "not confirmed on pricing page (see https://ai.google.dev/gemini-api/docs/models for per-model context windows)",
+          "rates": {
+            "inputRateMicrosPerMillion": 1500000,
+            "outputRateMicrosPerMillion": 7500000,
+            "cachedInputRateMicrosPerMillion": 150000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 750000,
+              "outputRateMicrosPerMillion": 3750000,
+              "cachedInputRateMicrosPerMillion": 75000,
+              "conditions": "Batch API, prompts <= 200k tokens (50% off standard), 50% off standard"
+            },
+            {
+              "tier": "priority",
+              "inputRateMicrosPerMillion": 2700000,
+              "outputRateMicrosPerMillion": 13500000,
+              "cachedInputRateMicrosPerMillion": 270000,
+              "conditions": "Priority tier, prompts <= 200k tokens, guaranteed capacity/lower latency"
+            },
+            {
+              "tier": "context_cache_storage",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Context cache storage, per 1M tokens held, per hour (standard tier)"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Grounding with Google Search: 5,000 free requests/month shared across Gemini 3.x, then $14/1,000 requests."
+          ]
+        },
+        {
+          "model": "gemini-3.5-flash",
+          "displayName": "Gemini 3.5 Flash",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "VIDEO_INPUT",
+            "AUDIO_INPUT"
+          ],
+          "contextLimit": "not confirmed on pricing page (see https://ai.google.dev/gemini-api/docs/models for per-model context windows)",
+          "rates": {
+            "inputRateMicrosPerMillion": 1500000,
+            "outputRateMicrosPerMillion": 9000000,
+            "cachedInputRateMicrosPerMillion": 150000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 750000,
+              "outputRateMicrosPerMillion": 4500000,
+              "cachedInputRateMicrosPerMillion": 75000,
+              "conditions": "Batch API, prompts <= 200k tokens (50% off standard), 50% off standard"
+            },
+            {
+              "tier": "priority",
+              "inputRateMicrosPerMillion": 2700000,
+              "outputRateMicrosPerMillion": 16200000,
+              "cachedInputRateMicrosPerMillion": 270000,
+              "conditions": "Priority tier, prompts <= 200k tokens, guaranteed capacity/lower latency"
+            },
+            {
+              "tier": "context_cache_storage",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Context cache storage, per 1M tokens held, per hour (standard tier)"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Grounding with Google Search: 5,000 free requests/month shared across Gemini 3.x, then $14/1,000 requests."
+          ]
+        },
+        {
+          "model": "gemini-3.5-flash-lite",
+          "displayName": "Gemini 3.5 Flash-Lite",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "VIDEO_INPUT",
+            "AUDIO_INPUT"
+          ],
+          "contextLimit": "not confirmed on pricing page (see https://ai.google.dev/gemini-api/docs/models for per-model context windows)",
+          "rates": {
+            "inputRateMicrosPerMillion": 300000,
+            "outputRateMicrosPerMillion": 2500000,
+            "cachedInputRateMicrosPerMillion": 30000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 150000,
+              "outputRateMicrosPerMillion": 1250000,
+              "cachedInputRateMicrosPerMillion": 20000,
+              "conditions": "Batch API, prompts <= 200k tokens (50% off standard), 50% off standard"
+            },
+            {
+              "tier": "priority",
+              "inputRateMicrosPerMillion": 540000,
+              "outputRateMicrosPerMillion": 4500000,
+              "cachedInputRateMicrosPerMillion": 50000,
+              "conditions": "Priority tier, prompts <= 200k tokens, guaranteed capacity/lower latency"
+            },
+            {
+              "tier": "context_cache_storage",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Context cache storage, per 1M tokens held, per hour (standard tier)"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Input price covers text/image/video/audio uniformly. Most cost-efficient current-generation GA model."
+          ]
+        },
+        {
+          "model": "gemini-3.1-flash-lite",
+          "displayName": "Gemini 3.1 Flash-Lite",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "VIDEO_INPUT",
+            "AUDIO_INPUT"
+          ],
+          "contextLimit": "not confirmed on pricing page (see https://ai.google.dev/gemini-api/docs/models for per-model context windows)",
+          "rates": {
+            "inputRateMicrosPerMillion": 250000,
+            "outputRateMicrosPerMillion": 1500000,
+            "cachedInputRateMicrosPerMillion": 25000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 125000,
+              "outputRateMicrosPerMillion": 750000,
+              "cachedInputRateMicrosPerMillion": 12500,
+              "conditions": "Batch API, prompts <= 200k tokens (50% off standard), 50% off standard"
+            },
+            {
+              "tier": "priority",
+              "inputRateMicrosPerMillion": 450000,
+              "outputRateMicrosPerMillion": 2700000,
+              "cachedInputRateMicrosPerMillion": 45000,
+              "conditions": "Priority tier, prompts <= 200k tokens, guaranteed capacity/lower latency"
+            },
+            {
+              "tier": "context_cache_storage",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Context cache storage, per 1M tokens held, per hour (standard tier)"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Audio input priced at $0.50/M (vs $0.25/M text/image/video); audio cached input $0.05/M. See pricingTiers."
+          ]
+        },
+        {
+          "model": "gemini-3-flash-preview",
+          "displayName": "Gemini 3 Flash Preview",
+          "status": "PREVIEW",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "VIDEO_INPUT",
+            "AUDIO_INPUT"
+          ],
+          "contextLimit": "not confirmed on pricing page (see https://ai.google.dev/gemini-api/docs/models for per-model context windows)",
+          "rates": {
+            "inputRateMicrosPerMillion": 500000,
+            "outputRateMicrosPerMillion": 3000000,
+            "cachedInputRateMicrosPerMillion": 50000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 250000,
+              "outputRateMicrosPerMillion": 1500000,
+              "cachedInputRateMicrosPerMillion": 50000,
+              "conditions": "Batch API, prompts <= 200k tokens (50% off standard), 50% off standard"
+            },
+            {
+              "tier": "priority",
+              "inputRateMicrosPerMillion": 900000,
+              "outputRateMicrosPerMillion": 5400000,
+              "cachedInputRateMicrosPerMillion": 90000,
+              "conditions": "Priority tier, prompts <= 200k tokens, guaranteed capacity/lower latency"
+            },
+            {
+              "tier": "context_cache_storage",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Context cache storage, per 1M tokens held, per hour (standard tier)"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Audio input priced at $1.00/M (vs $0.50/M text/image/video); audio cached input $0.10/M."
+          ]
+        },
+        {
+          "model": "gemini-3.1-pro-preview",
+          "displayName": "Gemini 3.1 Pro Preview",
+          "status": "PREVIEW",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "VIDEO_INPUT",
+            "AUDIO_INPUT"
+          ],
+          "contextLimit": "not confirmed on pricing page (see https://ai.google.dev/gemini-api/docs/models for per-model context windows)",
+          "rates": {
+            "inputRateMicrosPerMillion": 2000000,
+            "outputRateMicrosPerMillion": 12000000,
+            "cachedInputRateMicrosPerMillion": 200000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_long_context",
+              "inputRateMicrosPerMillion": 4000000,
+              "outputRateMicrosPerMillion": 18000000,
+              "cachedInputRateMicrosPerMillion": 400000,
+              "conditions": "Standard tier, prompts > 200k tokens"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": 6000000,
+              "cachedInputRateMicrosPerMillion": 200000,
+              "conditions": "Batch API, prompts <= 200k tokens (50% off standard), 50% off standard"
+            },
+            {
+              "tier": "priority",
+              "inputRateMicrosPerMillion": 3600000,
+              "outputRateMicrosPerMillion": 21600000,
+              "cachedInputRateMicrosPerMillion": 360000,
+              "conditions": "Priority tier, prompts <= 200k tokens, guaranteed capacity/lower latency"
+            },
+            {
+              "tier": "context_cache_storage",
+              "inputRateMicrosPerMillion": 4500000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Context cache storage, per 1M tokens held, per hour (standard tier)"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Two-tier pricing by prompt length: <=200k tokens shown as primary rate; >200k tokens rate in pricingTiers. Grounding: 5,000 free/month shared across Gemini 3.x, then $14/1,000 requests."
+          ]
+        },
+        {
+          "model": "gemini-2.5-pro",
+          "displayName": "Gemini 2.5 Pro",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "VIDEO_INPUT",
+            "AUDIO_INPUT"
+          ],
+          "contextLimit": "not confirmed on pricing page (see https://ai.google.dev/gemini-api/docs/models for per-model context windows)",
+          "rates": {
+            "inputRateMicrosPerMillion": 1250000,
+            "outputRateMicrosPerMillion": 10000000,
+            "cachedInputRateMicrosPerMillion": 125000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_long_context",
+              "inputRateMicrosPerMillion": 2500000,
+              "outputRateMicrosPerMillion": 15000000,
+              "cachedInputRateMicrosPerMillion": 250000,
+              "conditions": "Standard tier, prompts > 200k tokens"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 625000,
+              "outputRateMicrosPerMillion": 5000000,
+              "cachedInputRateMicrosPerMillion": 125000,
+              "conditions": "Batch API, prompts <= 200k tokens (50% off standard), 50% off standard"
+            },
+            {
+              "tier": "priority",
+              "inputRateMicrosPerMillion": 2250000,
+              "outputRateMicrosPerMillion": 18000000,
+              "cachedInputRateMicrosPerMillion": 225000,
+              "conditions": "Priority tier, prompts <= 200k tokens, guaranteed capacity/lower latency"
+            },
+            {
+              "tier": "context_cache_storage",
+              "inputRateMicrosPerMillion": 4500000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Context cache storage, per 1M tokens held, per hour (standard tier)"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Two-tier pricing by prompt length: <=200k tokens shown as primary rate; >200k tokens rate in pricingTiers. Grounding with Search: 1,500 free requests/day, then $35/1,000."
+          ]
+        },
+        {
+          "model": "gemini-2.5-flash",
+          "displayName": "Gemini 2.5 Flash",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "VIDEO_INPUT",
+            "AUDIO_INPUT"
+          ],
+          "contextLimit": "not confirmed on pricing page (see https://ai.google.dev/gemini-api/docs/models for per-model context windows)",
+          "rates": {
+            "inputRateMicrosPerMillion": 300000,
+            "outputRateMicrosPerMillion": 2500000,
+            "cachedInputRateMicrosPerMillion": 30000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 150000,
+              "outputRateMicrosPerMillion": 1250000,
+              "cachedInputRateMicrosPerMillion": 30000,
+              "conditions": "Batch API, prompts <= 200k tokens (50% off standard), 50% off standard"
+            },
+            {
+              "tier": "priority",
+              "inputRateMicrosPerMillion": 540000,
+              "outputRateMicrosPerMillion": 4500000,
+              "cachedInputRateMicrosPerMillion": 54000,
+              "conditions": "Priority tier, prompts <= 200k tokens, guaranteed capacity/lower latency"
+            },
+            {
+              "tier": "context_cache_storage",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Context cache storage, per 1M tokens held, per hour (standard tier)"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "First hybrid-reasoning model with 1M token context and thinking budgets. Audio input $1.00/M."
+          ]
+        },
+        {
+          "model": "gemini-2.5-flash-lite",
+          "displayName": "Gemini 2.5 Flash-Lite",
+          "status": "STABLE",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "VIDEO_INPUT",
+            "AUDIO_INPUT"
+          ],
+          "contextLimit": "not confirmed on pricing page (see https://ai.google.dev/gemini-api/docs/models for per-model context windows)",
+          "rates": {
+            "inputRateMicrosPerMillion": 100000,
+            "outputRateMicrosPerMillion": 400000,
+            "cachedInputRateMicrosPerMillion": 10000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 50000,
+              "outputRateMicrosPerMillion": 200000,
+              "cachedInputRateMicrosPerMillion": 10000,
+              "conditions": "Batch API, prompts <= 200k tokens (50% off standard), 50% off standard"
+            },
+            {
+              "tier": "priority",
+              "inputRateMicrosPerMillion": 180000,
+              "outputRateMicrosPerMillion": 720000,
+              "cachedInputRateMicrosPerMillion": 18000,
+              "conditions": "Priority tier, prompts <= 200k tokens, guaranteed capacity/lower latency"
+            },
+            {
+              "tier": "context_cache_storage",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Context cache storage, per 1M tokens held, per hour (standard tier)"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Smallest, most cost-effective current GA model. Audio input $0.30/M."
+          ]
+        },
+        {
+          "model": "gemini-2.5-flash-lite-preview-09-2025",
+          "displayName": "Gemini 2.5 Flash-Lite Preview (09-2025)",
+          "status": "PREVIEW",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "VIDEO_INPUT",
+            "AUDIO_INPUT"
+          ],
+          "contextLimit": "not confirmed on pricing page (see https://ai.google.dev/gemini-api/docs/models for per-model context windows)",
+          "rates": {
+            "inputRateMicrosPerMillion": 100000,
+            "outputRateMicrosPerMillion": 400000,
+            "cachedInputRateMicrosPerMillion": 10000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 50000,
+              "outputRateMicrosPerMillion": 200000,
+              "cachedInputRateMicrosPerMillion": 10000,
+              "conditions": "Batch API, prompts <= 200k tokens (50% off standard), 50% off standard"
+            },
+            {
+              "tier": "context_cache_storage",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Context cache storage, per 1M tokens held, per hour (standard tier)"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Optimized for cost-efficiency, high throughput and quality; no Priority tier published."
+          ]
+        },
+        {
+          "model": "gemini-2.0-flash",
+          "displayName": "Gemini 2.0 Flash",
+          "status": "DEPRECATED_SHUTDOWN",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "VIDEO_INPUT",
+            "AUDIO_INPUT"
+          ],
+          "contextLimit": "not confirmed on pricing page (see https://ai.google.dev/gemini-api/docs/models for per-model context windows)",
+          "rates": {
+            "inputRateMicrosPerMillion": 100000,
+            "outputRateMicrosPerMillion": 400000,
+            "cachedInputRateMicrosPerMillion": 25000,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 50000,
+              "outputRateMicrosPerMillion": 200000,
+              "cachedInputRateMicrosPerMillion": 25000,
+              "conditions": "Batch API, prompts <= 200k tokens (50% off standard), 50% off standard"
+            },
+            {
+              "tier": "context_cache_storage",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Context cache storage, per 1M tokens held, per hour (standard tier)"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Deprecated and shut down 2026-06-01. Rates shown for historical/audit reference only; do not use for new billing configuration."
+          ]
+        },
+        {
+          "model": "gemini-2.0-flash-lite",
+          "displayName": "Gemini 2.0 Flash-Lite",
+          "status": "DEPRECATED_SHUTDOWN",
+          "modalities": [
+            "TEXT",
+            "IMAGE_INPUT",
+            "VIDEO_INPUT",
+            "AUDIO_INPUT"
+          ],
+          "contextLimit": "not confirmed on pricing page (see https://ai.google.dev/gemini-api/docs/models for per-model context windows)",
+          "rates": {
+            "inputRateMicrosPerMillion": 75000,
+            "outputRateMicrosPerMillion": 300000,
+            "cachedInputRateMicrosPerMillion": null,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 37500,
+              "outputRateMicrosPerMillion": 150000,
+              "cachedInputRateMicrosPerMillion": null,
+              "conditions": "Batch API, prompts <= 200k tokens (50% off standard), 50% off standard"
+            },
+            {
+              "tier": "context_cache_storage",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Context cache storage, per 1M tokens held, per hour (standard tier)"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Deprecated and shut down 2026-06-01. Rates shown for historical/audit reference only; do not use for new billing configuration."
+          ]
+        },
+        {
+          "model": "gemini-3.1-flash-image",
+          "displayName": "Gemini 3.1 Flash Image (Nano Banana 2)",
+          "status": "STABLE",
+          "modalities": [
+            "IMAGE",
+            "TEXT"
+          ],
+          "contextLimit": null,
+          "rates": {
+            "inputRateMicrosPerMillion": 500000,
+            "outputRateMicrosPerMillion": 60000000,
+            "cachedInputRateMicrosPerMillion": null,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_text_output",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": 3000000,
+              "conditions": "Text/thinking-token output (image output tokens use the primary rate)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 250000,
+              "outputRateMicrosPerMillion": 30000000,
+              "conditions": "Batch API image-modality tokens, 50% off standard"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Image output $60/M tokens; a 1K (1024x1024) output image = 1120 tokens = ~$0.067/image."
+          ]
+        },
+        {
+          "model": "gemini-3-pro-image",
+          "displayName": "Gemini 3 Pro Image (Nano Banana Pro)",
+          "status": "STABLE",
+          "modalities": [
+            "IMAGE",
+            "TEXT"
+          ],
+          "contextLimit": null,
+          "rates": {
+            "inputRateMicrosPerMillion": 2000000,
+            "outputRateMicrosPerMillion": 120000000,
+            "cachedInputRateMicrosPerMillion": null,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_text_output",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": 12000000,
+              "conditions": "Text/thinking-token output (image output tokens use the primary rate)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 1000000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Batch API image-modality tokens, 50% off standard"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Text input/output priced same as Gemini 3.1 Pro Preview. Image output $120/M tokens; a 1K/2K output image = 1120 tokens = ~$0.134/image; 4K = ~$0.24/image."
+          ]
+        },
+        {
+          "model": "gemini-2.5-flash-image",
+          "displayName": "Gemini 2.5 Flash Image (Nano Banana)",
+          "status": "PREVIEW",
+          "modalities": [
+            "IMAGE",
+            "TEXT"
+          ],
+          "contextLimit": null,
+          "rates": {
+            "inputRateMicrosPerMillion": 300000,
+            "outputRateMicrosPerMillion": null,
+            "cachedInputRateMicrosPerMillion": null,
+            "cachedOutputRateMicrosPerMillion": null,
+            "audioInputRateMicrosPerMillion": null,
+            "audioOutputRateMicrosPerMillion": null
+          },
+          "pricingTiers": [
+            {
+              "tier": "standard_text_output",
+              "inputRateMicrosPerMillion": null,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Text/thinking-token output (image output tokens use the primary rate)"
+            },
+            {
+              "tier": "batch",
+              "inputRateMicrosPerMillion": 150000,
+              "outputRateMicrosPerMillion": null,
+              "conditions": "Batch API image-modality tokens, 50% off standard"
+            }
+          ],
+          "source": "https://ai.google.dev/gemini-api/docs/pricing",
+          "notes": [
+            "Text input/output priced same as Gemini 2.5 Flash. Image output billed per-image, not per-token: $0.039/image standard, $0.0195/image batch (1024x1024, 1290 tokens equivalent)."
+          ]
+        }
+      ]
+    }
+  ]
+}

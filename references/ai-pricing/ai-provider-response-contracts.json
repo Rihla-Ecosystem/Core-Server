@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-03",
+  "notes": "All examples below are reproduced/paraphrased from official documentation structure, not from live API calls (no paid API requests were made). Fields marked UNKNOWN were not confirmed with a full documented example in this research pass and require a live probe.",
+  "anthropic": {
+    "imageAnalysis": {
+      "endpoint": "POST https://api.anthropic.com/v1/messages",
+      "requestExampleShape": {
+        "model": "claude-opus-5",
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "What is in this image?"},
+              {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "<base64>"}}
+            ]
+          }
+        ]
+      },
+      "responseExampleShape": {
+        "id": "msg_...",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5",
+        "content": [{"type": "text", "text": "<model's description>"}],
+        "stop_reason": "end_turn",
+        "usage": {
+          "input_tokens": "INTEGER (includes any image tokens, folded in)",
+          "output_tokens": "INTEGER",
+          "cache_creation_input_tokens": "INTEGER, optional",
+          "cache_read_input_tokens": "INTEGER, optional"
+        }
+      },
+      "responseTextField": "content[].text where content[].type == 'text'",
+      "finishReasonField": "stop_reason (values: end_turn, max_tokens, stop_sequence, tool_use)",
+      "safetyBlockedFields": "UNKNOWN — exact field name for a safety-blocked response was not re-confirmed with a documented example in this session",
+      "providerRequestIdHeader": "UNKNOWN — not re-confirmed this session (Anthropic docs domain outside this session's fetch allowlist); commonly documented elsewhere as 'request-id' response header, status UNKNOWN for this session",
+      "usageObjectFields": ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "cache_creation.ephemeral_5m_input_tokens", "cache_creation.ephemeral_1h_input_tokens", "service_tier"],
+      "streamingUsageLocation": "input-side fields in message_start.message.usage; output_tokens cumulative in message_delta.usage.output_tokens; no single final event carries both",
+      "verification": "DOCUMENTED (shape/fields, from reviewed baseline file) / UNKNOWN (safety-block field name, request-id header name — not independently re-verified live this session)"
+    },
+    "voice": {"supported": false}
+  },
+  "openai": {
+    "imageAnalysis": {
+      "endpoint": "POST /v1/responses (preferred) or POST /v1/chat/completions",
+      "requestExampleShape_responsesApi": {
+        "model": "gpt-5.6",
+        "input": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "what's in this image?"},
+              {"type": "input_image", "image_url": "https://example.com/image.jpg", "detail": "auto"}
+            ]
+          }
+        ]
+      },
+      "requestExampleShape_chatCompletions": {
+        "model": "gpt-5.6",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "What is in this image?"},
+              {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
+            ]
+          }
+        ]
+      },
+      "imageInputVariants": {
+        "url": "image_url: '<https url>'",
+        "base64": "image_url: 'data:image/jpeg;base64,<...>'",
+        "fileId": "{'type':'input_image','file_id':'<id>'} (Responses API only, via prior Files API upload with purpose='vision')"
+      },
+      "responseTextField": "Responses API: output_text (convenience) or output[].content[].text; Chat Completions: choices[].message.content",
+      "finishReasonField": "Chat Completions: choices[].finish_reason (documented values include stop, length, content_filter, tool_calls); Responses API equivalent field name UNKNOWN — not reconfirmed live this session",
+      "safetyBlockedFields": "UNKNOWN — exact moderation/refusal field shape not reconfirmed with a live documented example this session (historically 'content_filter' finish_reason plus a moderation/refusal message; needs live probe)",
+      "providerRequestIdHeader": "UNKNOWN — commonly 'x-request-id' in OpenAI's general API responses per widely-documented convention, not independently re-verified on the vision-specific endpoint this session",
+      "usageObjectFields_chatCompletions": ["prompt_tokens", "completion_tokens", "total_tokens"],
+      "usageObjectFields_responsesApi": "UNKNOWN — exact field names (input_tokens/output_tokens vs prompt_tokens/completion_tokens) not reconfirmed with a full documented example this session; OpenAI's Responses API is known to use input_tokens/output_tokens naming in general but this was not independently re-verified against a vision-specific response in this pass",
+      "imageTokenBreakdownField": "UNKNOWN — not confirmed whether usage object exposes a discrete image-token count separate from the folded aggregate",
+      "verification": "DOCUMENTED (request shapes, detail levels, tokenization formulas) / UNKNOWN (exact response usage-object field names, safety-block shape, request-id header)"
+    },
+    "voice": {
+      "realtimeSession": {
+        "endpoint": "wss:// or WebRTC via /v1/realtime (GA); ephemeral token via POST /v1/realtime/client_secrets; WebRTC session establishment via /v1/realtime/calls",
+        "sessionLifecycleEvents_documented": [
+          "session.update (client -> server, configure session.type, session.audio.output, etc.)",
+          "response.create (client -> server, trigger a turn; NOT used in translation sessions)",
+          "response.output_text.delta (server -> client, GA event name)",
+          "response.output_audio.delta (server -> client, GA event name; this is the audio delta event)",
+          "response.output_audio_transcript.delta (server -> client, transcript delta of the audio being generated)",
+          "response.done / response completion event — exact GA name UNKNOWN, not reconfirmed with a full event list this session"
+        ],
+        "betaEventNamesDeprecated": "OpenAI-Beta: realtime=v1 header and its associated event names are deprecated; GA uses the renamed events listed above — relevant if any existing (unseen) Rihla integration targets the old beta names",
+        "errorAndCancellationEvents": "UNKNOWN — exact error/cancellation event names not reconfirmed with a full event reference this session; requires a direct fetch of the Realtime client/server events reference pages",
+        "usageObjectShape": "UNKNOWN — not confirmed with a full documented example; known qualitative rules only (audio = 1 token/100ms input, 1 token/50ms output; text/audio/image billed as separate categories)",
+        "sessionDurationLimits": "UNKNOWN — not reconfirmed this session",
+        "vadAndBargeIn": "Server VAD and manual turn detection both documented as configurable session behaviors per the 'Voice activity detection' guide; exact config field names UNKNOWN, not reconfirmed this session",
+        "verification": "DOCUMENTED (transport, high-level lifecycle, GA event-name migration) / UNKNOWN (full event list, usage object shape, error taxonomy, session limits)"
+      },
+      "transcriptionSession": {
+        "model": "gpt-realtime-whisper or gpt-live-transcribe",
+        "notes": "streams transcript deltas without model-generated speech; delay setting trades latency for accuracy",
+        "eventShape": "UNKNOWN — not reconfirmed with a full documented example this session"
+      },
+      "translationSession": {
+        "endpoint": "/v1/realtime/translations",
+        "notes": "continuous session, no response.create, no standard turn lifecycle",
+        "eventShape": "UNKNOWN — not reconfirmed with a full documented example this session"
+      }
+    }
+  },
+  "google_gemini": {
+    "imageAnalysis": {
+      "endpoint": "POST https://generativelanguage.googleapis.com/v1beta/interactions (GA, recommended) — legacy generateContent endpoint also still documented in places",
+      "requestExampleShape": {
+        "model": "gemini-3.6-flash",
+        "input": [
+          {"type": "text", "text": "Caption this image."},
+          {"type": "image", "uri": "<file uri from Files API>", "mime_type": "image/jpeg"}
+        ]
+      },
+      "requestExampleShape_inlineBase64": {
+        "model": "gemini-3.6-flash",
+        "input": [
+          {"type": "text", "text": "Caption this image."},
+          {"type": "image", "data": "<base64>", "mime_type": "image/jpeg"}
+        ]
+      },
+      "responseTextField": "interaction.output_text (Interactions API convenience accessor)",
+      "finishReasonField": "UNKNOWN — Interactions API finish-reason field name not reconfirmed this session; legacy generateContent used candidates[].finishReason (values include STOP, MAX_TOKENS, SAFETY, RECITATION)",
+      "safetyBlockedFields": "UNKNOWN for Interactions API specifically; legacy generateContent documented promptFeedback.blockReason and candidates[].safetyRatings[] — not reconfirmed against the new Interactions API shape this session",
+      "providerRequestIdHeader": "UNKNOWN — not reconfirmed this session",
+      "usageObjectFields_legacyGenerateContent": ["promptTokenCount", "candidatesTokenCount", "totalTokenCount", "thoughtsTokenCount", "cachedContentTokenCount", "toolUsePromptTokenCount", "promptTokensDetails[]", "candidatesTokensDetails[]", "cacheTokensDetails[]", "toolUsePromptTokensDetails[]", "trafficType"],
+      "usageObjectFields_interactionsApi": "UNKNOWN — not confirmed whether field names carry over unchanged from generateContent's usageMetadata; this is the single highest-priority live-probe item in this audit",
+      "imageTokenBreakdownField": "promptTokensDetails[] entries with modality='IMAGE' (confirmed for generateContent shape only)",
+      "streamingUsageLocation": "each streamGenerateContent chunk carries a cumulative usageMetadata; last chunk holds the true final total (OBSERVED/community-documented pattern, not spelled out as explicitly in official prose as Anthropic's streaming docs)",
+      "verification": "DOCUMENTED (request shape, token formula, file limits) / UNKNOWN (Interactions API response/usage field names, finish-reason and safety field names under the new API)"
+    },
+    "voice": {
+      "liveApiSession": {
+        "endpoint": "WebSocket, per https://ai.google.dev/gemini-api/docs/live-api/get-started-websocket ; also a GenAI SDK wrapper",
+        "webRTCSupport": "UNKNOWN — not confirmed in pages fetched this session",
+        "sipSupport": "UNKNOWN — not confirmed in pages fetched this session",
+        "sessionLifecycleEvents": "UNKNOWN — full documented event sequence (setup, audio delta, transcript delta, turn-complete, interruption/cancellation events) not reconfirmed with a complete example this session; requires fetching https://ai.google.dev/gemini-api/docs/live-api/capabilities and the get-started-websocket page directly",
+        "ephemeralTokens": "documented feature exists (https://ai.google.dev/gemini-api/docs/live-api/ephemeral-tokens) for client-side session auth; exact token-request/response shape UNKNOWN this session",
+        "sessionDurationLimits": "UNKNOWN — not reconfirmed this session",
+        "vadAndBargeIn": "UNKNOWN — not reconfirmed with documented field names this session",
+        "usageObjectShape_audioOutput": "UNKNOWN — explicitly flagged unconfirmed in the reviewed baseline file and not closed in this pass",
+        "verification": "DOCUMENTED (transport = WebSocket, high-level product existence) / UNKNOWN (full event sequence, usage shape for audio output, session limits, VAD config)"
+      },
+      "ttsModels": {
+        "endpoint": "UNKNOWN — exact REST path for TTS-specific models (e.g. gemini-2.5-flash-preview-tts) not reconfirmed this session; likely a generateContent variant with response_modalities=['AUDIO'] per general Gemini pattern, but not independently verified",
+        "audioTokenRate": "25 tokens per second of audio (DOCUMENTED, from pricing page footnotes)",
+        "voiceOptions": "UNKNOWN — specific voice/style/speed control parameter names not reconfirmed this session"
+      }
+    }
+  }
+}

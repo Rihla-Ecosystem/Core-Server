@@ -283,8 +283,14 @@ test('32. no route or feature service receives a new pricing call', () => {
   }
   assert.deepEqual(
     importers.sort(),
-    ['src/services/ai-usage.service.ts'],
-    'the only production importer of the shadow service must be recordAiUsage',
+    [
+      // Phase 2D-B: read-only admin consumer importing only the shared
+      // DEFAULT_OBSERVATION_BUFFER for metrics; it never calls pricing.
+      'src/controllers/ai-shadow-pricing-admin.controller.ts',
+      // recordAiUsage is the only producer that invokes the pricing service.
+      'src/services/ai-usage.service.ts',
+    ],
+    'only recordAiUsage may invoke pricing; the admin controller only reads the buffer',
   );
 });
 

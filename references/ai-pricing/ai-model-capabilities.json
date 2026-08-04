@@ -1,0 +1,329 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-03",
+  "auditScope": "image-analysis and voice/realtime-audio models only, Anthropic + OpenAI + Google Gemini",
+  "repositoryStatus": "UNKNOWN — REPOSITORY NOT PROVIDED",
+  "statusLegend": {
+    "DOCUMENTED": "stated directly in official provider documentation",
+    "OBSERVED": "community/SDK-reported behavior, not stated in official prose",
+    "INFERRED": "derived logically from documented rules, not stated verbatim",
+    "UNKNOWN": "not established in this research pass; requires a live API probe"
+  },
+  "providers": [
+    {
+      "provider": "anthropic",
+      "verifiedAt": "2026-08-03",
+      "officialSource": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "sourceFetchStatus": "UNKNOWN — not independently re-fetched this session (domain not in this session's network allowlist); data taken from the reviewed baseline file, which cites the same URL",
+      "models": [
+        {
+          "model": "claude-fable-5",
+          "status": "STABLE",
+          "apiFamily": "Messages API",
+          "endpoint": "/v1/messages",
+          "modalities": ["TEXT", "IMAGE_INPUT", "DOCUMENT_INPUT"],
+          "audioSupport": "NONE",
+          "returnsActualModelUsed": {"value": true, "field": "response.model", "verification": "DOCUMENTED"},
+          "imageAnalysis": {
+            "supported": true,
+            "requestFormat": "content block {type: 'image', source: {type: 'base64'|'url'|'file', ...}}",
+            "inputMethods": ["base64", "url", "file_id"],
+            "multiImagePlusText": true,
+            "imageTokenAccounting": {
+              "foldedIntoAggregate": true,
+              "separateBreakdownField": false,
+              "formula": "~width_px * height_px / 750, capped per model",
+              "antiDoubleChargeRule": "input_tokens already includes image tokens; never add a separate image-token estimate on top of the returned input_tokens value",
+              "verification": "DOCUMENTED"
+            },
+            "pricingUnit": "per token, folded into standard input rate; no distinct image SKU",
+            "generationSupported": false
+          },
+          "voice": {"supported": false, "reason": "no audio content type exists in the Messages API"}
+        },
+        {
+          "model": "claude-mythos-5",
+          "status": "LIMITED_AVAILABILITY",
+          "apiFamily": "Messages API",
+          "endpoint": "/v1/messages",
+          "modalities": ["TEXT", "IMAGE_INPUT", "DOCUMENT_INPUT"],
+          "audioSupport": "NONE",
+          "imageAnalysis": {"supported": true, "notes": "same accounting as claude-fable-5"},
+          "voice": {"supported": false}
+        },
+        {
+          "model": "claude-opus-5",
+          "status": "STABLE",
+          "apiFamily": "Messages API",
+          "endpoint": "/v1/messages",
+          "modalities": ["TEXT", "IMAGE_INPUT", "DOCUMENT_INPUT"],
+          "audioSupport": "NONE",
+          "imageAnalysis": {"supported": true, "notes": "same accounting as claude-fable-5"},
+          "voice": {"supported": false}
+        },
+        {
+          "model": "claude-opus-4-8",
+          "status": "STABLE",
+          "apiFamily": "Messages API",
+          "endpoint": "/v1/messages",
+          "modalities": ["TEXT", "IMAGE_INPUT", "DOCUMENT_INPUT"],
+          "audioSupport": "NONE",
+          "imageAnalysis": {"supported": true, "notes": "same accounting as claude-fable-5"},
+          "voice": {"supported": false}
+        }
+      ]
+    },
+    {
+      "provider": "openai",
+      "verifiedAt": "2026-08-03",
+      "officialSource": "https://developers.openai.com/api/docs/pricing ; https://developers.openai.com/api/docs/guides/images-vision ; https://developers.openai.com/api/docs/guides/realtime",
+      "sourceFetchStatus": "DOCUMENTED — fetched live this session",
+      "imageModels": [
+        {
+          "modelFamily": "gpt-5.6-sol / gpt-5.6-terra / gpt-5.6-luna",
+          "status": "STABLE",
+          "apiFamily": "Responses API / Chat Completions API",
+          "endpoint": "/v1/responses or /v1/chat/completions",
+          "modalities": ["TEXT", "IMAGE_INPUT"],
+          "detailLevels": ["low", "high", "original", "auto"],
+          "defaultDetailBehavior": "auto/omitted == original (full resolution, no forced downscale) — CHANGED from gpt-4o-era models where auto/omitted == high",
+          "tokenization": "patch-based, 32x32px patches; original detail uses uncapped patch count on this family",
+          "imageInputMethods": ["url", "base64_data_url", "file_id"],
+          "supportedFormats": ["png", "jpeg", "jpg", "webp", "non-animated gif"],
+          "maxPayload": "512 MB total per request",
+          "maxImageCount": 1500,
+          "imageTokenAccounting": {
+            "foldedIntoAggregate": true,
+            "separateBreakdownField": "UNKNOWN — not confirmed whether Responses API usage object exposes a per-image or per-modality breakdown alongside the aggregate; needs live probe",
+            "antiDoubleChargeRule": "image token cost is computed pre-call by the documented patch formula and added directly into prompt_tokens/input_tokens; do not add a separate client-side estimate on top of the returned usage value",
+            "verification": "DOCUMENTED (formula) / UNKNOWN (response breakdown field)"
+          },
+          "pricingUnit": "per token, standard input rate (no per-image SKU for analysis)",
+          "voice": {"supported": false, "notes": "text/vision model, not a realtime/audio model"}
+        },
+        {
+          "modelFamily": "gpt-4o / gpt-4.1 / gpt-4o-mini / gpt-4.5",
+          "status": "STABLE (legacy, still served)",
+          "apiFamily": "Chat Completions API / Responses API",
+          "modalities": ["TEXT", "IMAGE_INPUT"],
+          "tokenization": "tile-based: base tokens + N x 512px tiles after scale-to-2048 and shortest-side-768px",
+          "baseTokensPerModel": {"gpt-4o": 85, "gpt-4.1": 85, "gpt-4.5": 85, "gpt-4o-mini": 2833},
+          "tileTokensPerModel": {"gpt-4o": 170, "gpt-4.1": 170, "gpt-4.5": 170, "gpt-4o-mini": 5667},
+          "verification": "DOCUMENTED"
+        },
+        {
+          "modelFamily": "gpt-image-2 / gpt-image-1.5 / gpt-image-1-mini",
+          "status": "STABLE",
+          "apiFamily": "Images API / image_generation tool",
+          "capabilityClass": "image generation/editing (accepts image input, primary output is image, not analysis text)",
+          "pricing": {
+            "gpt-image-1.5": {"imageInputPerM": 8.00, "imageCachedInputPerM": 2.00, "imageOutputPerM": 32.00, "textInputPerM": 5.00, "textOutputPerM": 10.00},
+            "gpt-image-2": {"imageInputPerM": 8.00, "imageCachedInputPerM": 2.00, "imageOutputPerM": 30.00, "textInputPerM": 5.00},
+            "gpt-image-1-mini": {"imageInputPerM": 2.50, "imageOutputPerM": 8.00, "textInputPerM": 2.00}
+          },
+          "verification": "DOCUMENTED"
+        }
+      ],
+      "voiceModels": [
+        {
+          "model": "gpt-realtime-2.1",
+          "classification": "native realtime audio-to-audio",
+          "status": "STABLE",
+          "endpoint": "/v1/realtime (WebRTC via /v1/realtime/calls, WebSocket, SIP)",
+          "transport": ["WebRTC", "WebSocket", "SIP"],
+          "supportsImageInput": true,
+          "reasoningEffortConfigurable": true,
+          "pricing": {
+            "audioInputPerM": 32.00, "audioCachedInputPerM": 0.40, "audioOutputPerM": 64.00,
+            "textInputPerM": 4.00, "textCachedInputPerM": 0.40, "textOutputPerM": 24.00,
+            "imageInputPerM": 5.00, "imageCachedInputPerM": 0.50
+          },
+          "usageAccounting": {
+            "audioTokenRate": "1 token per 100ms input audio; 1 token per 50ms output audio",
+            "separateLinesForModality": true,
+            "antiDoubleCountRule": "audio, text, and image are separate billable token categories, not folded into one aggregate — sum them as distinct line items, do not merge into a single input_tokens bucket",
+            "streamingUsageShape": "UNKNOWN — exact usage-event JSON shape (incremental vs session-final, cached-audio breakdown granularity) not confirmed live this session",
+            "verification": "DOCUMENTED (rate/rule) / UNKNOWN (exact event shape)"
+          }
+        },
+        {
+          "model": "gpt-realtime-2.1-mini",
+          "classification": "native realtime audio-to-audio",
+          "status": "STABLE",
+          "pricing": {
+            "audioInputPerM": 10.00, "audioCachedInputPerM": 0.30, "audioOutputPerM": 20.00,
+            "textInputPerM": 0.60, "textCachedInputPerM": 0.06, "textOutputPerM": 2.40,
+            "imageInputPerM": 0.80, "imageCachedInputPerM": 0.08
+          },
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "gpt-realtime-translate",
+          "classification": "realtime speech-to-speech translation (dedicated session type, not standard voice-agent lifecycle)",
+          "endpoint": "/v1/realtime/translations",
+          "transport": ["WebRTC (browser)", "WebSocket (server pipelines)"],
+          "pricing": {"perMinute": 0.034},
+          "notes": "continuous session; no response.create call; no turn-taking lifecycle",
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "gpt-realtime-whisper",
+          "classification": "realtime transcription (audio-to-text streaming)",
+          "endpoint": "/v1/realtime (transcription session type)",
+          "pricing": {"perMinute": 0.017},
+          "notes": "controllable latency via delay setting; lower delay = earlier partial text",
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "gpt-live-transcribe",
+          "classification": "realtime transcription",
+          "pricing": {"perMinute": 0.017},
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "gpt-transcribe",
+          "classification": "STT + LLM + TTS pipeline component (file/bounded transcription)",
+          "pricing": {"perMinute": 0.0045},
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "gpt-4o-transcribe",
+          "classification": "file/bounded speech-to-text",
+          "pricing": {"inputPerM": 2.50, "outputPerM": 10.00, "estimatedPerMinute": 0.006},
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "gpt-4o-mini-transcribe",
+          "classification": "file/bounded speech-to-text",
+          "pricing": {"inputPerM": 1.25, "outputPerM": 5.00, "estimatedPerMinute": 0.003},
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "UNKNOWN — dedicated TTS model IDs (e.g. tts-1-class names)",
+          "classification": "text-to-speech",
+          "verification": "UNKNOWN — not re-confirmed live this session; requires a direct fetch of https://developers.openai.com/api/docs/guides/text-to-speech"
+        }
+      ]
+    },
+    {
+      "provider": "google_gemini",
+      "verifiedAt": "2026-08-03",
+      "officialSource": "https://ai.google.dev/gemini-api/docs/pricing ; https://ai.google.dev/gemini-api/docs/image-understanding ; https://ai.google.dev/gemini-api/docs/live-api",
+      "sourceFetchStatus": "DOCUMENTED — fetched live this session",
+      "structuralNote": "Google now presents the Interactions API (v1beta/interactions) as the GA recommended surface, distinct from the older generateContent endpoint that the reviewed baseline usage-reference file documents exclusively. Field-level usage-object equivalence between the two surfaces is UNKNOWN and is the top item in the live-probe plan.",
+      "imageModels": [
+        {
+          "modelFamily": "gemini-3.6-flash / gemini-3.5-flash / gemini-3.5-flash-lite / gemini-3.1-pro-preview / gemini-3.1-flash-lite / gemini-3-flash-preview / gemini-2.5-pro / gemini-2.5-flash / gemini-2.5-flash-lite",
+          "status": "STABLE or PREVIEW (see research doc per-model table)",
+          "apiFamily": "Interactions API (GA, recommended) / generateContent (legacy but still documented)",
+          "endpoint": "POST https://generativelanguage.googleapis.com/v1beta/interactions",
+          "modalities": ["TEXT", "IMAGE_INPUT", "VIDEO_INPUT", "AUDIO_INPUT"],
+          "imageInputMethods": ["Files API upload -> uri reference", "inline base64 data (20MB total request cap)"],
+          "rawUrlSupport": "UNKNOWN — not confirmed whether a bare external https URL (without Files API mediation) is accepted",
+          "supportedFormats": ["png", "jpeg", "webp", "heic", "heif"],
+          "maxImageCount": 3600,
+          "imageTokenAccounting": {
+            "foldedIntoAggregate": true,
+            "separateBreakdownField": true,
+            "breakdownFieldName": "promptTokensDetails[] with modality='IMAGE' (generateContent shape); Interactions-API-equivalent field name UNKNOWN",
+            "antiDoubleChargeRule": "the modality breakdown is a non-additive breakdown OF the aggregate; bill only off the aggregate (promptTokenCount / totalTokenCount or Interactions-API equivalent), never add the breakdown on top",
+            "tokenFormula": "258 tokens if both dimensions <=384px; otherwise tiled into 768x768px tiles at 258 tokens/tile",
+            "mediaResolutionParam": "media_resolution controls max tokens allocated per image/frame (Gemini 3+)",
+            "verification": "DOCUMENTED (generateContent shape) / UNKNOWN (Interactions API field names)"
+          },
+          "pricingUnit": "per token, standard input rate for analysis; image is NOT surcharged relative to text on current models (audio is)",
+          "verification": "DOCUMENTED"
+        },
+        {
+          "modelFamily": "gemini-3.1-flash-image (Nano Banana 2) / gemini-3-pro-image (Nano Banana Pro) / gemini-2.5-flash-image (Nano Banana) / gemini-3.1-flash-lite-image",
+          "capabilityClass": "image generation/editing, not pure analysis",
+          "pricing": {
+            "gemini-3.1-flash-image": {"inputPerM": 0.50, "textOutputPerM": 3.00, "imageOutputPerM": 60.00, "per1KImage": 0.067, "per4KImage": 0.151},
+            "gemini-3-pro-image": {"inputPerM": 2.00, "textOutputPerM": 12.00, "imageOutputPerM": 120.00, "per1K2KImage": 0.134, "per4KImage": 0.24},
+            "gemini-2.5-flash-image": {"inputPerM": 0.30, "perImageFixed": 0.039, "billingUnit": "IMAGE (not token-based output for this generation)"}
+          },
+          "verification": "DOCUMENTED"
+        }
+      ],
+      "voiceModels": [
+        {
+          "model": "gemini-3.1-flash-live-preview",
+          "classification": "native realtime audio-to-audio (Live API)",
+          "status": "PREVIEW",
+          "transport": ["WebSocket"],
+          "webRTCSupport": "UNKNOWN — not confirmed",
+          "sipSupport": "UNKNOWN — not confirmed",
+          "pricing": {
+            "textInputPerM": 0.75, "audioInputPerM": 3.00, "audioInputPerMinute": 0.005,
+            "imageVideoInputPerM": 1.00, "imageVideoInputPerMinute": 0.002,
+            "textOutputPerM": 4.50, "audioOutputPerM": 12.00, "audioOutputPerMinute": 0.018
+          },
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "gemini-2.5-flash-native-audio-preview-12-2025",
+          "classification": "native realtime audio-to-audio (Live API)",
+          "status": "PREVIEW",
+          "pricing": {"textInputPerM": 0.50, "audioVideoInputPerM": 3.00, "textOutputPerM": 2.00, "audioOutputPerM": 12.00},
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "gemini-3.5-live-translate-preview",
+          "classification": "realtime speech-to-speech translation",
+          "languages": "70+ languages advertised",
+          "egyptianArabicDocumented": false,
+          "pricing": {"audioInputPerM": 3.50, "audioInputPerMinute": 0.0053, "audioOutputPerM": 21.00, "audioOutputPerMinute": 0.0315},
+          "audioTokenRate": "25 tokens per second of audio",
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "gemini-3.1-flash-tts-preview",
+          "classification": "text-to-speech",
+          "pricing": {"textInputPerM": 1.00, "audioOutputPerM": 20.00},
+          "audioTokenRate": "25 tokens per second of audio",
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "gemini-2.5-flash-preview-tts",
+          "classification": "text-to-speech",
+          "pricing": {"textInputPerM": 0.50, "audioOutputPerM": 10.00},
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "gemini-2.5-pro-preview-tts",
+          "classification": "text-to-speech",
+          "pricing": {"textInputPerM": 1.00, "audioOutputPerM": 20.00},
+          "verification": "DOCUMENTED"
+        },
+        {
+          "model": "any standard Gemini model (e.g. gemini-3.6-flash) with audio content block",
+          "classification": "audio input to text output (not a distinct endpoint, just an input modality)",
+          "usageAccounting": {
+            "foldedIntoAggregate": true,
+            "separateBreakdownField": true,
+            "breakdownFieldName": "promptTokensDetails[] with modality='AUDIO' (generateContent shape)",
+            "audioOutputUsageShape": "UNKNOWN — baseline usage-reference file explicitly flags this unconfirmed; not closed in this pass",
+            "verification": "DOCUMENTED (input) / UNKNOWN (output)"
+          }
+        }
+      ]
+    }
+  ],
+  "crossProviderComparison": {
+    "imageTokenFoldingPattern": {
+      "anthropic": "folded only, no breakdown field",
+      "openai": "folded only for analysis models; separate breakdown existence UNKNOWN",
+      "gemini": "folded AND separately broken out (non-additive)"
+    },
+    "voiceBillingPattern": {
+      "anthropic": "not applicable (no audio support)",
+      "openai": "audio/text/image are separate billable categories per turn",
+      "gemini": "audio/text/image folded into one aggregate with a non-additive per-modality breakdown, same pattern as its image handling"
+    },
+    "egyptianArabicOfficiallyDocumented": {
+      "anthropic": "not applicable",
+      "openai": false,
+      "gemini": false
+    }
+  }
+}

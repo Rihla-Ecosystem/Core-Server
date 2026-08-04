@@ -4,9 +4,14 @@ import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
 import { requireRole } from '../middleware/rbac.js';
 import * as adminController from '../controllers/admin.controller.js';
+import * as shadowPricingAdminController from '../controllers/ai-shadow-pricing-admin.controller.js';
 import adminTokenPackageRoutes from './admin-token-package.routes.js';
 import adminPaymentRoutes from './admin-payment.routes.js';
 import adminTokenWalletRoutes from './admin-token-wallet.routes.js';
+import {
+  adminObservationsQuerySchema,
+  adminRecomputeBodySchema,
+} from '../schemas/admin-shadow-pricing.schema.js';
 
 const router = Router();
 
@@ -135,5 +140,26 @@ router.get('/stats/monthly', requireRole('admin'), adminController.getMonthlySta
 router.get('/ai-usage', requireRole('admin'), adminController.getAiUsage);
 
 router.get('/system/health', requireRole('admin'), adminController.getSystemHealthController);
+
+// Phase 2D-B — read-only shadow-pricing admin endpoints.
+router.get(
+  '/ai-shadow-pricing/summary',
+  requireRole('admin'),
+  shadowPricingAdminController.getShadowPricingSummary,
+);
+
+router.get(
+  '/ai-shadow-pricing/observations',
+  requireRole('admin'),
+  validate(adminObservationsQuerySchema, 'query'),
+  shadowPricingAdminController.getShadowPricingObservations,
+);
+
+router.post(
+  '/ai-shadow-pricing/recompute-preview',
+  requireRole('admin'),
+  validate(adminRecomputeBodySchema, 'body'),
+  shadowPricingAdminController.recomputePreview,
+);
 
 export default router;
