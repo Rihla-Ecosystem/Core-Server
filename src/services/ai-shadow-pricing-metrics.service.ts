@@ -43,6 +43,8 @@ import { ceilDiv, NANO_PER_MICRO, nanoUsdToUsdString } from '../utils/provider-p
 import type { RequestSummaryStatus, UnpricedReason } from '../types/provider-pricing.js';
 import type { ReportableShadow } from '../utils/provider-pricing/reporting.js';
 import type { ShadowPricingObservation } from './ai-shadow-pricing-observation.service.js';
+import { computeAttemptRiskStatus, attemptsIncludeRetry } from '../utils/ai-usage.js';
+import type { AttemptRiskStatus } from '../types/ai.js';
 
 /** Mutually exclusive request-level buckets used by admin metrics/views. */
 export type RequestCategory =
@@ -144,11 +146,38 @@ export interface MetricsRateCardVersion {
   count: number;
 }
 
+/**
+ * Phase 2E-A2 diagnostic attempt observability (in-memory only; never priced).
+ *
+ * Counts every recorded provider attempt across retained observations. The
+ * attempt-based counters are intentionally independent of pricing: a request
+ * with a FAILED retry followed by a SUCCEEDED call is FULLY_PRICED yet still
+ * contributes a FAILED attempt and to retryContainingRequests.
+ *
+ * Dimension maps are keyed by the attempt's own value (or 'UNKNOWN' when the
+ * optional dimension is absent). No prompts, responses, media, or secrets are
+ * ever aggregated.
+ */
+export interface MetricsAttempts {
+  totalAttempts: number;
+  succeeded: number;
+  failed: number;
+  indeterminate: number;
+  retryContainingRequests: number;
+  indeterminateCostRisk: number;
+  byProvider: Record<string, number>;
+  byOperation: Record<string, number>;
+  byRequestedModel: Record<string, number>;
+  byActualModel: Record<string, number>;
+  byErrorCategory: Record<string, number>;
+}
+
 export interface ShadowPricingMetrics {
   generatedAt: string;
   window: MetricsWindow;
   requests: MetricsRequests;
   providerCalls: MetricsProviderCalls;
+  attempts: MetricsAttempts;
   pricedProviderCost: MetricsMoney;
   unpricedReasons: Record<string, number>;
   bySource: MetricsSourceBreakdown[];
@@ -196,6 +225,18 @@ function computeCoverage(priced: number, unpriced: number): {
   const basisPoints = Math.round(numerator / totalRealCalls);
   const percent = (basisPoints / 100).toFixed(2);
   return { coverageAvailable: true, coverageBasisPoints: basisPoints, coveragePercent: percent };
+}
+
+function incrementCount(map: Map<string, number>, key: string): void {
+  map.set(key, (map.get(key) ?? 0) + 1);
+}
+
+function toCountRecord(map: Map<string, number>): Record<string, number> {
+  const record: Record<string, number> = {};
+  for (const [key, value] of [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    record[key] = value;
+  }
+  return record;
 }
 
 function incrementSource(
@@ -270,6 +311,19 @@ export function computeShadowPricingMetrics(
   let oldestObservedAt: string | undefined;
   let newestObservedAt: string | undefined;
 
+  let totalAttempts = 0;
+  let attemptSucceeded = 0;
+  let attemptFailed = 0;
+  let attemptIndeterminate = 0;
+  let retryContainingRequests = 0;
+  let indeterminateCostRisk = 0;
+
+  const attemptProviderMap = new Map<string, number>();
+  const attemptOperationMap = new Map<string, number>();
+  const attemptRequestedModelMap = new Map<string, number>();
+  const attemptActualModelMap = new Map<string, number>();
+  const attemptErrorCategoryMap = new Map<string, number>();
+
   const reasonCounts: Record<string, number> = {};
   for (const r of ALL_UNPRICED_REASONS) reasonCounts[r] = 0;
 
@@ -321,6 +375,24 @@ export function computeShadowPricingMetrics(
     }
 
     incrementSource(sourceMap, obs.source, category, obsPricedCost);
+
+    const attempts = obs.attempts ?? [];
+    if (attempts.length > 0) {
+      const risk = obs.attemptRiskStatus ?? computeAttemptRiskStatus(attempts);
+      if (risk === 'INDETERMINATE_COST_RISK') indeterminateCostRisk += 1;
+      if (attemptsIncludeRetry(attempts)) retryContainingRequests += 1;
+      for (const attempt of attempts) {
+        totalAttempts += 1;
+        if (attempt.outcome === 'SUCCEEDED') attemptSucceeded += 1;
+        else if (attempt.outcome === 'FAILED') attemptFailed += 1;
+        else attemptIndeterminate += 1;
+        incrementCount(attemptProviderMap, attempt.provider || 'UNKNOWN');
+        incrementCount(attemptOperationMap, attempt.operation || 'UNKNOWN');
+        incrementCount(attemptRequestedModelMap, attempt.requestedModel || 'UNKNOWN');
+        incrementCount(attemptActualModelMap, attempt.actualModel || 'UNKNOWN');
+        incrementCount(attemptErrorCategoryMap, attempt.errorCategory || 'UNKNOWN');
+      }
+    }
   }
 
   const totalCost = sumPricedCost(snapshot);
@@ -343,6 +415,19 @@ export function computeShadowPricingMetrics(
       pricedCalls,
       unpricedCalls,
       ...coverage,
+    },
+    attempts: {
+      totalAttempts,
+      succeeded: attemptSucceeded,
+      failed: attemptFailed,
+      indeterminate: attemptIndeterminate,
+      retryContainingRequests,
+      indeterminateCostRisk,
+      byProvider: toCountRecord(attemptProviderMap),
+      byOperation: toCountRecord(attemptOperationMap),
+      byRequestedModel: toCountRecord(attemptRequestedModelMap),
+      byActualModel: toCountRecord(attemptActualModelMap),
+      byErrorCategory: toCountRecord(attemptErrorCategoryMap),
     },
     pricedProviderCost: money(totalCost),
     unpricedReasons: reasonCounts,

@@ -19,6 +19,8 @@ import { DEFAULT_OBSERVATION_CAPACITY } from './ai-shadow-pricing-observation.se
 import type { ShadowPricingObservation } from './ai-shadow-pricing-observation.service.js';
 import type { RequestSummaryStatus } from '../types/provider-pricing.js';
 import { requestCategoryOf, type RequestCategory } from './ai-shadow-pricing-metrics.service.js';
+import { attemptsIncludeRetry, computeAttemptRiskStatus } from '../utils/ai-usage.js';
+import type { AttemptRiskStatus } from '../types/ai.js';
 
 export interface ObservationQueryOptions {
   /** Maximum rows returned. Default 50; hard maximum 200 (clamped). */
@@ -52,6 +54,12 @@ export interface ObservationSummaryRow {
   };
   unpricedReasons: Record<string, number>;
   rateCardVersion: string;
+  /** Billing-safety risk derived from this request's provider attempts. */
+  attemptRiskStatus: AttemptRiskStatus;
+  attemptCount: number;
+  failedAttemptCount: number;
+  indeterminateAttemptCount: number;
+  hasRetry: boolean;
 }
 
 export interface ObservationQueryMeta {
@@ -69,6 +77,14 @@ export interface ObservationQueryResult {
 }
 
 function toSummaryRow(obs: ShadowPricingObservation): ObservationSummaryRow {
+  const attempts = obs.attempts ?? [];
+  const attemptRiskStatus = obs.attemptRiskStatus ?? computeAttemptRiskStatus(attempts);
+  let failedAttemptCount = 0;
+  let indeterminateAttemptCount = 0;
+  for (const attempt of attempts) {
+    if (attempt.outcome === 'FAILED') failedAttemptCount += 1;
+    else if (attempt.outcome === 'INDETERMINATE') indeterminateAttemptCount += 1;
+  }
   return {
     observedAt: obs.observedAt,
     source: obs.source,
@@ -86,6 +102,11 @@ function toSummaryRow(obs: ShadowPricingObservation): ObservationSummaryRow {
     },
     unpricedReasons: { ...obs.report.totals.unpricedReasons },
     rateCardVersion: obs.report.rateCardVersion,
+    attemptRiskStatus,
+    attemptCount: attempts.length,
+    failedAttemptCount,
+    indeterminateAttemptCount,
+    hasRetry: attemptsIncludeRetry(attempts),
   };
 }
 

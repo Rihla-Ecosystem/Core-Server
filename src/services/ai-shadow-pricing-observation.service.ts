@@ -19,6 +19,7 @@
  */
 
 import type { ReportableShadow } from '../utils/provider-pricing/reporting.js';
+import type { AttemptRiskStatus, ProviderAttempt } from '../types/ai.js';
 
 /** Fixed per-process default capacity for the ring buffer. */
 export const DEFAULT_OBSERVATION_CAPACITY = 500;
@@ -30,6 +31,18 @@ export interface ShadowPricingObservation {
   conversationId?: string | null;
   /** The full reportable shadow result (JSON-safe; no bigint). */
   report: ReportableShadow;
+  /**
+   * Billing-safety risk derived from this request's provider attempts. Present
+   * on observations recorded by the production shadow service; absent on
+   * hand-built observations means no attempt risk (treated as `NONE`).
+   */
+  attemptRiskStatus?: AttemptRiskStatus;
+  /**
+   * Normalized diagnostic provider attempts for this request (JSON-safe; no
+   * prompts, responses, media, or secrets). Observability-only and never fed to
+   * the pricing engine.
+   */
+  attempts?: ProviderAttempt[];
 }
 
 export interface AiShadowPricingObservationServiceOptions {

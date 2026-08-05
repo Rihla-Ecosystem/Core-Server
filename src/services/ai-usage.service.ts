@@ -40,6 +40,7 @@ export interface RecordAiUsageParams {
   source?: string;
   usage?: AiUsage | null;
   providerCalls?: unknown;
+  providerAttempts?: unknown;
 }
 
 /**
@@ -89,6 +90,7 @@ export async function recordAiUsageWith(
     deps.runShadowPricing(params.providerCalls, {
       source: params.source,
       conversationId: params.conversationId,
+      providerAttempts: params.providerAttempts,
     });
   } catch {
     // Belt-and-suspenders: never let shadow break the request path.

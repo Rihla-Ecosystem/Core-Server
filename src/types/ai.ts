@@ -96,6 +96,74 @@ export interface RawAIProviderUsage {
   [key: string]: unknown;
 }
 
+/**
+ * Provider-neutral outcome of one attempted provider call (diagnostic only).
+ *
+ * - `SUCCEEDED`       — a usable provider response was received and the
+ *                       corresponding ProviderCallUsage record was recorded.
+ * - `FAILED`          — the provider definitively rejected the call (confirmed
+ *                       4xx/5xx / explicit rejection); no provider call.
+ * - `INDETERMINATE`   — the call MAY have executed (timeout after start,
+ *                       dropped connection, or response received but local
+ *                       processing failed); cost/accounting risk is unknown.
+ *
+ * Attempts are observability-only: they never carry prompts, responses, media,
+ * or secrets, and they never enter the pricing engine.
+ */
+export type ProviderAttemptOutcome = 'SUCCEEDED' | 'FAILED' | 'INDETERMINATE';
+
+/** A single normalized provider attempt. */
+export interface ProviderAttempt {
+  attemptId: string;
+  provider: string;
+  operation?: string;
+  requestedModel?: string;
+  actualModel?: string;
+  /** 1-based retry position of this logical provider operation. */
+  attemptNumber: number;
+  outcome: ProviderAttemptOutcome;
+  /** Whether the provider SDK call began (a real provider call was attempted). */
+  providerCallStarted: boolean;
+  /** ISO-8601 start time of the provider SDK call when one began (optional). */
+  providerCallStartedAt?: string;
+  providerResponseReceived: boolean;
+  providerCallId?: string;
+  errorCategory?: string;
+  httpStatus?: number;
+}
+
+/** Raw wire shape of a ProviderAttempt before normalization. */
+export interface RawProviderAttempt {
+  attemptId?: unknown;
+  provider?: unknown;
+  operation?: unknown;
+  requestedModel?: unknown;
+  actualModel?: unknown;
+  attemptNumber?: unknown;
+  outcome?: unknown;
+  providerCallStarted?: unknown;
+  providerCallStartedAt?: unknown;
+  providerResponseReceived?: unknown;
+  providerCallId?: unknown;
+  errorCategory?: unknown;
+  httpStatus?: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * Billing-safety risk derived from a request's provider attempts, kept strictly
+ * separate from the pricing `summaryStatus`.
+ *
+ * - `NONE`                    — no failed / indeterminate attempts.
+ * - `FAILED_ATTEMPT_PRESENT`  — at least one confirmed FAILED attempt (the
+ *                               provider rejected the call; confirmed no cost).
+ * - `INDETERMINATE_COST_RISK` — at least one INDETERMINATE attempt (the call
+ *                               MAY have executed with unknown cost). This is
+ *                               the most conservative state and takes
+ *                               precedence over `FAILED_ATTEMPT_PRESENT`.
+ */
+export type AttemptRiskStatus = 'NONE' | 'FAILED_ATTEMPT_PRESENT' | 'INDETERMINATE_COST_RISK';
+
 export interface AIChatHistoryMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -143,6 +211,7 @@ export interface AIChatResponse {
   user_journeys?: unknown;
   usage?: AIProviderUsage;
   providerCalls?: ProviderCallUsage[];
+  providerAttempts?: ProviderAttempt[];
 }
 
 type _AssertTrue<T extends true> = T;

@@ -1,7 +1,11 @@
 import type {
   AIProviderUsage,
+  AttemptRiskStatus,
+  ProviderAttempt,
+  ProviderAttemptOutcome,
   ProviderCallUsage,
   RawAIProviderUsage,
+  RawProviderAttempt,
   RawProviderCall,
 } from '../types/ai.js';
 
@@ -203,4 +207,177 @@ export function normalizeProviderCalls(
     normalized.push(call);
   }
   return normalized;
+}
+
+const ATTEMPT_OUTCOMES: readonly ProviderAttemptOutcome[] = [
+  'SUCCEEDED',
+  'FAILED',
+  'INDETERMINATE',
+];
+
+function isPositiveInteger(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value >= 1
+  );
+}
+
+/**
+ * True when `value` is a plausible ISO-8601 timestamp (broad date-time form
+ * with an optional fractional seconds and a UTC/offset suffix). Used to accept
+ * `providerCallStartedAt` and the legacy `providerCallStarted` timestamp form.
+ */
+function isIso8601Timestamp(value: string): boolean {
+  const iso =
+    /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/;
+  return iso.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+/**
+ * Normalize one raw provider attempt into the internal ProviderAttempt
+ * contract, or undefined when the element is unusable.
+ *
+ * Required fields (attemptId, provider, attemptNumber, outcome,
+ * providerCallStarted, providerResponseReceived) must be present and valid; a
+ * present-but-invalid required field rejects the element (no silent coercion).
+ * `providerCallStarted` is a BOOLEAN. For backward compatibility the legacy
+ * string form (`providerCallStarted: "<ISO timestamp>"`) is accepted and
+ * normalized to `providerCallStarted: true` with the timestamp moved into
+ * `providerCallStartedAt`; the legacy string shape is never exposed after
+ * normalization. `providerCallStartedAt` is an optional ISO-8601 timestamp that
+ * is kept when valid and dropped when invalid. Optional string fields are
+ * trimmed and dropped when empty; httpStatus must be an integer.
+ */
+function normalizeProviderAttempt(raw: unknown): ProviderAttempt | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as RawProviderAttempt;
+
+  if (!isNonEmptyString(record.attemptId)) return undefined;
+  if (!isNonEmptyString(record.provider)) return undefined;
+  if (!isPositiveInteger(record.attemptNumber)) return undefined;
+  if (
+    typeof record.outcome !== 'string' ||
+    !(ATTEMPT_OUTCOMES as readonly string[]).includes(record.outcome)
+  ) {
+    return undefined;
+  }
+  if (typeof record.providerResponseReceived !== 'boolean') return undefined;
+
+  // providerCallStarted: required boolean. The legacy string form (an ISO-8601
+  // timestamp) is accepted and normalized to true + providerCallStartedAt.
+  let providerCallStarted: boolean;
+  let legacyStartedAt: string | undefined;
+  if (typeof record.providerCallStarted === 'boolean') {
+    providerCallStarted = record.providerCallStarted;
+  } else if (typeof record.providerCallStarted === 'string') {
+    if (!isIso8601Timestamp(record.providerCallStarted)) return undefined;
+    providerCallStarted = true;
+    legacyStartedAt = record.providerCallStarted;
+  } else {
+    return undefined;
+  }
+
+  const attempt: ProviderAttempt = {
+    attemptId: record.attemptId.trim(),
+    provider: record.provider.trim(),
+    attemptNumber: record.attemptNumber,
+    outcome: record.outcome as ProviderAttemptOutcome,
+    providerCallStarted,
+    providerResponseReceived: record.providerResponseReceived,
+  };
+
+  // providerCallStartedAt: optional ISO-8601 timestamp; kept when valid,
+  // otherwise dropped. A legacy string moved from providerCallStarted also
+  // lands here.
+  let startedAt: string | undefined = legacyStartedAt;
+  if (record.providerCallStartedAt !== undefined) {
+    if (
+      typeof record.providerCallStartedAt !== 'string' ||
+      !isIso8601Timestamp(record.providerCallStartedAt)
+    ) {
+      startedAt = undefined;
+    } else {
+      startedAt = record.providerCallStartedAt.trim();
+    }
+  }
+  if (startedAt !== undefined) {
+    attempt.providerCallStartedAt = startedAt;
+  }
+
+  const optionalString: Array<keyof RawProviderAttempt> = [
+    'operation',
+    'requestedModel',
+    'actualModel',
+    'providerCallId',
+    'errorCategory',
+  ];
+  for (const key of optionalString) {
+    const value = record[key];
+    if (value === undefined) continue;
+    if (!isNonEmptyString(value)) return undefined;
+    (attempt as unknown as Record<string, string | number | boolean | undefined>)[key] = value.trim();
+  }
+
+  if (record.httpStatus !== undefined) {
+    if (
+      typeof record.httpStatus !== 'number' ||
+      !Number.isInteger(record.httpStatus)
+    ) {
+      return undefined;
+    }
+    attempt.httpStatus = record.httpStatus;
+  }
+
+  return attempt;
+}
+
+/**
+ * Pure adapter that normalizes an arbitrary array of provider attempts into
+ * the internal ProviderAttempt[] contract.
+ *
+ * Documented rules:
+ * - Input must be an array; otherwise undefined. An explicit empty array is
+ *   valid and normalizes to `[]` (the "no attempts" representation).
+ * - Invalid elements are ignored safely (never throw, never mutate); valid
+ *   elements keep their original relative order.
+ * - No content payloads (prompts, responses, media, secrets) are ever kept.
+ */
+export function normalizeProviderAttempts(raw: unknown): ProviderAttempt[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const normalized: ProviderAttempt[] = [];
+  for (const element of raw) {
+    const attempt = normalizeProviderAttempt(element);
+    if (attempt) normalized.push(attempt);
+  }
+  return normalized;
+}
+
+/**
+ * Derive the billing-safety `attemptRiskStatus` from normalized attempts.
+ *
+ * INDETERMINATE_COST_RISK takes precedence over FAILED_ATTEMPT_PRESENT: a call
+ * that may have executed with unknown cost is the most conservative state.
+ * Attempts never influence the pricing summaryStatus.
+ */
+export function computeAttemptRiskStatus(
+  attempts: ProviderAttempt[] | undefined,
+): AttemptRiskStatus {
+  if (!attempts || attempts.length === 0) return 'NONE';
+  let hasFailed = false;
+  for (const attempt of attempts) {
+    if (attempt.outcome === 'INDETERMINATE') return 'INDETERMINATE_COST_RISK';
+    if (attempt.outcome === 'FAILED') hasFailed = true;
+  }
+  return hasFailed ? 'FAILED_ATTEMPT_PRESENT' : 'NONE';
+}
+
+/** True when any attempt is a retry (attemptNumber > 1). */
+export function attemptsIncludeRetry(attempts: ProviderAttempt[] | undefined): boolean {
+  if (!attempts) return false;
+  return attempts.some((a) => a.attemptNumber > 1);
 }

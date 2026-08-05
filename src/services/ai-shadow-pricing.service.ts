@@ -40,6 +40,8 @@ import { aggregateProviderCalls } from '../utils/provider-pricing/aggregate.js';
 import { toReportableShadow } from '../utils/provider-pricing/reporting.js';
 import type { ReportableShadow } from '../utils/provider-pricing/reporting.js';
 import { normalizeProviderCalls } from '../utils/ai-usage.js';
+import { normalizeProviderAttempts, computeAttemptRiskStatus } from '../utils/ai-usage.js';
+import type { AttemptRiskStatus, ProviderAttempt } from '../types/ai.js';
 import { AiShadowPricingObservationService } from './ai-shadow-pricing-observation.service.js';
 import type { ShadowPricingObservation } from './ai-shadow-pricing-observation.service.js';
 
@@ -74,6 +76,8 @@ export interface ShadowPricingServiceOptions {
 export interface ShadowPricingRequestContext {
   source?: string;
   conversationId?: string | null;
+  /** Diagnostic provider attempts for this request (observability only). */
+  providerAttempts?: unknown;
   /** Injectable for tests / deterministic reporting. */
   pricingDate?: string;
 }
@@ -112,8 +116,17 @@ function buildObservation(
   source: string,
   conversationId: string | undefined | null,
   observedAt: string,
+  attemptRiskStatus: AttemptRiskStatus,
+  attempts: ProviderAttempt[],
 ): ShadowPricingObservation {
-  return { observedAt, source, conversationId: conversationId ?? undefined, report };
+  return {
+    observedAt,
+    source,
+    conversationId: conversationId ?? undefined,
+    report,
+    attemptRiskStatus,
+    attempts,
+  };
 }
 
 /** Sanitize an unexpected error into a safe, generic structured message without exposing raw error text. */
@@ -165,6 +178,8 @@ export class AiShadowPricingService {
     const source = ctx.source ?? 'chat';
     const conversationId = ctx.conversationId ?? undefined;
     const observedAt = this.now();
+    const attempts = normalizeProviderAttempts(ctx.providerAttempts) ?? [];
+    const attemptRiskStatus = computeAttemptRiskStatus(attempts);
 
     if (classification === 'skipped') {
       return {
@@ -184,7 +199,7 @@ export class AiShadowPricingService {
       const report = toReportableShadow(result, this.card.version);
 
       try {
-        this.buffer.record(buildObservation(report, source, conversationId, observedAt));
+        this.buffer.record(buildObservation(report, source, conversationId, observedAt, attemptRiskStatus, attempts));
       } catch (_bufferError) {
         // The buffer must never break the request path.
         const safe = safeObservationError();
