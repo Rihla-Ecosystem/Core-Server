@@ -5,6 +5,7 @@ import adminRoutes from './admin.routes.js';
 import memoryRoutes from './memory.routes.js';
 import envRoutes from './env.routes.js';
 import geoRoutes from './geo.routes.js';
+import geocontextRoutes from './geocontext.routes.js';
 import chatRoutes from './chat.routes.js';
 import chatStreamRoutes from './chat-stream.routes.js';
 import safetyRoutes from './safety.routes.js';
@@ -19,6 +20,7 @@ import voiceRoutes from './voice.routes.js';
 import itineraryRoutes from './itinerary.routes.js';
 import dashboardUsersRoutes from './dashboard/users.routes.js';
 import notificationRoutes from './notification.routes.js';
+import aiServiceRoutes from './ai-service.routes.js';
 import * as userController from '../controllers/user.controller.js';
 
 const router = Router();
@@ -29,6 +31,7 @@ router.use('/admin', adminRoutes);
 router.use('/memory', memoryRoutes);
 router.use('/env', envRoutes);
 router.use('/geo', geoRoutes);
+router.use('/geocontext', geocontextRoutes);
 router.use('/chat', chatRoutes);
 router.use('/chat', chatStreamRoutes);
 router.use('/safety', safetyRoutes);
@@ -43,6 +46,7 @@ router.use('/voice', voiceRoutes);
 router.use('/itinerary', itineraryRoutes);
 router.use('/dashboard/users', dashboardUsersRoutes);
 router.use('/notifications', notificationRoutes);
+router.use('/ai-service', aiServiceRoutes);
 
 router.get('/leaderboard', userController.getLeaderboard);
 

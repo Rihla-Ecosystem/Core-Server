@@ -789,6 +789,7 @@ async function probeService(name: string, url: string, path: string, timeoutMs =
     const response = await fetch(`${url}${path}`, { signal: controller.signal });
     const latencyMs = Date.now() - started;
     const data = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    console.log(`Probed service ${name} at ${url}${path}: status=${response.status}, latency=${latencyMs}ms`);
     return {
       name,
       status: response.ok ? 'online' : 'degraded',
@@ -818,7 +819,7 @@ export async function getSystemHealth() {
   const services = await Promise.all([
     probeService('ai-service', env.AI_SERVICE_URL, '/health'),
     probeService('geocontext', env.GIS_SERVICE_URL, '/healthz'),
-    probeService('risk-intelligence', env.RISK_SERVICE_URL, '/healthz'),
+    probeService('risk-intelligence', env.RISK_SERVICE_URL, '/safety/health'),
     probeService('core-server', `http://localhost:${env.PORT}`, '/health'),
   ]);
 

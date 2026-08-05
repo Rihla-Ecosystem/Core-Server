@@ -78,4 +78,7 @@ router.get('/entity-statistics', ctrl.getEntityStatistics);
 router.get('/api-monitoring/summary', ctrl.getApiMonitoringSummary);
 router.get('/api-monitoring', ctrl.getApiMonitoringLogs);
 
+// AI Admin Assistant (admin only — mounted under /admin/enterprise)
+router.post('/assistant', ctrl.runAssistant);
+
 export default router;

@@ -20,7 +20,7 @@ const isLocalhostOrigin = (origin: string | undefined): boolean => {
 };
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin: "http://localhost:3001",
     credentials: true,
   })
 );

@@ -52,6 +52,49 @@ export async function post<T = unknown>(
   return (await res.json()) as T;
 }
 
+export async function put<T = unknown>(
+  url: string,
+  body?: unknown,
+  headers?: Record<string, string>,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<T> {
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      ...headers,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    throw new HttpClientError(res.status, `PUT ${url} failed with ${res.status}`, await res.text());
+  }
+  return (await res.json()) as T;
+}
+
+export async function del<T = unknown>(
+  url: string,
+  headers?: Record<string, string>,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  body?: unknown,
+): Promise<T> {
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...headers,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    throw new HttpClientError(res.status, `DELETE ${url} failed with ${res.status}`, await res.text());
+  }
+  if (res.status === 204 || res.headers.get('content-length') === '0') return undefined as T;
+  return (await res.json()) as T;
+}
+
 export async function upstreamError(
   fallback: string,
   response: Response,

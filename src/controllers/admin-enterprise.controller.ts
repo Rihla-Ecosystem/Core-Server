@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../middleware/errorHandler.js';
 import * as service from '../services/admin-enterprise.service.js';
 import * as apiMonitor from '../services/api-monitor.service.js';
+import { runAdminAssistant } from '../services/admin-assistant.service.js';
 
 function sendSuccess<T>(res: Response, data: T, message = '', status = 200): void {
   res.status(status).json({ success: true, message, data });
@@ -316,6 +317,20 @@ export async function getApiMonitoringLogs(req: Request, res: Response, next: Ne
 export async function getApiMonitoringSummary(_req: Request, res: Response, next: NextFunction) {
   try {
     sendSuccess(res, apiMonitor.getApiMonitoringSummary());
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AI Admin Assistant
+// ---------------------------------------------------------------------------
+
+export async function runAssistant(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user) throw new AppError(401, 'Authentication required');
+    const result = await runAdminAssistant(req.user.userId, req.body?.question);
+    sendSuccess(res, result);
   } catch (err) {
     next(err);
   }
