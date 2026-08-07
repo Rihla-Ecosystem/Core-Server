@@ -34,6 +34,9 @@ app.use(
 app.use(cookieParser());
 app.use(express.json());
 
+// Serialize bigint as exact decimal strings in all JSON responses
+app.set('json replacer', (_key, value) => typeof value === 'bigint' ? value.toString() : value);
+
 app.use('/api', routes);
 
 app.get('/api/docs.json', (_req, res) => {

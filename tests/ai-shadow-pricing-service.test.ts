@@ -51,7 +51,7 @@ function aggregateResult(input: Parameters<typeof aggregateProviderCalls>[0]): S
   return aggregateProviderCalls(input);
 }
 
-test('13. valid non-empty providerCalls are priced exactly once', () => {
+test('13. valid non-empty providerCalls are priced exactly once', async () => {
   const captured = captureLogger();
   let engineCalls = 0;
   const svc = new AiShadowPricingService({
@@ -63,7 +63,7 @@ test('13. valid non-empty providerCalls are priced exactly once', () => {
     buffer: new AiShadowPricingObservationService(),
     now: () => '2026-08-03T00:00:00.000Z',
   });
-  const outcome = svc.record([VALID_CALL], { source: 'chat', pricingDate: '2026-08-03' });
+  const outcome = await svc.record([VALID_CALL], { source: 'chat', pricingDate: '2026-08-03' });
   assert.equal(outcome.kind, 'priced');
   assert.equal(engineCalls, 1);
   const result = (outcome as { kind: 'priced'; result: ShadowPricingResult }).result;
@@ -73,14 +73,14 @@ test('13. valid non-empty providerCalls are priced exactly once', () => {
   assert.equal(captured.infos.length, 1);
 });
 
-test('14. mixed-model calls remain independent', () => {
+test('14. mixed-model calls remain independent', async () => {
   const captured = captureLogger();
   const svc = new AiShadowPricingService({
     logger: captured.logger,
     buffer: new AiShadowPricingObservationService(),
     now: () => '2026-08-03T00:00:00.000Z',
   });
-  const outcome = svc.record(MIXED_CALLS, { source: 'chat', pricingDate: '2026-08-03' });
+  const outcome = await svc.record(MIXED_CALLS, { source: 'chat', pricingDate: '2026-08-03' });
   assert.equal(outcome.kind, 'priced');
   const result = (outcome as { kind: 'priced'; result: ShadowPricingResult }).result;
   assert.equal(result.totals.callCount, 2);
@@ -90,7 +90,7 @@ test('14. mixed-model calls remain independent', () => {
   assert.deepEqual(models, ['gemini-2.5-flash-lite', 'gemini-3.6-flash']);
 });
 
-test('15. explicit empty providerCalls produces a noProviderCalls outcome', () => {
+test('15. explicit empty providerCalls produces a noProviderCalls outcome', async () => {
   const captured = captureLogger();
   const buf = new AiShadowPricingObservationService();
   const svc = new AiShadowPricingService({
@@ -98,7 +98,7 @@ test('15. explicit empty providerCalls produces a noProviderCalls outcome', () =
     buffer: buf,
     now: () => '2026-08-03T00:00:00.000Z',
   });
-  const outcome = svc.record([], { source: 'identify', pricingDate: '2026-08-03' });
+  const outcome = await svc.record([], { source: 'identify', pricingDate: '2026-08-03' });
   assert.equal(outcome.kind, 'noProviderCalls');
   const result = (outcome as { kind: 'noProviderCalls'; result: ShadowPricingResult }).result;
   assert.equal(result.noProviderCalls, true);
@@ -108,14 +108,14 @@ test('15. explicit empty providerCalls produces a noProviderCalls outcome', () =
   assert.equal(buf.snapshot()[0].report.noProviderCalls, true);
 });
 
-test('16. providerCallMade=false records do not create calls', () => {
+test('16. providerCallMade=false records do not create calls', async () => {
   const captured = captureLogger();
   const svc = new AiShadowPricingService({
     logger: captured.logger,
     buffer: new AiShadowPricingObservationService(),
     now: () => '2026-08-03T00:00:00.000Z',
   });
-  const outcome = svc.record(
+  const outcome = await svc.record(
     [{ provider: 'google', providerCallMade: false, providerCallId: 'c', actualModel: 'gemini-3.6-flash' }],
     { source: 'chat', pricingDate: '2026-08-03' },
   );
@@ -125,14 +125,14 @@ test('16. providerCallMade=false records do not create calls', () => {
   assert.equal(result.totals.callCount, 0);
 });
 
-test('17. structured success log contains no bigint', () => {
+test('17. structured success log contains no bigint', async () => {
   const captured = captureLogger();
   const svc = new AiShadowPricingService({
     logger: captured.logger,
     buffer: new AiShadowPricingObservationService(),
     now: () => '2026-08-03T00:00:00.000Z',
   });
-  svc.record([VALID_CALL], { source: 'chat', conversationId: 'conv-1', pricingDate: '2026-08-03' });
+  await svc.record([VALID_CALL], { source: 'chat', conversationId: 'conv-1', pricingDate: '2026-08-03' });
   assert.equal(captured.infos.length, 1);
   const payload = captured.infos[0];
   assert.equal(payload.event, 'ai_shadow_pricing');
@@ -146,7 +146,7 @@ test('17. structured success log contains no bigint', () => {
   JSON.stringify(payload);
 });
 
-test('18. unexpected engine error is caught, isolated, and reported', () => {
+test('18. unexpected engine error is caught, isolated, and reported', async () => {
   const captured = captureLogger();
   const buf = new AiShadowPricingObservationService();
   const svc = new AiShadowPricingService({
@@ -155,7 +155,7 @@ test('18. unexpected engine error is caught, isolated, and reported', () => {
     buffer: buf,
     now: () => '2026-08-03T00:00:00.000Z',
   });
-  const outcome = svc.record([VALID_CALL], { source: 'chat', pricingDate: '2026-08-03' });
+  const outcome = await svc.record([VALID_CALL], { source: 'chat', pricingDate: '2026-08-03' });
   assert.equal(outcome.kind, 'error');
   assert.equal(buf.size(), 0, 'no observation on engine failure');
   assert.equal(captured.errors.length, 1, 'exactly one safe error log');
@@ -165,7 +165,7 @@ test('18. unexpected engine error is caught, isolated, and reported', () => {
   assertNoBigint(errPayload);
 });
 
-test('19. logger failure is safely isolated', () => {
+test('19. logger failure is safely isolated', async () => {
   const throwingLogger: ShadowPricingLogger = {
     info: () => { throw new Error('logger down'); },
     error: () => { throw new Error('logger down'); },
@@ -177,14 +177,16 @@ test('19. logger failure is safely isolated', () => {
     now: () => '2026-08-03T00:00:00.000Z',
   });
   let outcome: ReturnType<AiShadowPricingService['record']> = { kind: 'skipped', reason: 'NOT_AUTHORITATIVE' };
-  assert.doesNotThrow(() => {
-    outcome = svc.record([VALID_CALL], { source: 'chat', pricingDate: '2026-08-03' });
-  });
+  try {
+    outcome = await svc.record([VALID_CALL], { source: 'chat', pricingDate: '2026-08-03' });
+  } catch {
+    assert.fail('should not throw despite logger failure');
+  }
   assert.equal(outcome.kind, 'priced');
   assert.equal(buf.size(), 1, 'observation still recorded despite logger failure');
 });
 
-test('20. observation-buffer error is isolated', () => {
+test('20. observation-buffer error is isolated', async () => {
   const captured = captureLogger();
   const throwingBuffer = {
     record: () => { throw new Error('buffer full'); },
@@ -195,9 +197,11 @@ test('20. observation-buffer error is isolated', () => {
     now: () => '2026-08-03T00:00:00.000Z',
   });
   let outcome: ReturnType<AiShadowPricingService['record']> = { kind: 'skipped', reason: 'NOT_AUTHORITATIVE' };
-  assert.doesNotThrow(() => {
-    outcome = svc.record([VALID_CALL], { source: 'chat', pricingDate: '2026-08-03' });
-  });
+  try {
+    outcome = await svc.record([VALID_CALL], { source: 'chat', pricingDate: '2026-08-03' });
+  } catch {
+    assert.fail('should not throw despite buffer failure');
+  }
   assert.equal(outcome.kind, 'priced');
   assert.equal(captured.errors.length, 1);
   const payload = captured.errors[0];
@@ -205,7 +209,7 @@ test('20. observation-buffer error is isolated', () => {
   assertNoBigint(payload);
 });
 
-test('21. no prompt/response/raw payload is logged or stored', () => {
+test('21. no prompt/response/raw payload is logged or stored', async () => {
   const captured = captureLogger();
   const buf = new AiShadowPricingObservationService();
   const svc = new AiShadowPricingService({
@@ -223,14 +227,14 @@ test('21. no prompt/response/raw payload is logged or stored', () => {
     response: 'TOP-SECRET-RESPONSE',
     rawProviderPayload: { secret: 'TOP-SECRET-RAW' },
   };
-  svc.record([callWithJunk], { source: 'chat', pricingDate: '2026-08-03' });
+  await svc.record([callWithJunk], { source: 'chat', pricingDate: '2026-08-03' });
   const serializedLog = JSON.stringify(captured.infos);
   const serializedObs = JSON.stringify(buf.snapshot());
   assert.ok(!serializedLog.includes('TOP-SECRET'));
   assert.ok(!serializedObs.includes('TOP-SECRET'));
 });
 
-test('skipped: absent providerCalls produces no observation and no log', () => {
+test('skipped: absent providerCalls produces no observation and no log', async () => {
   const captured = captureLogger();
   const buf = new AiShadowPricingObservationService();
   const svc = new AiShadowPricingService({
@@ -238,14 +242,14 @@ test('skipped: absent providerCalls produces no observation and no log', () => {
     buffer: buf,
     now: () => '2026-08-03T00:00:00.000Z',
   });
-  const outcome = svc.record(undefined, { source: 'chat' });
+  const outcome = await svc.record(undefined, { source: 'chat' });
   assert.deepEqual(outcome, { kind: 'skipped', reason: 'NOT_AUTHORITATIVE' });
   assert.equal(buf.size(), 0);
   assert.equal(captured.infos.length, 0);
   assert.equal(captured.errors.length, 0);
 });
 
-test('skipped: invalid (non-normalizable) array produces no observation and no log', () => {
+test('skipped: invalid (non-normalizable) array produces no observation and no log', async () => {
   const captured = captureLogger();
   const buf = new AiShadowPricingObservationService();
   const svc = new AiShadowPricingService({
@@ -253,7 +257,7 @@ test('skipped: invalid (non-normalizable) array produces no observation and no l
     buffer: buf,
     now: () => '2026-08-03T00:00:00.000Z',
   });
-  const outcome = svc.record([{ provider: 'google' }], { source: 'chat' });
+  const outcome = await svc.record([{ provider: 'google' }], { source: 'chat' });
   assert.deepEqual(outcome, { kind: 'skipped', reason: 'INVALID' });
   assert.equal(buf.size(), 0);
   assert.equal(captured.infos.length, 0);

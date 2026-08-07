@@ -1,5 +1,5 @@
 /**
- * Phase 2D-B limited historical recompute preview.
+ * Phase 2D-B/2F-D limited historical recompute preview with database shadow comparison.
  *
  * Reads a bounded selection of existing AiUsageLog rows (purely in read-only
  * mode) and runs each row through the Phase 2C engine ONLY when the row
@@ -21,6 +21,13 @@
  *  - Legacy fixed-price `cost` / `computeAiCost` are never read as pricing
  *    inputs.
  *
+ * Database Shadow Comparison (Phase 2F-D):
+ *  - When enabled, loads the database rate card for comparison
+ *  - Prefers exact version lookup when the row records a rateCardVersion
+ *  - Falls back to ACTIVE date selection when no version is recorded
+ *  - Comparison is observational only; authoritative result is always static
+ *  - Never modifies historical records or billing
+ *
  * Explicit per-row outcomes:
  *  - RECOMPUTED_PRICED / RECOMPUTED_UNPRICED
  *  - SKIPPED_MISSING_PROVIDER_IDENTITY
@@ -36,8 +43,13 @@
 import { aggregateProviderCalls } from '../utils/provider-pricing/aggregate.js';
 import { toReportableShadow } from '../utils/provider-pricing/reporting.js';
 import { PROVIDER_RATE_CARD } from '../config/provider-rate-card/index.js';
+import { compareShadowPricingResults } from '../utils/provider-pricing/shadow-comparison.js';
+import type { ShadowComparisonResult, ShadowComparisonStatus } from '../utils/provider-pricing/shadow-comparison.js';
+import { loadShadowRateCard, ShadowPricingDependencies } from './shadow-pricing-deps.js';
 import { computeShadowPricingMetrics } from './ai-shadow-pricing-metrics.service.js';
-import type { ReportableShadow } from '../utils/provider-pricing/reporting.js';
+import type { ReportableShadow, ReportableReasonCounts } from '../utils/provider-pricing/reporting.js';
+import type { UnpricedReason } from '../types/provider-pricing.js';
+import { env } from '../config/env.js';
 
 export type RecomputeRowOutcome =
   | 'RECOMPUTED_PRICED'
@@ -51,11 +63,19 @@ export type RecomputeRowOutcome =
 export type RecomputeSkipReason = Extract<RecomputeRowOutcome, `SKIPPED_${string}`>;
 export type RecomputeSkipReasonCounts = Record<RecomputeSkipReason, number>;
 
-/**
- * Typed historical row contract. Authoritative fields are nullable because the
- * production AiUsageLog schema cannot supply them; the pure service classifies
- * each row based on what is actually present.
- */
+/** Database shadow comparison result for a recompute row. */
+export interface RecomputeShadowComparison {
+  status: ShadowComparisonStatus;
+  selectionMode: 'ACTIVE_DATE' | 'EXPLICIT_VERSION';
+  staticRateCardVersion: string;
+  databaseRateCardVersion: string | null;
+  staticTotalCostNanoUsd: string;
+  databaseTotalCostNanoUsd: string | null;
+  deltaNanoUsd: string | null;
+  mismatchCategories: string[];
+}
+
+/** Extended historical row with optional recorded rate card version. */
 export interface HistoricalPricingRow {
   id: string;
   source: string;
@@ -70,6 +90,8 @@ export interface HistoricalPricingRow {
   inputTokens: number | null;
   /** Authoritative output token count, or null when not stored. */
   outputTokens: number | null;
+  /** Rate card version recorded at the time of the original request (if any). */
+  rateCardVersion?: string | null;
   /**
    * True when the row shape is in principle recomputable (a hypothetical
    * future schema with authoritative fields). The current AiUsageLog legacy
@@ -91,6 +113,13 @@ export interface RecomputeSelection {
   appliedLimit: number;
 }
 
+export interface RecomputeRowResult {
+  id: string;
+  outcome: RecomputeRowOutcome;
+  staticReport: ReportableShadow;
+  shadowComparison?: RecomputeShadowComparison;
+}
+
 export interface RecomputePreviewResult {
   mode: 'READ_ONLY_PREVIEW';
   requestAggregationAvailable: false;
@@ -100,10 +129,21 @@ export interface RecomputePreviewResult {
     recomputedPriced: number;
     recomputedUnpriced: number;
     skipped: number;
+    shadowComparisons: {
+      match: number;
+      mismatch: number;
+      dbNotFound: number;
+      dbConflict: number;
+      dbVersionNotFound: number;
+      dbInvalid: number;
+      dbError: number;
+      dbPricingError: number;
+    };
   };
   pricedProviderCost: { nanoUsd: string; microUsd: string; usd: string };
   unpricedReasons: Record<string, number>;
   skipReasons: RecomputeSkipReasonCounts;
+  rowResults: RecomputeRowResult[];
   warnings: string[];
 }
 
@@ -117,6 +157,19 @@ const EMPTY_SKIP_REASONS = (): RecomputeSkipReasonCounts => ({
   SKIPPED_MISSING_USAGE: 0,
   SKIPPED_INVALID_USAGE: 0,
   SKIPPED_UNSUPPORTED_LEGACY_SHAPE: 0,
+});
+
+const EMPTY_REPORTABLE_REASONS = (): ReportableReasonCounts => ({
+  PROVIDER_NOT_IN_RATECARD: 0,
+  MODEL_MISSING: 0,
+  ACTUAL_MODEL_NOT_IN_RATECARD: 0,
+  REQUESTED_MODEL_NOT_IN_RATECARD: 0,
+  USAGE_MISSING: 0,
+  USAGE_INVALID: 0,
+  RATE_NOT_ACTIVE: 0,
+  UNIT_UNPRICED: 0,
+  MODALITY_INVALID: 0,
+  OVERFLOW: 0,
 });
 
 function isNonNegativeInteger(value: number | null): value is number {
@@ -148,12 +201,66 @@ export function classifyRecomputeRow(row: HistoricalPricingRow): RecomputeRowOut
   return 'ELIGIBLE';
 }
 
+/** Build shadow comparison for a recompute row. */
+async function buildRecomputeShadowComparison(
+  deps: ShadowPricingDependencies,
+  staticResult: ReturnType<typeof aggregateProviderCalls>,
+  providerCalls: unknown,
+  pricingDate: string,
+  recordedVersion: string | null | undefined,
+  staticRateCardVersion: string,
+): Promise<RecomputeShadowComparison | undefined> {
+  const shadowEnabled = deps.dbShadowEnabled || deps.pricingSource === 'DATABASE_SHADOW';
+  if (!shadowEnabled) return undefined;
+
+  const selectionMode = recordedVersion ? 'EXPLICIT_VERSION' : 'ACTIVE_DATE';
+  const lookupKey = recordedVersion ?? pricingDate;
+
+  const loadResult = await loadShadowRateCard(deps, selectionMode, lookupKey);
+  let dbResult: ReturnType<typeof aggregateProviderCalls> | null = null;
+  let dbRateCardVersion: string | null = loadResult.snapshot?.version ?? null;
+
+  if (loadResult.card && !loadResult.error) {
+    const dbInput = {
+      providerCalls,
+      pricingDate,
+      card: loadResult.card,
+    };
+    dbResult = aggregateProviderCalls(dbInput);
+  }
+
+  const comparison = compareShadowPricingResults(
+    staticResult,
+    dbResult,
+    loadResult.error,
+    selectionMode,
+    pricingDate,
+    staticRateCardVersion,
+    dbRateCardVersion,
+    0, // duration not measured per-row in recompute
+    true,
+    PROVIDER_RATE_CARD,
+    loadResult.card,
+  );
+
+  return {
+    status: comparison.status,
+    selectionMode,
+    staticRateCardVersion: comparison.aggregate.staticRateCardVersion,
+    databaseRateCardVersion: comparison.aggregate.dbRateCardVersion,
+    staticTotalCostNanoUsd: comparison.aggregate.staticTotalCostNanoUsd.toString(),
+    databaseTotalCostNanoUsd: comparison.aggregate.dbTotalCostNanoUsd?.toString() ?? null,
+    deltaNanoUsd: comparison.aggregate.deltaNanoUsd?.toString() ?? null,
+    mismatchCategories: comparison.mismatchCategories,
+  };
+}
+
 /**
- * Pure recompute over typed historical rows. Requires an injectable repository
- * so focused tests use fakes and never touch the database.
+ * Pure recompute over typed historical rows with optional database shadow comparison.
+ * Requires an injectable repository so focused tests use fakes and never touch the database.
  */
 export async function recomputePreview(
-  deps: { repository: RecomputeRepository },
+  deps: { repository: RecomputeRepository; shadowDeps?: ShadowPricingDependencies },
   options: RecomputePreviewOptions,
 ): Promise<RecomputePreviewResult> {
   const requestedLimit = options.limit ?? 100;
@@ -171,13 +278,35 @@ export async function recomputePreview(
   };
   const unpricedReasonCounts: Record<string, number> = {};
   const miniObs: Array<{ observedAt: string; source: string; report: ReportableShadow }> = [];
+  const rowResults: RecomputeRowResult[] = [];
+
+  const shadowCounts = {
+    match: 0,
+    mismatch: 0,
+    dbNotFound: 0,
+    dbConflict: 0,
+    dbVersionNotFound: 0,
+    dbInvalid: 0,
+    dbError: 0,
+    dbPricingError: 0,
+  };
+
+  const shadowDeps: ShadowPricingDependencies = {
+    ...createDefaultShadowPricingDependencies(),
+    ...deps.shadowDeps,
+    dbShadowEnabled:
+      deps.shadowDeps?.dbShadowEnabled ??
+      env.PROVIDER_RATE_CARD_DB_SHADOW_ENABLED,
+    pricingSource:
+      deps.shadowDeps?.pricingSource ?? env.PROVIDER_RATE_CARD_PRICING_SOURCE,
+  };
 
   for (const row of rows) {
     const classification = classifyRecomputeRow(row);
 
     if (classification === 'ELIGIBLE') {
       // Authoritative provider + model + usage are all present on the typed row.
-      const result = aggregateProviderCalls({
+      const staticResult = aggregateProviderCalls({
         providerCalls: [{
           provider: row.provider,
           providerCallMade: true,
@@ -190,18 +319,74 @@ export async function recomputePreview(
         pricingDate: row.createdAt.toISOString().slice(0, 10),
       });
 
-      const report = toReportableShadow(result, PROVIDER_RATE_CARD.version);
+      const staticReport = toReportableShadow(staticResult, PROVIDER_RATE_CARD.version);
       miniObs.push({
         observedAt: row.createdAt.toISOString(),
         source: row.source,
-        report,
+        report: staticReport,
       });
 
-      if (result.totals.pricedCallCount > 0) {
+      // Build database shadow comparison
+      const providerCallsForComparison = [{
+        provider: row.provider,
+        providerCallMade: true,
+        providerCallId: `recompute-${row.id}`,
+        actualModel: row.actualModel ?? undefined,
+        requestedModel: row.requestedModel ?? undefined,
+        inputTokens: row.inputTokens ?? 0,
+        outputTokens: row.outputTokens ?? 0,
+      }];
+
+      const shadowComparison = await buildRecomputeShadowComparison(
+        shadowDeps,
+        staticResult,
+        providerCallsForComparison,
+        row.createdAt.toISOString().slice(0, 10),
+        row.rateCardVersion,
+        PROVIDER_RATE_CARD.version,
+      );
+
+      if (shadowComparison) {
+        switch (shadowComparison.status) {
+          case 'MATCH':
+            shadowCounts.match += 1;
+            break;
+          case 'MISMATCH':
+            shadowCounts.mismatch += 1;
+            break;
+          case 'DB_RATE_CARD_NOT_FOUND':
+            shadowCounts.dbNotFound += 1;
+            break;
+          case 'DB_RATE_CARD_ACTIVE_CONFLICT':
+            shadowCounts.dbConflict += 1;
+            break;
+          case 'DB_RATE_CARD_VERSION_NOT_FOUND':
+            shadowCounts.dbVersionNotFound += 1;
+            break;
+          case 'DB_RATE_CARD_INVALID':
+            shadowCounts.dbInvalid += 1;
+            break;
+          case 'DB_RATE_CARD_ERROR':
+            shadowCounts.dbError += 1;
+            break;
+          case 'DB_PRICING_ERROR':
+            shadowCounts.dbPricingError += 1;
+            break;
+        }
+      }
+
+      rowResults.push({
+        id: row.id,
+        outcome: staticResult.totals.pricedCallCount > 0 ? 'RECOMPUTED_PRICED' : 'RECOMPUTED_UNPRICED',
+        staticReport,
+        shadowComparison,
+      });
+
+      if (staticResult.totals.pricedCallCount > 0) {
         outcomes.RECOMPUTED_PRICED += 1;
       } else {
         outcomes.RECOMPUTED_UNPRICED += 1;
-        for (const call of result.calls) {
+        for (const call of staticResult.calls) {
           if (call.kind === 'UNPRICED') {
             unpricedReasonCounts[call.reason] = (unpricedReasonCounts[call.reason] ?? 0) + 1;
           }
@@ -211,6 +396,26 @@ export async function recomputePreview(
     }
 
     outcomes[classification] += 1;
+    rowResults.push({
+      id: row.id,
+      outcome: classification,
+      staticReport: {
+        pricedAt: new Date().toISOString(),
+        noProviderCalls: false,
+        summaryStatus: 'UNPRICED',
+        calls: [],
+        totals: {
+          callCount: 0,
+          pricedCallCount: 0,
+          unpricedCallCount: 0,
+          unpricedReasons: EMPTY_REPORTABLE_REASONS(),
+          pricedCostNanoUsd: '0',
+          pricedCostMicroUsd: '0',
+          pricedCostUsd: '0',
+        },
+        rateCardVersion: PROVIDER_RATE_CARD.version,
+      },
+    });
   }
 
   const metrics = computeShadowPricingMetrics(miniObs, { capacity: appliedLimit });
@@ -237,10 +442,12 @@ export async function recomputePreview(
       recomputedPriced: outcomes.RECOMPUTED_PRICED,
       recomputedUnpriced: outcomes.RECOMPUTED_UNPRICED,
       skipped,
+      shadowComparisons: shadowCounts,
     },
     pricedProviderCost: metrics.pricedProviderCost,
     unpricedReasons: unpricedReasonCounts,
     skipReasons,
+    rowResults,
     warnings: [
       'READ_ONLY_PREVIEW: this is a read-only preview',
       'READ_ONLY_PREVIEW: no database data was changed',
@@ -279,6 +486,16 @@ export function toHistoricalPricingRow(row: AiUsageLogRowSource): HistoricalPric
     requestedModel: null,
     inputTokens: row.inputTokens,
     outputTokens: row.outputTokens,
+    rateCardVersion: null,
     recomputeSupported: false,
+  };
+}
+
+/** Default shadow dependencies factory for recompute. */
+function createDefaultShadowPricingDependencies(): ShadowPricingDependencies {
+  return {
+    dbShadowEnabled: false,
+    pricingSource: 'STATIC',
+    now: () => Date.now(),
   };
 }

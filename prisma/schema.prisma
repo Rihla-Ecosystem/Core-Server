@@ -627,3 +627,154 @@ model AiUsageLog {
   @@index([source])
   @@map("ai_usage_logs")
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2F-A — versioned provider rate-card snapshots
+// ---------------------------------------------------------------------------
+// A snapshot is an immutable, versioned copy of the provider-neutral rate card
+// (`ProviderRateCard` in src/types/provider-pricing.ts). A card edit produces a
+// new snapshot version; the active snapshot is materialized at read time.
+//
+// Monetary rate columns are PostgreSQL BIGINT / Prisma BigInt so the database
+// can store values larger than Number.MAX_SAFE_INTEGER exactly. The pricing
+// engine contract still consumes safe JS numbers, so the pure mapper enforces
+// a bigint-to-number range check at the DB boundary (see
+// src/utils/provider-pricing/snapshot.ts); the database never loses precision.
+//
+// Snapshot lifecycle is DRAFT / ACTIVE / RETIRED (immutable financial
+// snapshots). Lifecycle and monetary CHECK constraints are added manually in
+// the migration SQL; the pure validator enforces complete domain coherence.
+
+enum ProviderRateCardSnapshotStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+
+  @@map("provider_rate_card_snapshot_status")
+}
+
+enum ProviderRateCardEntryStatus {
+  STABLE
+  PREVIEW
+  DEPRECATED
+  LIMITED_AVAILABILITY
+
+  @@map("provider_rate_card_entry_status")
+}
+
+enum ProviderRateCardTier {
+  STANDARD
+  BATCH
+  PRIORITY
+  FAST_MODE
+
+  @@map("provider_rate_card_tier")
+}
+
+enum ProviderRateCardBillingUnit {
+  TOKEN
+  IMAGE
+  SECOND
+  MINUTE
+  CHARACTER
+
+  @@map("provider_rate_card_billing_unit")
+}
+
+enum CachedInputAccountingSemantic {
+  DISJOINT
+  INCLUDED_IN_INPUT
+
+  @@map("cached_input_accounting_semantic")
+}
+
+model ProviderRateCardSnapshot {
+  id      String                         @id @default(uuid()) @db.Uuid
+  version String                         @unique
+  status  ProviderRateCardSnapshotStatus @default(DRAFT)
+
+  schemaVersion Int    @default(1)
+  currency      String @default("USD")
+  storageUnit   String @default("MICROS")
+  engineUnit    String @default("NANO_USD")
+
+  // Research/source pricing snapshot date (immutable, always present).
+  source      String
+  generatedAt DateTime @db.Date
+  provenance  String   @default("RESEARCH_SNAPSHOT")
+
+  // Business validity window for selecting the snapshot (date precision).
+  // Nullable while the draft is unfinished.
+  effectiveFrom DateTime? @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  // Lifecycle publication timestamps (timestamp precision).
+  // publishedAt: when the draft was formally published.
+  // retiredAt:   when the published snapshot was retired.
+  publishedAt DateTime? @db.Timestamptz
+  retiredAt   DateTime? @db.Timestamptz
+
+  entries ProviderRateCardEntry[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([status, effectiveFrom, effectiveTo])
+  @@map("ProviderRateCardSnapshot")
+}
+
+model ProviderRateCardEntry {
+  id         String @id @default(uuid()) @db.Uuid
+  snapshotId String @db.Uuid
+
+  provider String
+  model    String
+
+  status      ProviderRateCardEntryStatus
+  // Non-null so PostgreSQL uniqueness never treats multiple NULL tiers as
+  // distinct: the engine default tier maps to STANDARD at persistence time.
+  tier        ProviderRateCardTier   @default(STANDARD)
+  billingUnit ProviderRateCardBillingUnit
+
+  // Monetary rates in integer micro-USD per 1M units. BIGINT so the DB stores
+  // exact integer values beyond Number.MAX_SAFE_INTEGER without loss.
+  inputMicrosPerMillion        BigInt?
+  outputMicrosPerMillion       BigInt?
+  cachedInputMicrosPerMillion  BigInt?
+  cachedOutputMicrosPerMillion BigInt?
+  perUnitMicros                BigInt?
+  audioInputMicrosPerMillion   BigInt?
+  audioOutputMicrosPerMillion  BigInt?
+
+  // Conversion ratio, not money. Kept as a finite numeric field with a
+  // positive-value CHECK constraint in the migration.
+  tokensPerSecond Float?
+
+  cachedInputAccounting CachedInputAccountingSemantic?
+
+  aliases Json?
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  inactive Boolean @default(false)
+
+  source     String?
+  verifiedAt DateTime? @db.Date
+
+  snapshot ProviderRateCardSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Full entry lookup identity inside one snapshot, aligned with the Pricing
+  // Engine resolveRate lookup (provider + model/alias + tier + effective
+  // window). billingUnit is NOT a resolution dimension, so it is excluded:
+  // a snapshot must not persist two lines the engine could not distinguish.
+  // Historical protection: RESTRICT, never CASCADE.
+  @@unique([snapshotId, provider, model, tier])
+  @@index([snapshotId])
+  @@index([provider, model, status])
+  @@map("ProviderRateCardEntry")
+}

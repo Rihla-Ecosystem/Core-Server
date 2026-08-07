@@ -8,10 +8,13 @@ import * as shadowPricingAdminController from '../controllers/ai-shadow-pricing-
 import adminTokenPackageRoutes from './admin-token-package.routes.js';
 import adminPaymentRoutes from './admin-payment.routes.js';
 import adminTokenWalletRoutes from './admin-token-wallet.routes.js';
+import adminRateCardRoutes from './admin-rate-card.routes.js';
 import {
   adminObservationsQuerySchema,
   adminRecomputeBodySchema,
 } from '../schemas/admin-shadow-pricing.schema.js';
+import * as adminBillingRecoveryController from '../controllers/admin-billing-recovery.controller.js';
+import { adminBillingRecoveryQueueQuerySchema } from '../schemas/admin-billing-recovery.schema.js';
 
 const router = Router();
 
@@ -33,6 +36,13 @@ router.use(
   '/token-wallets',
   requireRole('admin'),
   adminTokenWalletRoutes,
+);
+
+// Phase 2F-C — admin rate-card Draft / Import / Validate / Publish / Retire.
+router.use(
+  '/rate-cards',
+  requireRole('admin'),
+  adminRateCardRoutes,
 );
 
 const roleUpdateSchema = z.object({
@@ -160,6 +170,51 @@ router.post(
   requireRole('admin'),
   validate(adminRecomputeBodySchema, 'body'),
   shadowPricingAdminController.recomputePreview,
+);
+
+/**
+ * @openapi
+ * /admin/billing-recovery/queue:
+ *   get:
+ *     tags: [Admin]
+ *     summary: List the AI billing recovery queue (admin)
+ *     description: |
+ *       Returns unresolved AI billing token reservations with pagination and aggregate totals.
+ *       Reservations in PENDING status are the primary recovery candidates and are classified by
+ *       metadata status (METADATA_MISSING, METADATA_INVALID, or PENDING_REVIEW). Expired
+ *       reservations are flagged with isExpired. COMPLETED and RELEASED reservations are included
+ *       when explicitly filtered and are reported as RESOLVED in the queue listing; use the
+ *       inspect endpoint for per-reservation integrity assessment.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, minimum: 1, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [PENDING, COMPLETED, RELEASED] }
+ *       - in: query
+ *         name: feature
+ *         schema: { type: string, maxLength: 50 }
+ *     responses:
+ *       200:
+ *         description: Paginated recovery queue with aggregate token totals
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Authentication required
+ *       403:
+ *         description: Insufficient permissions
+ */
+router.get(
+  '/billing-recovery/queue',
+  requireRole('admin'),
+  validate(adminBillingRecoveryQueueQuerySchema, 'query'),
+  adminBillingRecoveryController.getRecoveryQueue,
 );
 
 export default router;

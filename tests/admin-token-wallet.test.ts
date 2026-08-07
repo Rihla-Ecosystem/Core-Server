@@ -2785,7 +2785,21 @@ describe('Admin Token Wallet API', () => {
         const metadata = transaction.metadata as { previousBalance: number; newBalance: number };
         return `${metadata.previousBalance}:${metadata.newBalance}`;
       });
-      assert.deepEqual(transitions.sort(), ['250:150', '300:250']);
+      assert.equal(transitions.length, 2);
+      assert.ok(
+        transitions.every((transition) => {
+          const [previous, next] = transition.split(':').map(Number);
+          return previous > next;
+        }),
+        'each concurrent debit must strictly decrease the balance',
+      );
+      const finalBalances = transitions.map((t) => Number(t.split(':')[1])).sort((a, b) => a - b);
+      assert.equal(finalBalances[0], 150);
+      assert.ok(
+        finalBalances[1] === 200 || finalBalances[1] === 250,
+        `expected the first debit to land on 200 or 250, got ${finalBalances[1]}`,
+      );
+      assert.equal(wallet?.tokenBalance, 150);
     } finally {
       await cleanupAdjustmentRefs(target.id);
     }

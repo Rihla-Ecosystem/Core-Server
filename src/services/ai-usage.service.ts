@@ -60,7 +60,7 @@ writeAiUsageLog: async (data) => {
         data: data as unknown as Prisma.AiUsageLogCreateInput,
       });
     },
-    runShadowPricing: (providerCalls: unknown, ctx: ShadowPricingRequestContext): ShadowPricingOutcome => {
+    runShadowPricing: async (providerCalls: unknown, ctx: ShadowPricingRequestContext): Promise<ShadowPricingOutcome> => {
       return shadowPricingService.record(providerCalls, ctx);
     },
   });
@@ -70,7 +70,7 @@ writeAiUsageLog: async (data) => {
 export interface RecordAiUsageDeps {
   writeAiUsageLogRows: (rows: AiUsageLogRow[]) => Promise<number>;
   writeAiUsageLog: (data: AiUsageLogRow) => Promise<void>;
-  runShadowPricing: (providerCalls: unknown, ctx: ShadowPricingRequestContext) => ShadowPricingOutcome;
+  runShadowPricing: (providerCalls: unknown, ctx: ShadowPricingRequestContext) => Promise<ShadowPricingOutcome>;
 }
 
 /**

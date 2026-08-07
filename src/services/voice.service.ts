@@ -1,11 +1,15 @@
-import { env } from '../config/env.js';
+import { env, walletPolicyConfig } from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { recordAiUsage } from './ai-usage.service.js';
+import { runUsageBasedAIBilling } from './usage-based-ai-billing.service.js';
 import { upstreamError } from '../utils/http-client.js';
+import { isTokenExemptUser } from '../utils/token-exempt.js';
+import { buildSuccessOutcome, aiUnavailableOutcome, resolveUsageBasedBillingResult } from '../utils/usage-billing.js';
 import {
-  consumeBusinessTokensOrExempt,
-  reverseBusinessTokensOrExempt,
-} from './business-token-consumption.service.js';
+  BillingRateCardUnavailableError,
+  resolveBillingRateCard,
+} from './billing-rate-card.service.js';
+import { parseChatLimitsConfig } from '../config/chat-limits.js';
 import type { TokenExemptUser } from '../utils/token-exempt.js';
 
 export interface VoiceResponse {
@@ -78,57 +82,58 @@ export interface ProcessVoiceWithTokensInput {
   user?: TokenExemptUser;
 }
 
-async function revertAndRethrow(
-  userId: string,
-  user: TokenExemptUser | undefined,
-  businessRequestId: string,
-  originalError: unknown,
-): Promise<never> {
-  try {
-    await reverseBusinessTokensOrExempt(user, {
-      userId,
-      feature: 'AI_CHAT_QUERY',
-      source: 'VOICE',
-      businessRequestId,
-    });
-  } catch (refundError) {
-    console.error(
-      'Failed to restore consumed tokens',
-      {
-        userId,
-        businessRequestId,
-        originalError: originalError instanceof Error ? originalError.message : String(originalError),
-        refundError: refundError instanceof Error ? refundError.message : String(refundError),
-      },
-    );
-    throw new AppError(500, 'Unable to restore consumed tokens');
-  }
-  throw originalError;
+const CHAT_LIMITS = parseChatLimitsConfig(process.env);
+
+function voiceCore(input: ProcessVoiceWithTokensInput) {
+  return processVoice(input.audioBuffer, input.audioMimeType, {
+    userId: input.userId,
+    lat: input.lat,
+    lon: input.lon,
+    conversationId: input.conversationId,
+    authorization: input.authorization,
+  });
 }
 
 export async function processVoiceWithTokens(
   input: ProcessVoiceWithTokensInput,
 ): Promise<VoiceResponse> {
-  const consumption = await consumeBusinessTokensOrExempt(input.user, {
-    userId: input.userId,
-    feature: 'AI_CHAT_QUERY',
-    source: 'VOICE',
-    businessRequestId: input.businessRequestId,
-  });
-
-  if (consumption.idempotentReplay) {
-    throw new AppError(409, 'Voice request already processed');
-  }
-
+  // Resolve the authoritative rate card ONCE per operation before executing AI.
+  let resolved;
   try {
-    return await processVoice(input.audioBuffer, input.audioMimeType, {
-      userId: input.userId,
-      lat: input.lat,
-      lon: input.lon,
-      conversationId: input.conversationId,
-      authorization: input.authorization,
-    });
+    resolved = await resolveBillingRateCard();
   } catch (err) {
-    return revertAndRethrow(input.userId, input.user, input.businessRequestId, err);
+    if (err instanceof BillingRateCardUnavailableError) {
+      throw new AppError(502, `Rate card unavailable: ${err.message}`);
+    }
+    throw err;
   }
+
+  const result = await runUsageBasedAIBilling<VoiceResponse>({
+    operationId: `usage:REAL_TIME_TRANSLATION:${input.businessRequestId}`,
+    userId: input.userId,
+    feature: 'REAL_TIME_TRANSLATION',
+    source: 'VOICE',
+    idempotencyKey: input.businessRequestId,
+    adminExempt: isTokenExemptUser(input.user),
+    chatLimits: CHAT_LIMITS,
+    rateCard: resolved.card,
+    pricingSource: resolved.source,
+    walletPolicy: walletPolicyConfig,
+    execute: async () => {
+      try {
+        const voice = await voiceCore(input);
+        return buildSuccessOutcome(voice, voice.usage);
+      } catch (err) {
+        if (err instanceof AppError && err.statusCode === 502) {
+          return aiUnavailableOutcome('AI voice service unavailable');
+        }
+        throw err;
+      }
+    },
+  });
+  return resolveUsageBasedBillingResult(result, {
+    feature: 'REAL_TIME_TRANSLATION',
+    replayMessage: 'Voice request already processed',
+    aiUnavailableMessage: 'AI voice service unavailable',
+  });
 }

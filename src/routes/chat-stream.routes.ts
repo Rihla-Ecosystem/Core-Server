@@ -5,8 +5,14 @@ import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { streamChat } from '../services/chat-stream.service.js';
+import {
+  failChatStreamUsageBasedBilling,
+  settleChatStreamUsageBasedBilling,
+} from '../services/chat-stream-billing.service.js';
 import { recordAiUsage } from '../services/ai-usage.service.js';
 import { prisma } from '../config/prisma.js';
+import { walletPolicyConfig } from '../config/env.js';
+import { parseChatLimitsConfig } from '../config/chat-limits.js';
 import { Readable } from 'stream';
 import { userRateLimit } from '../utils/rate-limit.js';
 
@@ -48,7 +54,7 @@ router.post(
       throw new AppError(401, 'Unauthorized');
     }
 
-    const { body, conversationId } = await streamChat(userId, message, {
+    const { body, conversationId, billing } = await streamChat(userId, message, {
       businessRequestId,
       lat,
       lon,
@@ -66,6 +72,18 @@ router.post(
 
     const readable = Readable.fromWeb(body);
 
+    const isUsageBased = billing.mode === 'USAGE_BASED';
+    let billingSettled = false;
+
+    async function failStreamIfNeeded(): Promise<void> {
+      if (!isUsageBased || billingSettled) return;
+      billingSettled = true;
+      await failChatStreamUsageBasedBilling({
+        operationId: billing.operationId,
+        reservationId: billing.reservationId,
+      });
+    }
+
     function detachListeners(): void {
       readable.off('error', onReadableError);
       res.off('error', onResponseError);
@@ -73,16 +91,19 @@ router.post(
     }
 
     function onResponseClose(): void {
+      void failStreamIfNeeded();
       readable.destroy();
       detachListeners();
     }
 
     function onReadableError(): void {
+      void failStreamIfNeeded();
       detachListeners();
       res.destroy();
     }
 
     function onResponseError(): void {
+      void failStreamIfNeeded();
       detachListeners();
       readable.destroy();
     }
@@ -126,6 +147,23 @@ router.post(
 
     readable.on('end', async () => {
       try {
+        if (isUsageBased) {
+          billingSettled = true;
+          await settleChatStreamUsageBasedBilling({
+            operationId: billing.operationId,
+            reservationId: billing.reservationId,
+            userId,
+            feature: 'AI_CHAT_QUERY',
+            reservedTokens: billing.reservedTokens,
+            usage,
+            providerCalls,
+            providerAttempts,
+            chatLimits: parseChatLimitsConfig(process.env),
+            rateCard: billing.rateCard,
+            pricingSource: billing.pricingSource,
+            walletPolicy: walletPolicyConfig,
+          });
+        }
         if (fullResponse) {
           await prisma.message.create({
             data: { conversationId, role: 'assistant', content: fullResponse },
