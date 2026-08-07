@@ -405,6 +405,17 @@ async function reserveReservationCore(
       });
 
       if (updated.count === 0) {
+        const concurrentExisting = await tx.tokenReservation.findUnique({
+          where: { referenceId },
+        });
+
+        if (concurrentExisting) {
+          if (!isCompatibleReplay(concurrentExisting)) {
+            throw new AppError(409, 'Token reservation integrity conflict');
+          }
+          return toReplayResult(concurrentExisting, userId);
+        }
+
         const wallet = await tx.tokenWallet.findUnique({ where: { userId } });
 
         if (!wallet) {
