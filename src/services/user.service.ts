@@ -374,15 +374,16 @@ export async function getMonthlyStats(months = 6) {
   return data;
 }
 
-export async function getAuditLogs() {
+export async function getAuditLogs(page = 1, limit = 50) {
   return prisma.auditLog.findMany({
     orderBy: { createdAt: 'desc' },
-    take: 100,
+    skip: (page - 1) * limit,
+    take: limit,
     include: {
       actor: { select: { displayName: true, email: true } },
       target: { select: { displayName: true, email: true } },
     },
-  })
+  });
 }
 
 

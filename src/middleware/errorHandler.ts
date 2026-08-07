@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { Prisma } from '@prisma/client';
 import multer from 'multer';
+import { ProviderRateCardAdminError } from '../types/provider-rate-card-admin.js';
+import { providerRateCardAdminStatus } from '../types/provider-rate-card-admin.js';
 
 export class AppError extends Error {
   constructor(
@@ -39,6 +41,17 @@ export function errorHandler(
       res.status(404).json({ error: 'Resource not found' });
       return;
     }
+  }
+
+  if (err instanceof ProviderRateCardAdminError) {
+    const body: { error: string; code: string; mapperCode?: string; version?: string } = {
+      error: err.message,
+      code: err.code,
+    };
+    if (err.mapperCode !== undefined) body.mapperCode = err.mapperCode;
+    if (err.version !== undefined) body.version = err.version;
+    res.status(providerRateCardAdminStatus(err.code)).json(body);
+    return;
   }
 
   if (err instanceof multer.MulterError) {

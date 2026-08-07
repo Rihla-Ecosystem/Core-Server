@@ -18,6 +18,7 @@ import app from '../src/app.js';
 import { prisma } from '../src/config/prisma.js';
 import { adjust, grantBonus } from '../src/services/admin-token-wallet.service.js';
 import { signAccessToken } from '../src/utils/token.js';
+import { ensureAdminRole, ensureUserRole } from './helpers/test-role-fixtures.js';
 import {
   Gender,
   PaymentStatus,
@@ -31,6 +32,8 @@ const MISSING_ADMIN_USER_ID = 'aaaaaaa2-2222-4222-8222-222222222222';
 const USER_TOKEN_SUB = 'aaaaaaa3-3333-4333-8333-333333333333';
 const SECOND_ADMIN_USER_ID = 'aaaaaaa4-4444-4444-8444-444444444444';
 const EMAIL_PREFIX = 'test_admin_wallet_';
+
+let USER_ROLE_ID: number;
 
 const ADMIN_TOKEN = signAccessToken({ sub: ADMIN_USER_ID, role: 'admin' });
 const MISSING_ADMIN_TOKEN = signAccessToken({ sub: MISSING_ADMIN_USER_ID, role: 'admin' });
@@ -105,6 +108,7 @@ describe('Admin Token Wallet API', () => {
   async function createUser(overrides: Partial<{ displayName: string; email: string; isDeleted: boolean }> = {}) {
     return prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: overrides.email ?? `${EMAIL_PREFIX}${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: overrides.displayName ?? 'Wallet Test User',
@@ -213,17 +217,8 @@ describe('Admin Token Wallet API', () => {
   before(async () => {
     await cleanupSuiteData();
 
-    const adminRole = await prisma.role.upsert({
-      where: { name: 'admin' },
-      update: {},
-      create: { id: 9987, name: 'admin', permissions: [] },
-    });
-
-    const userRole = await prisma.role.upsert({
-      where: { name: 'USER' },
-      update: {},
-      create: { id: 9986, name: 'USER', permissions: [] },
-    });
+    const adminRole = await ensureAdminRole();
+    USER_ROLE_ID = (await ensureUserRole()).id;
 
     await prisma.user.upsert({
       where: { id: ADMIN_USER_ID },
@@ -250,7 +245,7 @@ describe('Admin Token Wallet API', () => {
         displayName: 'Wallet Regular User',
         gender: Gender.MALE,
         nationality: 'Egyptian',
-        roleId: userRole.id,
+        roleId: USER_ROLE_ID,
         isEmailVerified: true,
       },
     });
@@ -2790,16 +2785,31 @@ describe('Admin Token Wallet API', () => {
         const metadata = transaction.metadata as { previousBalance: number; newBalance: number };
         return { previousBalance: metadata.previousBalance, newBalance: metadata.newBalance };
       });
+assert.equal(transitions.length, 2);
 
-      const byPrevious = new Map(transitions.map((t) => [t.previousBalance, t.newBalance]));
-      let cursor = 300;
-      let steps = 0;
-      while (byPrevious.has(cursor)) {
-        cursor = byPrevious.get(cursor) as number;
-        steps++;
-      }
-      assert.equal(steps, 2);
-      assert.equal(cursor, 150);
+assert.ok(
+  transitions.every(
+    (transition) =>
+      transition.previousBalance > transition.newBalance,
+  ),
+  'each concurrent debit must strictly decrease the balance',
+);
+
+const byPrevious = new Map(
+  transitions.map((t) => [t.previousBalance, t.newBalance]),
+);
+
+let cursor = 300;
+let steps = 0;
+
+while (byPrevious.has(cursor)) {
+  cursor = byPrevious.get(cursor) as number;
+  steps++;
+}
+
+assert.equal(steps, 2);
+assert.equal(cursor, 150);
+assert.equal(wallet?.tokenBalance, 150);
     } finally {
       await cleanupAdjustmentRefs(target.id);
     }

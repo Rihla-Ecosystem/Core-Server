@@ -13,6 +13,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
 import { AppError } from '../src/middleware/errorHandler.js';
 import {
   Gender,
@@ -43,13 +44,11 @@ import {
 
 const CHAT_COST = getBusinessTokenCost('AI_CHAT_QUERY');
 
+let USER_ROLE_ID: number;
+
 describe('Token Reservation Service', () => {
   before(async () => {
-    await prisma.role.upsert({
-      where: { id: 1 },
-      update: {},
-      create: { id: 1, name: 'USER' },
-    });
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await cleanupSuiteData();
   });
 
@@ -75,6 +74,7 @@ describe('Token Reservation Service', () => {
   ): Promise<{ userId: string; walletId: string }> {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_reservation_${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: 'Token Reservation User',
@@ -223,6 +223,7 @@ describe('Token Reservation Service', () => {
   test('3. Missing wallet rejects with 402 and creates no rows', async () => {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_reservation_${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: 'Token Reservation No Wallet User',

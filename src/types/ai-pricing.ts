@@ -3,6 +3,9 @@ import type { BusinessTokenFeature } from '../config/business-token-features.js'
 
 export type AIUsagePricingMode = 'FIXED_FALLBACK' | 'PROVIDER_USAGE';
 
+/** Authoritative billing rate-card source (Phase 2G-B). */
+export type AIUsagePricingSource = 'STATIC' | 'DATABASE_SHADOW' | 'DATABASE_PRIMARY';
+
 export type AIUsagePricingFallbackReason =
   | 'USAGE_MISSING'
   | 'USAGE_INVALID'
@@ -63,4 +66,6 @@ export interface AIUsagePricingResult {
 
   rateCardVersion?: string;
   walletPolicyVersion?: string;
+  /** Authoritative billing rate-card source that produced this price. */
+  pricingSource?: AIUsagePricingSource;
 }

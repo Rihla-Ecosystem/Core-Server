@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeAIProviderUsage } from '../src/utils/ai-usage.js';
+import { normalizeAIProviderUsage, normalizeProviderCalls } from '../src/utils/ai-usage.js';
 import type {
   AIChatHistoryMessage,
   AIChatRequest,
   AIChatResponse,
   AIProviderUsage,
+  ProviderCallUsage,
 } from '../src/types/ai.js';
 
 const BASE_USAGE = {
@@ -402,4 +403,140 @@ test('38. AIProviderUsage contract accepts all documented fields', () => {
   };
   assert.equal(usage.cached, true);
   assert.equal(usage.audioSeconds, 4.5);
+});
+
+const BASE_CALL = {
+  provider: 'google',
+  providerCallMade: true,
+  providerCallId: 'call-1',
+  requestedModel: 'gemini-3.6-flash',
+  actualModel: 'gemini-3.6-flash',
+  operation: 'TEXT_CHAT',
+  usageSource: 'PROVIDER_RESPONSE',
+  usageCompleteness: 'COMPLETE',
+  inputTokens: 100,
+  outputTokens: 40,
+  totalTokens: 140,
+} as const;
+
+test('39. Valid provider calls array is normalized', () => {
+  const result = normalizeProviderCalls([{ ...BASE_CALL }]);
+  assert.equal(result?.length, 1);
+  assert.deepEqual(result?.[0], { ...BASE_CALL });
+});
+
+test('40. Empty array returns undefined', () => {
+  assert.equal(normalizeProviderCalls([]), undefined);
+});
+
+test('41. Non-array input returns undefined', () => {
+  assert.equal(normalizeProviderCalls(null), undefined);
+  assert.equal(normalizeProviderCalls(undefined), undefined);
+  assert.equal(normalizeProviderCalls('x'), undefined);
+  assert.equal(normalizeProviderCalls({}), undefined);
+});
+
+test('42. Missing provider rejects the array', () => {
+  const { provider: _omitted, ...withoutProvider } = BASE_CALL;
+  assert.equal(normalizeProviderCalls([withoutProvider]), undefined);
+});
+
+test('43. Empty provider rejects the array', () => {
+  assert.equal(normalizeProviderCalls([{ ...BASE_CALL, provider: '  ' }]), undefined);
+});
+
+test('44. Missing providerCallMade rejects the array', () => {
+  const { providerCallMade: _omitted, ...withoutMade } = BASE_CALL;
+  assert.equal(normalizeProviderCalls([withoutMade]), undefined);
+});
+
+test('45. Non-boolean providerCallMade rejects the array', () => {
+  assert.equal(normalizeProviderCalls([{ ...BASE_CALL, providerCallMade: 1 }]), undefined);
+});
+
+test('46. Negative token count rejects the array', () => {
+  assert.equal(normalizeProviderCalls([{ ...BASE_CALL, inputTokens: -1 }]), undefined);
+  assert.equal(normalizeProviderCalls([{ ...BASE_CALL, totalTokens: -5 }]), undefined);
+});
+
+test('47. Decimal token count rejects the array', () => {
+  assert.equal(normalizeProviderCalls([{ ...BASE_CALL, outputTokens: 1.5 }]), undefined);
+});
+
+test('48. String token count rejects the array', () => {
+  assert.equal(normalizeProviderCalls([{ ...BASE_CALL, inputTokens: '100' }]), undefined);
+});
+
+test('49. NaN/Infinity reject the array', () => {
+  assert.equal(normalizeProviderCalls([{ ...BASE_CALL, inputTokens: NaN }]), undefined);
+  assert.equal(normalizeProviderCalls([{ ...BASE_CALL, inputTokens: Infinity }]), undefined);
+});
+
+test('50. Optional fields are preserved when present', () => {
+  const result = normalizeProviderCalls([
+    { ...BASE_CALL, cachedInputTokens: 50, reasoningTokens: 3, accountingSemantics: 'INCLUDED_IN_AGGREGATE' },
+  ]);
+  assert.equal(result?.[0].cachedInputTokens, 50);
+  assert.equal(result?.[0].reasoningTokens, 3);
+  assert.equal(result?.[0].accountingSemantics, 'INCLUDED_IN_AGGREGATE');
+});
+
+test('51. Unknown numeric fields are dropped, not coerced to zero', () => {
+  const result = normalizeProviderCalls([{ ...BASE_CALL }]);
+  assert.equal(result?.[0].audioInputSeconds, undefined);
+});
+
+test('52. Input array is not mutated', () => {
+  const input = [{ ...BASE_CALL }];
+  const snapshot = structuredClone(input);
+  normalizeProviderCalls(input);
+  assert.deepEqual(input, snapshot);
+});
+
+test('53. Multiple calls preserve order and ids', () => {
+  const result = normalizeProviderCalls([
+    { ...BASE_CALL },
+    { ...BASE_CALL, providerCallId: 'call-2', totalTokens: 200 },
+  ]);
+  assert.equal(result?.length, 2);
+  assert.equal(result?.[1].providerCallId, 'call-2');
+});
+
+test('54. providerCalls is optional on AIChatResponse', () => {
+  const response: AIChatResponse = {
+    response: 'ok',
+    conversation_id: 'c1',
+    persona: 'auto',
+  };
+  assert.equal('providerCalls' in response, false);
+});
+
+test('55. AIChatResponse accepts providerCalls', () => {
+  const response: AIChatResponse = {
+    response: 'ok',
+    conversation_id: 'c1',
+    persona: 'auto',
+    providerCalls: [{ provider: 'google', providerCallMade: true }],
+  };
+  assert.equal(response.providerCalls?.[0].provider, 'google');
+});
+
+test('56. ProviderCallUsage accepts all documented fields', () => {
+  const call: ProviderCallUsage = {
+    provider: 'google',
+    providerCallMade: true,
+    providerCallId: 'call-1',
+    requestedModel: 'r',
+    actualModel: 'a',
+    operation: 'TEXT_CHAT',
+    usageSource: 'PROVIDER_RESPONSE',
+    usageCompleteness: 'COMPLETE',
+    accountingSemantics: 'INCLUDED_IN_AGGREGATE',
+    inputTokens: 1,
+    outputTokens: 2,
+    totalTokens: 3,
+    cachedInputTokens: 4,
+    reasoningTokens: 5,
+  };
+  assert.equal(call.reasoningTokens, 5);
 });

@@ -21,6 +21,9 @@ import {
   WalletStatus,
 } from '@prisma/client';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
+
+let USER_ROLE_ID: number;
 import {
   AIBillingOperationError,
   createAIBillingOperation,
@@ -2258,11 +2261,7 @@ describe('AI Billing Operation Service', () => {
 // ---------------------------------------------------------------------------
 describe('AI Billing Operation Service (database)', () => {
   before(async () => {
-    await prisma.role.upsert({
-      where: { id: 1 },
-      update: {},
-      create: { id: 1, name: 'USER' },
-    });
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await cleanupSuiteData();
   });
 
@@ -2298,6 +2297,7 @@ describe('AI Billing Operation Service (database)', () => {
   ): Promise<{ userId: string; walletId: string }> {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_ai_operation_${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: 'AI Operation User',

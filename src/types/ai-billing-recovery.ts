@@ -130,3 +130,49 @@ export interface AIBillingRecoveryErrorOptions {
   reservationId?: string;
   recoveryRequired?: boolean;
 }
+
+export interface AIBillingRecoveryQueueInput {
+  page: number;
+  limit: number;
+  status?: TokenReservationStatus;
+  feature?: string;
+}
+
+export interface AIBillingRecoveryQueueItem {
+  reservationId: string;
+  referenceId: string;
+  walletId: string;
+  userId: string;
+  feature: string;
+  source: TokenTransactionSource;
+  reservationStatus: TokenReservationStatus;
+  reservedTokens: number;
+  pricingVersion: number;
+  expiresAt: string;
+  isExpired: boolean;
+  metadataStatus: AIBillingMetadataStatus;
+  reasonCode: AIBillingRecoveryReasonCode;
+  requestedMode?: AIUsagePricingMode;
+  quoteAppliedMode?: AIUsagePricingMode;
+  provider?: string;
+  model?: string;
+  billingCurrency?: string;
+  rateCardVersion?: string;
+  walletPolicyVersion?: string;
+}
+
+export interface AIBillingRecoveryQueueAggregate {
+  count: number;
+  totalTokens: number;
+}
+
+export interface AIBillingRecoveryQueueResult {
+  items: AIBillingRecoveryQueueItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+  aggregate: AIBillingRecoveryQueueAggregate;
+}

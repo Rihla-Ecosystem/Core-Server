@@ -13,6 +13,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
 import { Gender } from '@prisma/client';
 import {
   listJourneys,
@@ -25,8 +26,11 @@ const ARCHAEOLOGY_SLUGS = ['giza-plateau', 'karnak-luxor', 'abu-simbel-nubia', '
 const ARCHAEOLOGY_BADGES = ['Pyramid Pioneer', 'Temple Walker', 'Nubia Navigator', 'Old Cairo Explorer'];
 const THEME_BADGE = 'Antiquity Explorer';
 
+let USER_ROLE_ID: number;
+
 describe('Journeys & Quests', () => {
   before(async () => {
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await cleanupTestData();
     await seedArchaeologyQuests();
   });
@@ -85,6 +89,7 @@ describe('Journeys & Quests', () => {
   async function createUser(): Promise<string> {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_quest_${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: 'Quest User',

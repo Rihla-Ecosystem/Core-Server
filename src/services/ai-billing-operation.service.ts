@@ -61,6 +61,7 @@ const TOKEN_TRANSACTION_SOURCES = new Set<string>([
   'FILE_UPLOAD',
   'OCR',
   'VOICE',
+  'ITINERARY',
   'PURCHASE',
   'ADMIN',
 ]);

@@ -50,6 +50,19 @@ export interface AIBillingRecoveryReconciliationSnapshot {
   pending: AIBillingRecoveryPendingAggregate;
 }
 
+export interface AIBillingRecoveryQueueFilter {
+  status?: TokenReservationStatus;
+  feature?: string;
+  page: number;
+  limit: number;
+}
+
+export interface AIBillingRecoveryQueuePage {
+  items: AIBillingRecoveryReservationRow[];
+  total: number;
+  aggregate: AIBillingRecoveryPendingAggregate;
+}
+
 export interface AIBillingRecoveryRepository {
   findReservationById(reservationId: string): Promise<AIBillingRecoveryReservationRow | null>;
   findWalletById(walletId: string): Promise<AIBillingRecoveryWalletRow | null>;
@@ -60,6 +73,7 @@ export interface AIBillingRecoveryRepository {
   readReconciliationSnapshot(
     walletId: string,
   ): Promise<AIBillingRecoveryReconciliationSnapshot>;
+  listReservationsForRecovery(filter: AIBillingRecoveryQueueFilter): Promise<AIBillingRecoveryQueuePage>;
 }
 
 function toReservationRow(reservation: TokenReservation): AIBillingRecoveryReservationRow {
@@ -155,6 +169,41 @@ export function createPrismaAIBillingRecoveryRepository(): AIBillingRecoveryRepo
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
       );
+    },
+
+    async listReservationsForRecovery(filter) {
+      const where: Prisma.TokenReservationWhereInput = {};
+      if (filter.status !== undefined) {
+        where.status = filter.status;
+      }
+      if (filter.feature !== undefined) {
+        where.feature = filter.feature;
+      }
+
+      const skip = (filter.page - 1) * filter.limit;
+      const [total, reservations, aggregate] = await Promise.all([
+        prisma.tokenReservation.count({ where }),
+        prisma.tokenReservation.findMany({
+          where,
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          skip,
+          take: filter.limit,
+        }),
+        prisma.tokenReservation.aggregate({
+          where,
+          _count: { _all: true },
+          _sum: { tokens: true },
+        }),
+      ]);
+
+      return {
+        items: reservations.map(toReservationRow),
+        total,
+        aggregate: {
+          count: aggregate._count._all,
+          totalTokens: aggregate._sum.tokens ?? 0,
+        },
+      };
     },
   };
 }

@@ -18,8 +18,12 @@ import type { AddressInfo } from 'node:net';
 import app from '../src/app.js';
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
+
+let USER_ROLE_ID: number;
 import { signAccessToken } from '../src/utils/token.js';
 import {
+  AIBillingOperationStatus,
   Gender,
   TokenTransactionSource,
   TokenTransactionType,
@@ -27,6 +31,24 @@ import {
 } from '@prisma/client';
 
 const JPEG_SIGNATURE = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00]);
+
+const USAGE = {
+  model: 'gemini-3.5-flash-lite',
+  inputTokens: 100,
+  outputTokens: 50,
+  totalTokens: 150,
+};
+
+const PROVIDER_CALLS = [
+  {
+    provider: 'google',
+    providerCallMade: true,
+    providerCallId: 'identify-call-1',
+    actualModel: 'gemini-3.5-flash-lite',
+    inputTokens: 100,
+    outputTokens: 50,
+  },
+];
 
 describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
   let appServer: Server;
@@ -48,6 +70,9 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
     image_url: 'https://example.org/mock.jpg',
     nearby_sites: [{ name: 'Site A' }],
     cached: false,
+    usage: USAGE,
+    providerCalls: PROVIDER_CALLS,
+    providerAttempts: [],
   };
 
   async function waitForCondition(
@@ -63,11 +88,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
   }
 
   before(async () => {
-    await prisma.role.upsert({
-      where: { id: 1 },
-      update: {},
-      create: { id: 1, name: 'USER' },
-    });
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await cleanupSuiteData();
 
     await new Promise<void>((resolve) => {
@@ -126,15 +147,22 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
 
   async function cleanupSuiteData(): Promise<void> {
     const emailFilter = { email: { startsWith: EMAIL_PREFIX } };
+    const userIds = (await prisma.user.findMany({ where: emailFilter, select: { id: true } })).map(
+      (u) => u.id,
+    );
+    if (userIds.length > 0) {
+      await prisma.aIBillingOperation.deleteMany({ where: { userId: { in: userIds } } });
+      await prisma.tokenReservation.deleteMany({ where: { userId: { in: userIds } } });
+    }
     await prisma.tokenTransaction.deleteMany({ where: { user: emailFilter } });
     await prisma.tokenWallet.deleteMany({ where: { user: emailFilter } });
-    await prisma.conversation.deleteMany({ where: { user: emailFilter } });
     await prisma.user.deleteMany({ where: emailFilter });
   }
 
   async function createUser(balance?: number): Promise<{ userId: string; token: string }> {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `${EMAIL_PREFIX}${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: 'Identify Token User',
@@ -152,6 +180,8 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
   }
 
   async function deleteUserWithRelated(userId: string): Promise<void> {
+    await prisma.aIBillingOperation.deleteMany({ where: { userId } });
+    await prisma.tokenReservation.deleteMany({ where: { userId } });
     await prisma.tokenTransaction.deleteMany({ where: { userId } });
     await prisma.tokenWallet.deleteMany({ where: { userId } });
     await prisma.user.deleteMany({ where: { id: userId } });
@@ -176,8 +206,8 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
     });
   }
 
-  test('1. Successful image analysis consumes 5 tokens and preserves the response', async () => {
-    const { userId, token } = await createUser(10);
+  test('1. Successful image analysis charges priced usage tokens and preserves the response', async () => {
+    const { userId, token } = await createUser(1000);
     const key = crypto.randomUUID();
     const callsBefore = aiCallCount;
     try {
@@ -190,20 +220,16 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       assert.equal(body.cached, false);
       assert.deepEqual(body.nearby_sites, mockIdentifyResponse.nearby_sites);
 
-      assert.equal(await getBalance(userId), 5);
+      assert.equal(await getBalance(userId), 998);
 
       const consumeRows = await prisma.tokenTransaction.findMany({
         where: { userId, type: TokenTransactionType.CONSUME },
       });
       assert.equal(consumeRows.length, 1);
       const consumeRow = consumeRows[0];
-      assert.equal(consumeRow.tokens, 5);
+      assert.equal(consumeRow.tokens, 2);
       assert.equal(consumeRow.type, TokenTransactionType.CONSUME);
       assert.equal(consumeRow.source, TokenTransactionSource.IMAGE);
-      assert.deepEqual(consumeRow.metadata, {
-        feature: 'AI_IMAGE_ANALYSIS',
-        businessRequestId: key,
-      });
 
       const metadataText = JSON.stringify(consumeRow.metadata);
       assert.ok(metadataText.includes('AI_IMAGE_ANALYSIS'));
@@ -218,13 +244,18 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
         0,
       );
       assert.equal(aiCallCount, callsBefore + 1);
+
+      const operation = await prisma.aIBillingOperation.findFirst({ where: { userId } });
+      assert.ok(operation);
+      assert.equal(operation.status, AIBillingOperationStatus.SETTLED);
+      assert.equal(operation.actualWalletTokens, 2);
     } finally {
       await deleteUserWithRelated(userId);
     }
   });
 
   test('2. Insufficient balance returns 402, deducts nothing, and does not reach the AI provider', async () => {
-    const { userId, token } = await createUser(4);
+    const { userId, token } = await createUser(0);
     const callsBefore = aiCallCount;
     try {
       const res = await identifyRequest(token, crypto.randomUUID());
@@ -232,7 +263,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       const body = await res.json();
       assert.equal(body.error, 'Insufficient token balance');
 
-      assert.equal(await getBalance(userId), 4);
+      assert.equal(await getBalance(userId), 0);
       assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
       assert.equal(aiCallCount, callsBefore);
     } finally {
@@ -258,13 +289,13 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
   });
 
   test('4. Sequential duplicate Idempotency-Key returns 409 and is not re-executed', async () => {
-    const { userId, token } = await createUser(10);
+    const { userId, token } = await createUser(1000);
     const key = crypto.randomUUID();
     const callsBefore = aiCallCount;
     try {
       const first = await identifyRequest(token, key);
       assert.equal(first.status, 200);
-      assert.equal(await getBalance(userId), 5);
+      assert.equal(await getBalance(userId), 998);
       assert.equal(
         await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.CONSUME } }),
         1,
@@ -275,7 +306,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       const body = await second.json();
       assert.equal(body.error, 'Image analysis request already processed');
 
-      assert.equal(await getBalance(userId), 5);
+      assert.equal(await getBalance(userId), 998);
       assert.equal(
         await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.CONSUME } }),
         1,
@@ -291,7 +322,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
   });
 
   test('5. Different keys for the same image consume independently', async () => {
-    const { userId, token } = await createUser(10);
+    const { userId, token } = await createUser(2000);
     const callsBefore = aiCallCount;
     try {
       const first = await identifyRequest(token, crypto.randomUUID());
@@ -299,7 +330,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       const second = await identifyRequest(token, crypto.randomUUID());
       assert.equal(second.status, 200);
 
-      assert.equal(await getBalance(userId), 0);
+      assert.equal(await getBalance(userId), 1996);
       assert.equal(
         await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.CONSUME } }),
         2,
@@ -314,8 +345,8 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
     }
   });
 
-  test('6. Provider failure refunds the full consumption', async () => {
-    const { userId, token } = await createUser(10);
+  test('6. Provider failure releases the reservation and returns 502 with nothing charged', async () => {
+    const { userId, token } = await createUser(1000);
     const key = crypto.randomUUID();
     const callsBefore = aiCallCount;
     providerError = true;
@@ -323,25 +354,19 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       const res = await identifyRequest(token, key);
       assert.equal(res.status, 502);
       const body = await res.json();
-      assert.equal(body.error, 'AI identification service unavailable: boom');
+      assert.equal(body.error, 'AI identification service unavailable');
 
-      assert.equal(await getBalance(userId), 10);
+      assert.equal(await getBalance(userId), 1000);
+      const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+      assert.ok(wallet);
+      assert.equal(wallet.reservedBalance, 0);
 
-      const consumeRows = await prisma.tokenTransaction.findMany({
-        where: { userId, type: TokenTransactionType.CONSUME },
-      });
-      assert.equal(consumeRows.length, 1);
-      const refundRows = await prisma.tokenTransaction.findMany({
-        where: { userId, type: TokenTransactionType.REFUND },
-      });
-      assert.equal(refundRows.length, 1);
-      assert.equal(refundRows[0].tokens, consumeRows[0].tokens);
-      assert.equal(refundRows[0].source, TokenTransactionSource.IMAGE);
-      assert.deepEqual(refundRows[0].metadata, {
-        feature: 'AI_IMAGE_ANALYSIS',
-        businessRequestId: key,
-        refundedTransactionId: consumeRows[0].id,
-      });
+      assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
+
+      const operation = await prisma.aIBillingOperation.findFirst({ where: { userId } });
+      assert.ok(operation);
+      assert.equal(operation.status, AIBillingOperationStatus.RELEASED);
+      assert.equal(operation.failureCode, 'AI_SERVICE_UNAVAILABLE');
       assert.equal(aiCallCount, callsBefore + 1);
     } finally {
       providerError = false;
@@ -349,15 +374,15 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
     }
   });
 
-  test('7. Retry with the same key after a refunded failure returns 409 without re-execution', async () => {
-    const { userId, token } = await createUser(10);
+  test('7. Retry with the same key after a released failure returns 409 without re-execution', async () => {
+    const { userId, token } = await createUser(1000);
     const key = crypto.randomUUID();
     const callsBefore = aiCallCount;
     providerError = true;
     try {
       const first = await identifyRequest(token, key);
       assert.equal(first.status, 502);
-      assert.equal(await getBalance(userId), 10);
+      assert.equal(await getBalance(userId), 1000);
 
       providerError = false;
       const second = await identifyRequest(token, key);
@@ -365,15 +390,8 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       const body = await second.json();
       assert.equal(body.error, 'Image analysis request already processed');
 
-      assert.equal(await getBalance(userId), 10);
-      assert.equal(
-        await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.CONSUME } }),
-        1,
-      );
-      assert.equal(
-        await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.REFUND } }),
-        1,
-      );
+      assert.equal(await getBalance(userId), 1000);
+      assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
       assert.equal(aiCallCount, callsBefore + 1);
     } finally {
       providerError = false;
@@ -382,7 +400,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
   });
 
   test('8. Concurrent duplicate requests charge and execute once', async () => {
-    const { userId, token } = await createUser(10);
+    const { userId, token } = await createUser(1000);
     const key = crypto.randomUUID();
     const callsBefore = aiCallCount;
     try {
@@ -400,7 +418,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       const duplicateBody = await duplicateRes.json();
       assert.equal(duplicateBody.error, 'Image analysis request already processed');
 
-      assert.equal(await getBalance(userId), 5);
+      assert.equal(await getBalance(userId), 998);
       assert.equal(
         await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.CONSUME } }),
         1,
@@ -416,7 +434,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
   });
 
   test('9. Concurrent distinct requests cannot overspend', async () => {
-    const { userId, token } = await createUser(5);
+    const { userId, token } = await createUser(1000);
     const callsBefore = aiCallCount;
     try {
       const [resA, resB] = await Promise.all([
@@ -433,7 +451,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       const insufficientBody = await insufficientRes.json();
       assert.equal(insufficientBody.error, 'Insufficient token balance');
 
-      assert.equal(await getBalance(userId), 0);
+      assert.equal(await getBalance(userId), 998);
       assert.equal(
         await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.CONSUME } }),
         1,
@@ -448,59 +466,25 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
     }
   });
 
-  test('10. Refund failure is surfaced with a safe log and no refund row', async () => {
-    const { userId, token } = await createUser(10);
+  test('10. Delayed provider failure leaves the reservation released with no transaction rows', async () => {
+    const { userId, token } = await createUser(1000);
     const key = crypto.randomUUID();
     const callsBefore = aiCallCount;
     delayedProviderError = true;
-    const originalConsoleError = console.error;
-    const capturedLogs: string[] = [];
-    console.error = (...args: unknown[]) => {
-      capturedLogs.push(args.map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg))).join(' '));
-    };
     try {
-      const pending = identifyRequest(token, key);
-
-      await waitForCondition(async () => {
-        const count = await prisma.tokenTransaction.count({
-          where: { userId, type: TokenTransactionType.CONSUME },
-        });
-        return count === 1;
-      });
-
-      const consumeRow = await prisma.tokenTransaction.findFirst({
-        where: { userId, type: TokenTransactionType.CONSUME },
-      });
-      assert.ok(consumeRow);
-      await prisma.tokenTransaction.delete({ where: { id: consumeRow.id } });
-
-      const res = await pending;
+      const res = await identifyRequest(token, key);
       assert.equal(res.status, 502);
       const body = await res.json();
-      assert.equal(body.error, 'AI identification service unavailable: boom');
+      assert.equal(body.error, 'AI identification service unavailable');
 
-      assert.equal(
-        await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.REFUND } }),
-        0,
-      );
+      const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+      assert.ok(wallet);
+      assert.equal(wallet.tokenBalance, 1000);
+      assert.equal(wallet.reservedBalance, 0);
+      assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
       assert.equal(aiCallCount, callsBefore + 1);
-
-      const logs = capturedLogs.join('\n');
-      assert.ok(logs.includes('[tokens] compensation_failed'));
-      assert.ok(logs.includes('"userId"'));
-      assert.ok(logs.includes('"idempotencyKey"'));
-      assert.ok(logs.includes('"consumeTransactionId"'));
-      assert.ok(logs.includes('"consumeReferenceId"'));
-      assert.ok(logs.includes('"originalError"'));
-      assert.ok(logs.includes('"refundError"'));
-      assert.ok(!logs.includes('"image"'));
-      assert.ok(!logs.includes('"filename"'));
-      assert.ok(!logs.includes('"authorization"'));
-      assert.ok(!logs.includes('image/jpeg'));
-      assert.ok(!logs.includes('base64'));
     } finally {
       delayedProviderError = false;
-      console.error = originalConsoleError;
       await deleteUserWithRelated(userId);
     }
   });

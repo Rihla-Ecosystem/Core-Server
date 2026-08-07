@@ -17,6 +17,7 @@ import type { AddressInfo } from 'node:net';
 import app from '../src/app.js';
 import { prisma } from '../src/config/prisma.js';
 import { signAccessToken } from '../src/utils/token.js';
+import { ensureAdminRole, ensureUserRole } from './helpers/test-role-fixtures.js';
 import { Gender, PaymentStatus, Prisma } from '@prisma/client';
 
 const ADMIN_USER_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -76,17 +77,9 @@ describe('Admin Payment API', () => {
   before(async () => {
     await cleanupTestData();
 
-    const adminRole = await prisma.role.upsert({
-      where: { name: 'admin' },
-      update: {},
-      create: { id: 9998, name: 'admin', permissions: [] },
-    });
+    const adminRole = await ensureAdminRole();
 
-    const userRole = await prisma.role.upsert({
-      where: { name: 'USER' },
-      update: {},
-      create: { id: 9997, name: 'USER', permissions: [] },
-    });
+    const userRole = await ensureUserRole();
 
     await prisma.user.upsert({
       where: { id: ADMIN_USER_ID },

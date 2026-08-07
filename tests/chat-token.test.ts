@@ -18,10 +18,31 @@ import type { AddressInfo } from 'node:net';
 import app from '../src/app.js';
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
+
+let USER_ROLE_ID: number;
 import { signAccessToken } from '../src/utils/token.js';
 import { Gender, TokenTransactionType, WalletStatus } from '@prisma/client';
 
-describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
+const USAGE = {
+  model: 'gemini-3.5-flash-lite',
+  inputTokens: 100,
+  outputTokens: 50,
+  totalTokens: 150,
+};
+
+const PROVIDER_CALLS = [
+  {
+    provider: 'google',
+    providerCallMade: true,
+    providerCallId: 'chat-call-1',
+    actualModel: 'gemini-3.5-flash-lite',
+    inputTokens: 100,
+    outputTokens: 50,
+  },
+];
+
+describe('Chat usage-based billing HTTP contracts - AI_CHAT_QUERY integration', () => {
   let appServer: Server;
   let aiServer: Server;
   let baseUrl: string;
@@ -41,11 +62,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
   }
 
   before(async () => {
-    await prisma.role.upsert({
-      where: { id: 1 },
-      update: {},
-      create: { id: 1, name: 'USER' },
-    });
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await cleanupSuiteData();
 
     await new Promise<void>((resolve) => {
@@ -64,13 +81,30 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
         if (req.url === '/chat') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ response: 'hello from ai', persona: 'auto' }));
+          res.end(
+            JSON.stringify({
+              response: 'hello from ai',
+              persona: 'auto',
+              usage: USAGE,
+              providerCalls: PROVIDER_CALLS,
+            }),
+          );
           return;
         }
 
         if (req.url === '/chat/stream') {
           res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-          res.write('data: {"chunk":"hello"}\n\n');
+          res.write('data: {"delta":"streamed reply"}\n\n');
+          res.write(
+            `data: ${JSON.stringify({
+              usage: USAGE,
+              providerCalls: PROVIDER_CALLS,
+              providerAttempts: [],
+            })}\n\n`,
+          );
+          res.write(
+            `data: ${JSON.stringify({ done: true, full_response: 'streamed reply' })}\n\n`,
+          );
           if (payload.message === 'STREAM_ERROR') {
             setTimeout(() => {
               res.socket?.destroy(new Error('upstream exploded'));
@@ -112,15 +146,18 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
   });
 
   async function cleanupSuiteData(): Promise<void> {
-    await prisma.tokenTransaction.deleteMany({
-      where: { user: { email: { startsWith: 'test_chat_token_' } } },
-    });
-    await prisma.tokenWallet.deleteMany({
-      where: { user: { email: { startsWith: 'test_chat_token_' } } },
-    });
-    await prisma.user.deleteMany({
-      where: { email: { startsWith: 'test_chat_token_' } },
-    });
+    const emailFilter = { email: { startsWith: 'test_chat_token_' } };
+    const userIds = (await prisma.user.findMany({ where: emailFilter, select: { id: true } })).map(
+      (u) => u.id,
+    );
+    if (userIds.length > 0) {
+      await prisma.aIBillingOperation.deleteMany({ where: { userId: { in: userIds } } });
+      await prisma.tokenReservation.deleteMany({ where: { userId: { in: userIds } } });
+    }
+    await prisma.tokenTransaction.deleteMany({ where: { user: emailFilter } });
+    await prisma.tokenWallet.deleteMany({ where: { user: emailFilter } });
+    await prisma.conversation.deleteMany({ where: { user: emailFilter } });
+    await prisma.user.deleteMany({ where: emailFilter });
   }
 
   async function createChatUser(
@@ -128,6 +165,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
   ): Promise<{ userId: string; walletId: string; token: string }> {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_chat_token_${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: 'Chat Token User',
@@ -150,8 +188,17 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
     };
   }
 
-  test('1. POST /api/chat consumes 1 token and persists the exchange', async () => {
-    const { userId, walletId, token } = await createChatUser(10);
+  async function cleanupUser(userId: string): Promise<void> {
+    await prisma.aIBillingOperation.deleteMany({ where: { userId } });
+    await prisma.tokenReservation.deleteMany({ where: { userId } });
+    await prisma.tokenTransaction.deleteMany({ where: { userId } });
+    await prisma.tokenWallet.deleteMany({ where: { userId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+  }
+
+
+  test('1. POST /api/chat charges priced usage tokens and persists the exchange', async () => {
+    const { userId, walletId, token } = await createChatUser(1000);
     const callsBefore = aiCallCount;
 
     try {
@@ -169,12 +216,13 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 9);
+      assert.equal(wallet.tokenBalance, 998);
 
-      const consumeCount = await prisma.tokenTransaction.count({
+      const consumeRows = await prisma.tokenTransaction.findMany({
         where: { userId, type: TokenTransactionType.CONSUME },
       });
-      assert.equal(consumeCount, 1);
+      assert.equal(consumeRows.length, 1);
+      assert.equal(consumeRows[0].tokens, 2);
       assert.equal(
         await prisma.tokenTransaction.count({
           where: { userId, type: TokenTransactionType.REFUND },
@@ -194,9 +242,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
       assert.equal(conversation.messages[1].role, 'assistant');
       assert.equal(conversation.messages[1].content, 'hello from ai');
     } finally {
-      await prisma.tokenTransaction.deleteMany({ where: { userId } });
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
@@ -224,13 +270,12 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
       assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
       assert.equal(aiCallCount, callsBefore);
     } finally {
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
-  test('3. POST /api/chat refunds tokens when the AI service fails', async () => {
-    const { userId, walletId, token } = await createChatUser(10);
+  test('3. POST /api/chat releases the reservation when the AI service fails', async () => {
+    const { userId, walletId, token } = await createChatUser(1000);
     const callsBefore = aiCallCount;
 
     try {
@@ -246,30 +291,18 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 10);
+      assert.equal(wallet.tokenBalance, 1000);
+      assert.equal(wallet.reservedBalance, 0);
 
-      assert.equal(
-        await prisma.tokenTransaction.count({
-          where: { userId, type: TokenTransactionType.CONSUME },
-        }),
-        1,
-      );
-      assert.equal(
-        await prisma.tokenTransaction.count({
-          where: { userId, type: TokenTransactionType.REFUND },
-        }),
-        1,
-      );
+      assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
       assert.equal(aiCallCount, callsBefore + 1);
     } finally {
-      await prisma.tokenTransaction.deleteMany({ where: { userId } });
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
-  test('4. POST /api/chat/stream consumes 1 token and a completed stream stays charged', async () => {
-    const { userId, walletId, token } = await createChatUser(10);
+  test('4. POST /api/chat/stream charges priced usage tokens and a completed stream stays charged', async () => {
+    const { userId, walletId, token } = await createChatUser(1000);
     const callsBefore = aiCallCount;
 
     try {
@@ -285,14 +318,13 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 9);
+      assert.equal(wallet.tokenBalance, 998);
 
-      assert.equal(
-        await prisma.tokenTransaction.count({
-          where: { userId, type: TokenTransactionType.CONSUME },
-        }),
-        1,
-      );
+      const consumeRows = await prisma.tokenTransaction.findMany({
+        where: { userId, type: TokenTransactionType.CONSUME },
+      });
+      assert.equal(consumeRows.length, 1);
+      assert.equal(consumeRows[0].tokens, 2);
       assert.equal(
         await prisma.tokenTransaction.count({
           where: { userId, type: TokenTransactionType.REFUND },
@@ -301,14 +333,12 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
       );
       assert.equal(aiCallCount, callsBefore + 1);
     } finally {
-      await prisma.tokenTransaction.deleteMany({ where: { userId } });
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
-  test('5. POST /api/chat/stream refunds tokens when the AI service fails before streaming', async () => {
-    const { userId, walletId, token } = await createChatUser(10);
+  test('5. POST /api/chat/stream with an upstream pre-stream failure returns 502 and keeps the reservation pending for recovery', async () => {
+    const { userId, walletId, token } = await createChatUser(1000);
     const callsBefore = aiCallCount;
 
     try {
@@ -322,32 +352,24 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
       const body = await res.json();
       assert.equal(body.error, 'AI service unavailable');
 
+      // The reservation is created BEFORE the upstream dispatch; a pre-stream
+      // failure must never auto-release it. It stays pending for recovery.
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 10);
+      assert.equal(wallet.tokenBalance, 0);
+      assert.equal(wallet.reservedBalance, 1000);
 
-      assert.equal(
-        await prisma.tokenTransaction.count({
-          where: { userId, type: TokenTransactionType.CONSUME },
-        }),
-        1,
-      );
-      assert.equal(
-        await prisma.tokenTransaction.count({
-          where: { userId, type: TokenTransactionType.REFUND },
-        }),
-        1,
-      );
+      const reservation = await prisma.tokenReservation.findFirst({ where: { userId } });
+      assert.ok(reservation);
+      assert.equal(reservation.status, 'PENDING');
       assert.equal(aiCallCount, callsBefore + 1);
     } finally {
-      await prisma.tokenTransaction.deleteMany({ where: { userId } });
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
   test('6. Missing Idempotency-Key returns 400 with the required-header message and writes nothing', async () => {
-    const { userId, walletId, token } = await createChatUser(10);
+    const { userId, walletId, token } = await createChatUser(1000);
     const callsBefore = aiCallCount;
 
     try {
@@ -366,20 +388,19 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 10);
+      assert.equal(wallet.tokenBalance, 1000);
 
       assert.equal(await prisma.conversation.count({ where: { userId } }), 0);
       assert.equal(await prisma.message.count({ where: { conversation: { userId } } }), 0);
       assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
       assert.equal(aiCallCount, callsBefore);
     } finally {
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
   test('7. Invalid Idempotency-Key returns 400 with the valid-UUID message and writes nothing', async () => {
-    const { userId, walletId, token } = await createChatUser(10);
+    const { userId, walletId, token } = await createChatUser(1000);
     const callsBefore = aiCallCount;
 
     try {
@@ -399,20 +420,19 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 10);
+      assert.equal(wallet.tokenBalance, 1000);
 
       assert.equal(await prisma.conversation.count({ where: { userId } }), 0);
       assert.equal(await prisma.message.count({ where: { conversation: { userId } } }), 0);
       assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
       assert.equal(aiCallCount, callsBefore);
     } finally {
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
   test('8. Sequential retry with the same Idempotency-Key returns 409 and is not re-executed', async () => {
-    const { userId, walletId, token } = await createChatUser(10);
+    const { userId, walletId, token } = await createChatUser(1000);
     const callsBefore = aiCallCount;
     const idempotencyKey = crypto.randomUUID();
 
@@ -436,7 +456,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 9);
+      assert.equal(wallet.tokenBalance, 998);
 
       assert.equal(
         await prisma.tokenTransaction.count({
@@ -453,14 +473,12 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
       assert.equal(conversations.length, 1);
       assert.equal(conversations[0].messages.length, 2);
     } finally {
-      await prisma.tokenTransaction.deleteMany({ where: { userId } });
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
   test('9. A different Idempotency-Key is treated as a new business request', async () => {
-    const { userId, walletId, token } = await createChatUser(10);
+    const { userId, walletId, token } = await createChatUser(2000);
     const callsBefore = aiCallCount;
 
     try {
@@ -480,7 +498,8 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 8);
+      assert.equal(wallet.tokenBalance, 1996);
+      assert.equal(wallet.reservedBalance, 0);
 
       assert.equal(
         await prisma.tokenTransaction.count({
@@ -493,14 +512,12 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
       const conversations = await prisma.conversation.findMany({ where: { userId } });
       assert.equal(conversations.length, 2);
     } finally {
-      await prisma.tokenTransaction.deleteMany({ where: { userId } });
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
-  test('10. Mid-stream upstream failure refunds exactly once and restores the balance', async () => {
-    const { userId, walletId, token } = await createChatUser(10);
+  test('10. Mid-stream upstream failure records INDETERMINATE and never auto-releases', async () => {
+    const { userId, walletId, token } = await createChatUser(1000);
     const callsBefore = aiCallCount;
 
     try {
@@ -517,38 +534,34 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
         // connection reset mid-stream is expected
       }
 
-      await waitForCondition(async () =>
-        (await prisma.tokenTransaction.count({
-          where: { userId, type: TokenTransactionType.REFUND },
-        })) === 1,
-      );
+      await waitForCondition(async () => {
+        const op = await prisma.aIBillingOperation.findFirst({ where: { userId } });
+        return op?.status === 'INDETERMINATE';
+      });
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 10);
+      assert.equal(wallet.tokenBalance, 0);
+      assert.equal(wallet.reservedBalance, 1000);
 
-      assert.equal(
-        await prisma.tokenTransaction.count({
-          where: { userId, type: TokenTransactionType.CONSUME },
-        }),
-        1,
-      );
-      assert.equal(
-        await prisma.tokenTransaction.count({
-          where: { userId, type: TokenTransactionType.REFUND },
-        }),
-        1,
-      );
+      assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
+
+      const reservation = await prisma.tokenReservation.findFirst({ where: { userId } });
+      assert.ok(reservation);
+      assert.equal(reservation.status, 'PENDING');
+
+      const operation = await prisma.aIBillingOperation.findFirst({ where: { userId } });
+      assert.ok(operation);
+      assert.equal(operation.status, 'INDETERMINATE');
+      assert.equal(operation.failureCode, 'STREAM_INTERRUPTED');
       assert.equal(aiCallCount, callsBefore + 1);
     } finally {
-      await prisma.tokenTransaction.deleteMany({ where: { userId } });
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
   test('11. Same Idempotency-Key on /api/chat/stream is not re-executed', async () => {
-    const { userId, walletId, token } = await createChatUser(10);
+    const { userId, walletId, token } = await createChatUser(1000);
     const callsBefore = aiCallCount;
     const idempotencyKey = crypto.randomUUID();
 
@@ -573,7 +586,7 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 9);
+      assert.equal(wallet.tokenBalance, 998);
 
       assert.equal(
         await prisma.tokenTransaction.count({
@@ -594,16 +607,14 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
         include: { messages: true },
       });
       assert.equal(conversations.length, 1);
-      assert.equal(conversations[0].messages.length, 1);
+      assert.equal(conversations[0].messages.length, 2);
     } finally {
-      await prisma.tokenTransaction.deleteMany({ where: { userId } });
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
   test('12. Missing Idempotency-Key on /api/chat/stream returns 400 and writes nothing', async () => {
-    const { userId, walletId, token } = await createChatUser(10);
+    const { userId, walletId, token } = await createChatUser(1000);
     const callsBefore = aiCallCount;
 
     try {
@@ -622,20 +633,19 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 10);
+      assert.equal(wallet.tokenBalance, 1000);
 
       assert.equal(await prisma.conversation.count({ where: { userId } }), 0);
       assert.equal(await prisma.message.count({ where: { conversation: { userId } } }), 0);
       assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
       assert.equal(aiCallCount, callsBefore);
     } finally {
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
   test('13. Invalid Idempotency-Key on /api/chat/stream returns 400 and writes nothing', async () => {
-    const { userId, walletId, token } = await createChatUser(10);
+    const { userId, walletId, token } = await createChatUser(1000);
     const callsBefore = aiCallCount;
 
     try {
@@ -655,29 +665,22 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 10);
+      assert.equal(wallet.tokenBalance, 1000);
 
       assert.equal(await prisma.conversation.count({ where: { userId } }), 0);
       assert.equal(await prisma.message.count({ where: { conversation: { userId } } }), 0);
       assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
       assert.equal(aiCallCount, callsBefore);
     } finally {
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 
-  test('14. Mid-stream upstream failure with a failed refund terminates without a refund row', async () => {
-    const { userId, token } = await createChatUser(10);
+  test('14. Mid-stream upstream failure records recovery-required evidence without a refund row', async () => {
+    const { userId, token } = await createChatUser(1000);
     const callsBefore = aiCallCount;
-    const originalConsoleError = console.error;
-    const capturedLogs: unknown[][] = [];
 
     try {
-      console.error = (...args: unknown[]) => {
-        capturedLogs.push(args);
-      };
-
       const res = await fetch(`${baseUrl}/api/chat/stream`, {
         method: 'POST',
         headers: chatHeaders(token, crypto.randomUUID()),
@@ -685,32 +688,32 @@ describe('Chat Business Token Consumption - AI_CHAT_QUERY integration', () => {
       });
       assert.equal(res.status, 200);
 
-      await prisma.tokenTransaction.deleteMany({
-        where: { userId, type: TokenTransactionType.CONSUME },
-      });
-
       try {
         await res.text();
       } catch {
         // connection reset mid-stream is expected
       }
 
-      const refundFailureLogged = capturedLogs.some(
-        (args) => args[0] === '[tokens] compensation_failed',
-      );
-      assert.equal(refundFailureLogged, true);
+      await waitForCondition(async () => {
+        const op = await prisma.aIBillingOperation.findFirst({ where: { userId } });
+        return op?.status === 'INDETERMINATE';
+      });
+
+      // A mid-stream failure is never auto-released and never refunded: the
+      // reservation stays pending and no REFUND transaction row is created.
       assert.equal(
         await prisma.tokenTransaction.count({
           where: { userId, type: TokenTransactionType.REFUND },
         }),
         0,
       );
+
+      const reservation = await prisma.tokenReservation.findFirst({ where: { userId } });
+      assert.ok(reservation);
+      assert.equal(reservation.status, 'PENDING');
       assert.equal(aiCallCount, callsBefore + 1);
     } finally {
-      console.error = originalConsoleError;
-      await prisma.tokenTransaction.deleteMany({ where: { userId } });
-      await prisma.tokenWallet.deleteMany({ where: { userId } });
-      await prisma.user.deleteMany({ where: { id: userId } });
+      await cleanupUser(userId);
     }
   });
 });

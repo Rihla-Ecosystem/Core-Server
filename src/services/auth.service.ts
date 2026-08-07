@@ -4,7 +4,7 @@ import { signAccessToken, generateOpaqueToken, getRefreshTokenExpiry } from '../
 import { sendVerificationEmail, sendPasswordResetEmail } from '../utils/email.js';
 import { addXp } from './xp.service.js';
 import { AppError } from '../middleware/errorHandler.js';
-import { env } from '../config/env.js';
+import { grantFirstLoginTokens } from './wallet-grant.service.js';
 
 export async function registerUser(data: {
   email: string;
@@ -55,41 +55,17 @@ export async function registerUser(data: {
 
   await addXp(user.id, 5, 'registration');
 
-  await grantSignupTokens(user.id);
-
+  // Phase 2G-A: the free-tier Wallet grant moved from registration to the first
+  // successful login. Registration alone never grants tokens.
   return user;
 }
 
 /**
- * Free tier: create the user's token wallet and credit the configured signup
- * grant (env SIGNUP_TOKEN_GRANT, default 20). Idempotent via the
- * (source, referenceId) unique constraint.
+ * Phase 2G-A: the free-tier Wallet grant is issued on the FIRST successful
+ * tourist login. The old registration-time path (`grantSignupTokens`) was
+ * disabled/removed; an old `signup-grant:<userId>` marker is treated as already
+ * granted (see `grantFirstLoginTokens`).
  */
-export async function grantSignupTokens(userId: string): Promise<void> {
-  const grant = env.SIGNUP_TOKEN_GRANT;
-  if (grant <= 0) return;
-
-  await prisma.$transaction(async (tx) => {
-    const wallet = await tx.tokenWallet.upsert({
-      where: { userId },
-      create: { userId, tokenBalance: grant, status: 'ACTIVE' },
-      update: {},
-    });
-    await tx.tokenTransaction.create({
-      data: {
-        walletId: wallet.id,
-        userId,
-        type: 'GRANT',
-        tokens: grant,
-        source: 'ADMIN',
-        paymentId: null,
-        referenceId: `signup-grant:${userId}`,
-        metadata: { reason: 'SIGNUP_GRANT' },
-      },
-    });
-  });
-}
-
 export async function verifyEmail(token: string) {
   const tokenHash = hashToken(token);
   const record = await prisma.emailVerificationToken.findFirst({
@@ -155,6 +131,10 @@ export async function loginUser(email: string, password: string, ipAddress?: str
   });
 
   await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+
+  // Phase 2G-A: first successful tourist login issues the free-tier Wallet
+  // grant exactly once. Best-effort — a grant failure never fails the login.
+  await grantFirstLoginTokens(user.id);
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
