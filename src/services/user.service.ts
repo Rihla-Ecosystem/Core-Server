@@ -375,6 +375,7 @@ export async function getMonthlyStats(months = 6) {
 }
 
 export async function getAuditLogs(page = 1, limit = 50) {
+
   const [logs, total] = await Promise.all([
     prisma.auditLog.findMany({
       skip: (page - 1) * limit,
@@ -396,6 +397,8 @@ export async function getAuditLogs(page = 1, limit = 50) {
       totalPages: Math.ceil(total / limit),
     },
   };
+
+
 }
 
 

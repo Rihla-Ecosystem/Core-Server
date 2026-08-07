@@ -110,7 +110,7 @@ router.get(
  *         schema: { type: string, enum: [GRANT, CONSUME, REFUND, BONUS, ADJUSTMENT] }
  *       - in: query
  *         name: source
- *         schema: { type: string, enum: [CHAT, IMAGE, FILE_UPLOAD, OCR, VOICE, PURCHASE, ADMIN] }
+ *         schema: { type: string, enum: [CHAT, IMAGE, FILE_UPLOAD, OCR, VOICE, ITINERARY, PURCHASE, ADMIN] }
  *       - in: query
  *         name: dateFrom
  *         schema: { type: string, format: date-time }

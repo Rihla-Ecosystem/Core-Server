@@ -20,6 +20,9 @@ import {
   WalletStatus,
 } from '@prisma/client';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
+
+let USER_ROLE_ID: number;
 import { AppError } from '../src/middleware/errorHandler.js';
 import {
   AIBillingRecoveryError,
@@ -2402,11 +2405,7 @@ describe('AI Billing Recovery service source', () => {
 
 describe('AI Billing Recovery DB Integration', () => {
   before(async () => {
-    await prisma.role.upsert({
-      where: { id: 1 },
-      update: {},
-      create: { id: 1, name: 'USER' },
-    });
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await cleanupSuiteData();
   });
 
@@ -2438,6 +2437,7 @@ describe('AI Billing Recovery DB Integration', () => {
   ): Promise<{ userId: string; walletId: string }> {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_recovery_${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: 'Recovery Test User',

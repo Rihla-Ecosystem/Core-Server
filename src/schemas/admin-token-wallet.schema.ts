@@ -26,7 +26,16 @@ export const adminTokenWalletTransactionsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   type: z.enum(['GRANT', 'CONSUME', 'REFUND', 'BONUS', 'ADJUSTMENT']).optional(),
   source: z
-    .enum(['CHAT', 'IMAGE', 'FILE_UPLOAD', 'OCR', 'VOICE', 'PURCHASE', 'ADMIN'])
+    .enum([
+      'CHAT',
+      'IMAGE',
+      'FILE_UPLOAD',
+      'OCR',
+      'VOICE',
+      'ITINERARY',
+      'PURCHASE',
+      'ADMIN',
+    ])
     .optional(),
   dateFrom: z.string().datetime({ offset: true }).transform((val) => new Date(val)).optional(),
   dateTo: z.string().datetime({ offset: true }).transform((val) => new Date(val)).optional(),

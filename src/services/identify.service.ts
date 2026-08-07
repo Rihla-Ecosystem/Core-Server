@@ -1,8 +1,15 @@
-import { env } from '../config/env.js';
+import { env, walletPolicyConfig } from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
-import { executeWithBusinessTokenCharge } from './tokenized-service-execution.service.js';
+import { runUsageBasedAIBilling } from './usage-based-ai-billing.service.js';
 import { recordAiUsage } from './ai-usage.service.js';
 import { upstreamError } from '../utils/http-client.js';
+import { isTokenExemptUser } from '../utils/token-exempt.js';
+import { buildSuccessOutcome, aiUnavailableOutcome, resolveUsageBasedBillingResult } from '../utils/usage-billing.js';
+import {
+  BillingRateCardUnavailableError,
+  resolveBillingRateCard,
+} from './billing-rate-card.service.js';
+import { parseChatLimitsConfig } from '../config/chat-limits.js';
 import type { TokenExemptUser } from '../utils/token-exempt.js';
 
 export interface IdentifyResponse {
@@ -16,6 +23,8 @@ export interface IdentifyResponse {
   nearby_sites?: unknown[] | null;
   cached: boolean;
   usage?: { model?: string | null; inputTokens?: number; outputTokens?: number; totalTokens?: number } | null;
+  providerCalls?: unknown;
+  providerAttempts?: unknown;
 }
 
 export async function identifyLandmark(
@@ -59,6 +68,8 @@ export async function identifyLandmark(
       userId: options!.userId,
       source: 'identify',
       usage: result.usage,
+      providerCalls: result.providerCalls,
+      providerAttempts: result.providerAttempts,
     });
   }
 
@@ -77,22 +88,58 @@ export interface IdentifyLandmarkWithTokensInput {
   user?: TokenExemptUser;
 }
 
+const CHAT_LIMITS = parseChatLimitsConfig(process.env);
+
+function identifyCore(input: IdentifyLandmarkWithTokensInput) {
+  return identifyLandmark(input.image, input.mimeType, {
+    userId: input.userId,
+    lat: input.lat,
+    lon: input.lon,
+    radius: input.radius,
+    authorization: input.authorization,
+  });
+}
+
 export async function identifyLandmarkWithTokens(
   input: IdentifyLandmarkWithTokensInput,
 ): Promise<IdentifyResponse> {
-  return executeWithBusinessTokenCharge({
-    user: input.user,
+  // Resolve the authoritative rate card ONCE per operation before executing AI.
+  let resolved;
+  try {
+    resolved = await resolveBillingRateCard();
+  } catch (err) {
+    if (err instanceof BillingRateCardUnavailableError) {
+      throw new AppError(502, `Rate card unavailable: ${err.message}`);
+    }
+    throw err;
+  }
+
+  const result = await runUsageBasedAIBilling<IdentifyResponse>({
+    operationId: `usage:AI_IMAGE_ANALYSIS:${input.businessRequestId}`,
     userId: input.userId,
     feature: 'AI_IMAGE_ANALYSIS',
     source: 'IMAGE',
     idempotencyKey: input.businessRequestId,
-    idempotentReplayMessage: 'Image analysis request already processed',
-    execute: () => identifyLandmark(input.image, input.mimeType, {
-      userId: input.userId,
-      lat: input.lat,
-      lon: input.lon,
-      radius: input.radius,
-      authorization: input.authorization,
-    }),
+    adminExempt: isTokenExemptUser(input.user),
+    chatLimits: CHAT_LIMITS,
+    rateCard: resolved.card,
+    pricingSource: resolved.source,
+    walletPolicy: walletPolicyConfig,
+    execute: async () => {
+      try {
+        const identified = await identifyCore(input);
+        return buildSuccessOutcome(identified, identified.usage);
+      } catch (err) {
+        if (err instanceof AppError && err.statusCode === 502) {
+          return aiUnavailableOutcome('AI identification service unavailable');
+        }
+        throw err;
+      }
+    },
+  });
+  return resolveUsageBasedBillingResult(result, {
+    feature: 'AI_IMAGE_ANALYSIS',
+    replayMessage: 'Image analysis request already processed',
+    aiUnavailableMessage: 'AI identification service unavailable',
   });
 }

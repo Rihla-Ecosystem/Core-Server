@@ -18,6 +18,9 @@ import type { AddressInfo } from 'node:net';
 import app from '../src/app.js';
 import { env } from '../src/config/env.js';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
+
+let USER_ROLE_ID: number;
 import { signAccessToken } from '../src/utils/token.js';
 import { Gender, TokenTransactionType, WalletStatus } from '@prisma/client';
 
@@ -44,14 +47,27 @@ describe('Identify validation - pre-charge request identity and image validation
     image_url: 'https://example.org/mock.jpg',
     nearby_sites: [{ name: 'Site A' }],
     cached: false,
+    usage: {
+      model: 'gemini-3.5-flash-lite',
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+    },
+    providerCalls: [
+      {
+        provider: 'google',
+        providerCallMade: true,
+        providerCallId: 'identify-validation-call-1',
+        actualModel: 'gemini-3.5-flash-lite',
+        inputTokens: 100,
+        outputTokens: 50,
+      },
+    ],
+    providerAttempts: [],
   };
 
   before(async () => {
-    await prisma.role.upsert({
-      where: { id: 1 },
-      update: {},
-      create: { id: 1, name: 'USER' },
-    });
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await cleanupSuiteData();
 
     await new Promise<void>((resolve) => {
@@ -98,6 +114,13 @@ describe('Identify validation - pre-charge request identity and image validation
 
   async function cleanupSuiteData(): Promise<void> {
     const emailFilter = { email: { startsWith: EMAIL_PREFIX } };
+    const userIds = (await prisma.user.findMany({ where: emailFilter, select: { id: true } })).map(
+      (u) => u.id,
+    );
+    if (userIds.length > 0) {
+      await prisma.aIBillingOperation.deleteMany({ where: { userId: { in: userIds } } });
+      await prisma.tokenReservation.deleteMany({ where: { userId: { in: userIds } } });
+    }
     await prisma.tokenTransaction.deleteMany({ where: { user: emailFilter } });
     await prisma.tokenWallet.deleteMany({ where: { user: emailFilter } });
     await prisma.conversation.deleteMany({ where: { user: emailFilter } });
@@ -107,6 +130,7 @@ describe('Identify validation - pre-charge request identity and image validation
   async function createUser(walletBalance?: number): Promise<{ userId: string; token: string }> {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `${EMAIL_PREFIX}${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
         displayName: 'Identify Validation User',
@@ -124,6 +148,8 @@ describe('Identify validation - pre-charge request identity and image validation
   }
 
   async function deleteUserWithRelated(userId: string): Promise<void> {
+    await prisma.aIBillingOperation.deleteMany({ where: { userId } });
+    await prisma.tokenReservation.deleteMany({ where: { userId } });
     await prisma.tokenTransaction.deleteMany({ where: { userId } });
     await prisma.tokenWallet.deleteMany({ where: { userId } });
     await prisma.user.deleteMany({ where: { id: userId } });
@@ -168,7 +194,7 @@ describe('Identify validation - pre-charge request identity and image validation
   }
 
   test('1. Valid JPEG request succeeds, charges the wallet, and preserves the response shape', async () => {
-    const { userId, token } = await createUser(10);
+    const { userId, token } = await createUser(1000);
     const callsBefore = aiCallCount;
     try {
       const res = await fetch(`${baseUrl}/api/identify`, {
@@ -189,14 +215,14 @@ describe('Identify validation - pre-charge request identity and image validation
       assert.equal(body.cached, false);
       assert.deepEqual(body.nearby_sites, mockIdentifyResponse.nearby_sites);
       assert.equal(aiCallCount, callsBefore + 1);
-      assert.equal(await getBalance(userId), 5);
+      assert.equal(await getBalance(userId), 998);
     } finally {
       await deleteUserWithRelated(userId);
     }
   });
 
   test('2. Valid PNG request succeeds and calls the AI provider once', async () => {
-    const { userId, token } = await createUser(10);
+    const { userId, token } = await createUser(1000);
     const callsBefore = aiCallCount;
     try {
       const res = await fetch(`${baseUrl}/api/identify`, {
@@ -206,7 +232,7 @@ describe('Identify validation - pre-charge request identity and image validation
       });
       assert.equal(res.status, 200);
       assert.equal(aiCallCount, callsBefore + 1);
-      assert.equal(await getBalance(userId), 5);
+      assert.equal(await getBalance(userId), 998);
     } finally {
       await deleteUserWithRelated(userId);
     }

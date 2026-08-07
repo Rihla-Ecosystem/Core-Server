@@ -13,14 +13,18 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { prisma } from '../src/config/prisma.js';
+import { ensureUserRole } from './helpers/test-role-fixtures.js';
 import { Gender, TokenTransactionSource, TokenTransactionType } from '@prisma/client';
-import { grantSignupTokens } from '../src/services/auth.service.js';
-import { env } from '../src/config/env.js';
+import { grantFirstLoginTokens } from '../src/services/wallet-grant.service.js';
+import { env, walletPolicyConfig } from '../src/config/env.js';
 
-describe('Signup Token Grant', () => {
+describe('First-Login Token Grant', () => {
   const expectedGrant = env.SIGNUP_TOKEN_GRANT;
 
+  let USER_ROLE_ID: number;
+
   before(async () => {
+    USER_ROLE_ID = (await ensureUserRole()).id;
     await cleanupSuiteData();
   });
 
@@ -47,9 +51,10 @@ describe('Signup Token Grant', () => {
   async function createUser(): Promise<string> {
     const user = await prisma.user.create({
       data: {
+        roleId: USER_ROLE_ID,
         email: `test_signup_grant_${crypto.randomUUID()}@example.com`,
         passwordHash: 'hash',
-        displayName: 'Signup Grant User',
+        displayName: 'First-Login Grant User',
         gender: Gender.MALE,
         nationality: 'Egyptian',
       },
@@ -57,11 +62,13 @@ describe('Signup Token Grant', () => {
     return user.id;
   }
 
-  test('1. Grant creates an ACTIVE wallet and one GRANT transaction', async () => {
+  test('1. First successful login grants the signup amount and one GRANT transaction', async () => {
     const userId = await createUser();
 
     try {
-      await grantSignupTokens(userId);
+      const result = await grantFirstLoginTokens(userId);
+      assert.equal(result.reason, 'GRANTED');
+      assert.equal(result.grantedTokens, expectedGrant);
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
       assert.ok(wallet);
@@ -75,8 +82,11 @@ describe('Signup Token Grant', () => {
       assert.equal(transaction.type, TokenTransactionType.GRANT);
       assert.equal(transaction.source, TokenTransactionSource.ADMIN);
       assert.equal(transaction.tokens, expectedGrant);
-      assert.equal(transaction.referenceId, `signup-grant:${userId}`);
-      assert.deepEqual(transaction.metadata, { reason: 'SIGNUP_GRANT' });
+      assert.equal(transaction.referenceId, `first-login-grant:${userId}`);
+      assert.deepEqual(transaction.metadata, {
+        reason: 'FIRST_LOGIN_GRANT',
+        policyVersion: walletPolicyConfig.version,
+      });
     } finally {
       await prisma.tokenTransaction.deleteMany({ where: { userId } });
       await prisma.tokenWallet.deleteMany({ where: { userId } });
@@ -84,25 +94,92 @@ describe('Signup Token Grant', () => {
     }
   });
 
-  test('2. Duplicate grant cannot double-credit the wallet', async () => {
+  test('2. A second first-login grant is a no-op and never double-credits', async () => {
     const userId = await createUser();
 
     try {
-      await grantSignupTokens(userId);
+      const first = await grantFirstLoginTokens(userId);
+      assert.equal(first.reason, 'GRANTED');
 
-      await assert.rejects(grantSignupTokens(userId));
+      const second = await grantFirstLoginTokens(userId);
+      assert.equal(second.reason, 'ALREADY_GRANTED');
+      assert.equal(second.grantedTokens, 0);
 
       const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
       assert.ok(wallet);
       assert.equal(wallet.tokenBalance, expectedGrant);
-      assert.equal(
-        await prisma.tokenTransaction.count({ where: { userId } }),
-        1,
-      );
+      assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 1);
     } finally {
       await prisma.tokenTransaction.deleteMany({ where: { userId } });
       await prisma.tokenWallet.deleteMany({ where: { userId } });
       await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('3. A pre-cutover signup-grant marker counts as already granted (no top-up)', async () => {
+    const userId = await createUser();
+
+    try {
+      const wallet = await prisma.tokenWallet.create({
+        data: { userId, tokenBalance: expectedGrant, status: 'ACTIVE' },
+      });
+      await prisma.tokenTransaction.create({
+        data: {
+          walletId: wallet.id,
+          userId,
+          type: TokenTransactionType.GRANT,
+          tokens: expectedGrant,
+          source: TokenTransactionSource.ADMIN,
+          paymentId: null,
+          referenceId: `signup-grant:${userId}`,
+          metadata: { reason: 'SIGNUP_GRANT' },
+        },
+      });
+
+      const result = await grantFirstLoginTokens(userId);
+      assert.equal(result.reason, 'ALREADY_GRANTED');
+      assert.equal(result.grantedTokens, 0);
+
+      const updatedWallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+      assert.ok(updatedWallet);
+      assert.equal(updatedWallet.tokenBalance, expectedGrant);
+      assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 1);
+    } finally {
+      await prisma.tokenTransaction.deleteMany({ where: { userId } });
+      await prisma.tokenWallet.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+  });
+
+  test('4. Admin users are never granted', async () => {
+    const preExisting = await prisma.role.findUnique({ where: { name: 'admin' } });
+    const adminRole = preExisting
+      ? preExisting
+      : await prisma.role.create({ data: { name: 'admin' } });
+    const user = await prisma.user.create({
+      data: {
+        roleId: adminRole.id,
+        email: `test_signup_grant_${crypto.randomUUID()}@example.com`,
+        passwordHash: 'hash',
+        displayName: 'Admin Grant User',
+        gender: Gender.MALE,
+        nationality: 'Egyptian',
+      },
+    });
+
+    try {
+      const result = await grantFirstLoginTokens(user.id);
+      assert.equal(result.reason, 'USER_EXEMPT');
+      assert.equal(result.grantedTokens, 0);
+      assert.equal(await prisma.tokenWallet.count({ where: { userId: user.id } }), 0);
+      assert.equal(await prisma.tokenTransaction.count({ where: { userId: user.id } }), 0);
+    } finally {
+      await prisma.tokenTransaction.deleteMany({ where: { userId: user.id } });
+      await prisma.tokenWallet.deleteMany({ where: { userId: user.id } });
+      await prisma.user.deleteMany({ where: { id: user.id } });
+      if (!preExisting) {
+        await prisma.role.deleteMany({ where: { id: adminRole.id } });
+      }
     }
   });
 });

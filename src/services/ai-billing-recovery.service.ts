@@ -3,6 +3,9 @@ import type {
   AIBillingRecoveryAction,
   AIBillingRecoveryErrorCode,
   AIBillingRecoveryErrorOptions,
+  AIBillingRecoveryQueueInput,
+  AIBillingRecoveryQueueItem,
+  AIBillingRecoveryQueueResult,
   AIBillingRecoveryReasonCode,
   AIBillingRecoveryRecommendation,
   InspectAIBillingRecoveryInput,
@@ -158,6 +161,20 @@ function assertRecoveryReason(reason: unknown): string {
     throw recoveryError('INVALID_INPUT', 'reason must be a non-empty string');
   }
   return trimmed;
+}
+
+function assertRecoveryQueuePage(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+    throw recoveryError('INVALID_INPUT', 'page must be a positive integer');
+  }
+  return value;
+}
+
+function assertRecoveryQueueLimit(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > 100) {
+    throw recoveryError('INVALID_INPUT', 'limit must be an integer between 1 and 100');
+  }
+  return value;
 }
 
 function assertOptionalEvidenceReference(value: unknown): string | undefined {
@@ -736,5 +753,104 @@ export async function reconcileWalletReservations(
     walletStatus: snapshot.wallet.status,
     recoveryRequired: !matched,
     inspectedAt: new Date(),
+  };
+}
+
+export async function listAIBillingRecoveryQueue(
+  input: AIBillingRecoveryQueueInput,
+  dependencies: AIBillingRecoveryDependencies = createDefaultAIBillingRecoveryDependencies(),
+): Promise<AIBillingRecoveryQueueResult> {
+  const page = assertRecoveryQueuePage(input.page);
+  const limit = assertRecoveryQueueLimit(input.limit);
+  const inspectedAt = new Date();
+
+  let pageResult;
+  try {
+    pageResult = await dependencies.repository.listReservationsForRecovery({
+      status: input.status,
+      feature: input.feature,
+      page,
+      limit,
+    });
+  } catch (err) {
+    wrapRepositoryRead(
+      'INTEGRITY_CONFLICT',
+      'AI billing recovery queue data could not be read reliably',
+      undefined,
+      err,
+    );
+  }
+
+  const items: AIBillingRecoveryQueueItem[] = pageResult.items.map((reservation) => {
+    const parsed = parseAIBillingMetadata(reservation.metadata);
+    const metadataStatus: AIBillingMetadataStatus =
+      parsed.status === 'MISSING'
+        ? 'MISSING'
+        : parsed.status === 'INVALID'
+          ? 'INVALID'
+          : parsed.summary.quotedTokens === reservation.tokens
+            ? 'VALID'
+            : 'INVALID';
+
+    let reasonCode: AIBillingRecoveryReasonCode;
+    if (reservation.status === 'PENDING') {
+      reasonCode =
+        metadataStatus === 'MISSING'
+          ? 'METADATA_MISSING'
+          : metadataStatus === 'INVALID'
+            ? 'METADATA_INVALID'
+            : 'PENDING_REVIEW';
+    } else {
+      reasonCode = 'RESOLVED';
+    }
+
+    const metadataSummary = parsed.status === 'VALID' ? parsed.summary : undefined;
+
+    return {
+      reservationId: reservation.id,
+      referenceId: reservation.referenceId,
+      walletId: reservation.walletId,
+      userId: reservation.userId,
+      feature: reservation.feature,
+      source: reservation.source,
+      reservationStatus: reservation.status,
+      reservedTokens: reservation.tokens,
+      pricingVersion: reservation.pricingVersion,
+      expiresAt: reservation.expiresAt.toISOString(),
+      isExpired: reservation.expiresAt.getTime() <= inspectedAt.getTime(),
+      metadataStatus,
+      reasonCode,
+      ...(metadataSummary === undefined
+        ? {}
+        : {
+            requestedMode: metadataSummary.requestedMode,
+            quoteAppliedMode: metadataSummary.quoteAppliedMode,
+            ...(metadataSummary.provider === undefined ? {} : { provider: metadataSummary.provider }),
+            ...(metadataSummary.model === undefined ? {} : { model: metadataSummary.model }),
+            ...(metadataSummary.billingCurrency === undefined
+              ? {}
+              : { billingCurrency: metadataSummary.billingCurrency }),
+            ...(metadataSummary.rateCardVersion === undefined
+              ? {}
+              : { rateCardVersion: metadataSummary.rateCardVersion }),
+            ...(metadataSummary.walletPolicyVersion === undefined
+              ? {}
+              : { walletPolicyVersion: metadataSummary.walletPolicyVersion }),
+          }),
+    };
+  });
+
+  return {
+    items,
+    pagination: {
+      page,
+      limit,
+      total: pageResult.total,
+      totalPages: pageResult.total > 0 ? Math.ceil(pageResult.total / limit) : 0,
+    },
+    aggregate: {
+      count: pageResult.aggregate.count,
+      totalTokens: pageResult.aggregate.totalTokens,
+    },
   };
 }
