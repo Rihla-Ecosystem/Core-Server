@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from 'express';
 import multer from 'multer';
 import { env } from '../config/env.js';
+import { authenticate } from '../middleware/auth.js';
+import { requireRole } from '../middleware/rbac.js';
 
 const router = Router();
 
@@ -67,6 +69,7 @@ async function proxyUpload(req: Request, res: Response) {
   }
 }
 
+router.use('/ingest', authenticate, requireRole('admin'));
 router.post('/ingest', upload.single('file'), proxyUpload);
 router.use('/ingest', proxyJson);
 
