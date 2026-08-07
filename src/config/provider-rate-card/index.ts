@@ -241,6 +241,37 @@ const entries = [
     source: 'https://ai.google.dev/gemini-api/docs/pricing',
     verifiedAt: '2026-08-03',
   },
+  // ---- jina-embeddings-v4 (STABLE) --------------------------------------
+  {
+    provider: 'jina',
+    model: 'jina-embeddings-v4',
+    status: 'STABLE',
+    tier: 'standard',
+    billingUnit: 'TOKEN',
+    tokenRates: {
+      inputMicrosPerMillion: 0,
+    },
+    effectiveFrom: '2026-08-03',
+    inactive: false,
+    source: 'https://jina.ai/pricing',
+    verifiedAt: '2026-08-03',
+  },
+  // ---- gemini-3.1-flash-tts-preview (PREVIEW) ---------------------------
+  {
+    provider: 'google',
+    model: 'gemini-3.1-flash-tts-preview',
+    status: 'PREVIEW',
+    tier: 'standard',
+    billingUnit: 'TOKEN',
+    tokenRates: {
+      inputMicrosPerMillion: 1_000_000,
+      outputMicrosPerMillion: 20_000_000,
+    },
+    effectiveFrom: '2026-08-03',
+    inactive: false,
+    source: 'https://ai.google.dev/gemini-api/docs/pricing',
+    verifiedAt: '2026-08-03',
+  },
 ];
 
 const rawCard = {

@@ -42,22 +42,25 @@ function makeCard(): any {
   };
 }
 
-test('1. validated materialized card exposes google as the derived provider', () => {
+test('1. validated materialized card exposes google and jina as the derived providers', () => {
   const { card, providers } = validateRateCard(PROVIDER_RATE_CARD);
   assert.ok(providers.includes('google'));
+  assert.ok(providers.includes('jina'));
   assert.equal(providers.length, RATE_CARD_PROVIDERS.length);
-  assert.equal(card.entries.length, 12);
+  assert.equal(card.entries.length, 14);
 });
 
-test('1b. materialized card has exactly the four Rihla Gemini models', () => {
+test('1b. materialized card has the Rihla models including Jina v4 and TTS', () => {
   const { providers } = validateRateCard(PROVIDER_RATE_CARD);
-  assert.deepEqual([...providers].sort(), ['google']);
+  assert.deepEqual([...providers].sort(), ['google', 'jina']);
   const models = validateRateCard(PROVIDER_RATE_CARD).card.entries.map((e) => e.model);
   assert.deepEqual([...new Set(models)].sort(), [
     'gemini-2.5-flash-lite',
     'gemini-3-flash-preview',
+    'gemini-3.1-flash-tts-preview',
     'gemini-3.5-flash-lite',
     'gemini-3.6-flash',
+    'jina-embeddings-v4',
   ]);
 });
 

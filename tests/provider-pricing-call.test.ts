@@ -55,13 +55,16 @@ test('4. unresolvable actualModel → ACTUAL_MODEL_NOT_IN_RATECARD, no requested
   assert.deepEqual(r, { kind: 'UNPRICED', providerCallId: 'c1', provider: 'google', operation: undefined, requestedModel: 'gemini-3.6-flash', actualModel: 'gemini-mystery', reason: 'ACTUAL_MODEL_NOT_IN_RATECARD', pricedAt: '2026-08-03' });
 });
 
-test('5. TTS model stays UNPRICED (no verified rate)', () => {
+test('5. TTS model gemini-3.1-flash-tts-preview is PRICED', () => {
   const r = priceProviderCall(
     { provider: 'google', providerCallId: 't', actualModel: 'gemini-3.1-flash-tts-preview', inputTokens: 10 },
     ctx,
   );
-  assert.equal(r.kind, 'UNPRICED');
-  if (r.kind === 'UNPRICED') assert.equal(r.reason, 'ACTUAL_MODEL_NOT_IN_RATECARD');
+  assert.equal(r.kind, 'PRICED');
+  if (r.kind === 'PRICED') {
+    assert.equal(r.costNanoUsd, 10_000n);
+    assert.equal(r.rateCard.model, 'gemini-3.1-flash-tts-preview');
+  }
 });
 
 test('6. USAGE_MISSING when no usage present', () => {
@@ -204,9 +207,9 @@ test('18. SECOND unit with fractional duration returns USAGE_INVALID (no float m
   if (r.kind === 'UNPRICED') assert.equal(r.reason, 'USAGE_INVALID');
 });
 
-test('19. TTS (gemini-3.1-flash-tts-preview) stays UNPRICED before any duration pricing', () => {
+test('19. Unpriced model stays UNPRICED before any duration pricing', () => {
   const r = priceProviderCall(
-    { provider: 'google', providerCallId: 't', actualModel: 'gemini-3.1-flash-tts-preview', audioOutputSeconds: 30 },
+    { provider: 'google', providerCallId: 't', actualModel: 'gemini-unpriced-model', audioOutputSeconds: 30 },
     ctx,
   );
   assert.equal(r.kind, 'UNPRICED');

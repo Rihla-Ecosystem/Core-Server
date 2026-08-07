@@ -74,7 +74,7 @@ test('6. mixed priced+unpriced → PARTIALLY_PRICED with exact reasons', () => {
     providerCalls: [
       { provider: 'google', providerCallMade: true, providerCallId: 'a', actualModel: 'gemini-3.6-flash', inputTokens: 1 },
       { provider: 'google', providerCallMade: true, providerCallId: 'b', actualModel: 'gemini-mystery', inputTokens: 1 },
-      { provider: 'google', providerCallMade: true, providerCallId: 'c', actualModel: 'gemini-3.1-flash-tts-preview', inputTokens: 1 },
+      { provider: 'google', providerCallMade: true, providerCallId: 'c', actualModel: 'gemini-unpriced-model', inputTokens: 1 },
     ],
     pricingDate: '2026-08-03',
   });
