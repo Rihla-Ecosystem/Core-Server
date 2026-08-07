@@ -197,7 +197,7 @@ test('10. priced recompute aggregates exact cost', async () => {
 
 test('11. unpriced recompute remains unpriced', async () => {
   const fake = fakeRepository([
-    makeRow({ actualModel: 'gemini-3.1-flash-tts-preview', requestedModel: 'gemini-3.1-flash-tts-preview' }),
+    makeRow({ actualModel: 'gemini-unpriced-model', requestedModel: 'gemini-unpriced-model' }),
   ]);
   const result = await recomputePreview({ repository: fake.repo }, {
     from: '2026-08-01T00:00:00.000Z',
