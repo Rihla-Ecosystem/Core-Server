@@ -11,6 +11,7 @@ import adminPaymentRoutes from './admin-payment.routes.js';
 import adminTokenWalletRoutes from './admin-token-wallet.routes.js';
 
 import adminEnterpriseRoutes from './admin-enterprise.routes.js';
+import notificationAdminRoutes from './notification-admin.routes.js';
 
 import adminRateCardRoutes from './admin-rate-card.routes.js';
 import {
@@ -38,6 +39,12 @@ router.use(
   '/enterprise',
   requireRole('admin'),
   adminEnterpriseRoutes,
+);
+
+router.use(
+  '/notifications',
+  requireRole('admin', 'moderator'),
+  notificationAdminRoutes,
 );
 
 router.use(
