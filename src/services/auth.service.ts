@@ -1,7 +1,7 @@
 import { prisma } from '../config/prisma.js';
 import { hashPassword, comparePassword, hashToken } from '../utils/hash.js';
 import { signAccessToken, generateOpaqueToken, getRefreshTokenExpiry } from '../utils/token.js';
-import { sendVerificationEmail, sendPasswordResetEmail } from '../utils/email.js';
+import { sendVerificationEmail, sendPasswordResetEmail, resolveLocale } from '../utils/email.js';
 import { addXp } from './xp.service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { grantFirstLoginTokens } from './wallet-grant.service.js';
@@ -51,7 +51,7 @@ export async function registerUser(data: {
     data: { userId: user.id, tokenHash: hash, expiresAt },
   });
 
-  await sendVerificationEmail(email, raw).catch((err) => console.error('Failed to send verification email:', err));
+  await sendVerificationEmail(email, raw, resolveLocale(user.language)).catch((err) => console.error('Failed to send verification email:', err));
 
   await addXp(user.id, 5, 'registration');
 
@@ -94,7 +94,7 @@ export async function resendVerification(email: string) {
     data: { userId: user.id, tokenHash: hash, expiresAt },
   });
 
-  await sendVerificationEmail(email, raw).catch((err) => console.error('Failed to send verification email:', err));
+  await sendVerificationEmail(email, raw, resolveLocale(user.language)).catch((err) => console.error('Failed to send verification email:', err));
 }
 
 export async function loginUser(email: string, password: string, ipAddress?: string, deviceInfo?: string) {
@@ -202,7 +202,7 @@ export async function forgotPassword(email: string) {
     data: { userId: user.id, tokenHash: hash, expiresAt },
   });
 
-  await sendPasswordResetEmail(email, raw).catch((err) => console.error('Failed to send password reset email:', err));
+  await sendPasswordResetEmail(email, raw, resolveLocale(user.language)).catch((err) => console.error('Failed to send password reset email:', err));
 }
 
 export async function resetPassword(token: string, newPassword: string) {

@@ -11,8 +11,15 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-export async function sendVerificationEmail(to: string, token: string): Promise<void> {
-  const link = `${env.FRONTEND_URL}/verify-email?token=${token}`;
+export function resolveLocale(language: unknown): string {
+  if (Array.isArray(language) && language.length > 0 && typeof language[0] === 'string') {
+    return language[0].startsWith('ar') ? 'ar' : 'en';
+  }
+  return 'en';
+}
+
+export async function sendVerificationEmail(to: string, token: string, locale: string = 'en'): Promise<void> {
+  const link = `${env.FRONTEND_URL}/${locale}/auth/verify-email?token=${token}`;
   await transporter.sendMail({
     from: env.EMAIL_FROM,
     to,
@@ -21,8 +28,8 @@ export async function sendVerificationEmail(to: string, token: string): Promise<
   });
 }
 
-export async function sendPasswordResetEmail(to: string, token: string): Promise<void> {
-  const link = `${env.FRONTEND_URL}/reset-password?token=${token}`;
+export async function sendPasswordResetEmail(to: string, token: string, locale: string = 'en'): Promise<void> {
+  const link = `${env.FRONTEND_URL}/${locale}/auth/reset-password?token=${token}`;
   await transporter.sendMail({
     from: env.EMAIL_FROM,
     to,
