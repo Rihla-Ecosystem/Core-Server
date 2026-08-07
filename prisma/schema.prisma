@@ -391,6 +391,13 @@ model User {
 
   aiUsageLogs             AiUsageLog[]
 
+  notificationTemplates   NotificationTemplate[] @relation("CreatedNotificationTemplates")
+  notificationHistory     NotificationHistory[] @relation("CreatedNotificationHistory")
+  notificationInbox       NotificationInbox[]
+  notificationStatus      UserNotificationStatus?
+  contextReports          ContextReport[]
+  notificationLogs        NotificationLog[]
+
 
   @@map("users")
 }
@@ -816,4 +823,230 @@ model ProviderRateCardEntry {
   @@index([snapshotId])
   @@index([provider, model, status])
   @@map("ProviderRateCardEntry")
+}
+
+// ---------------------------------------------------------------------------
+// Context-Aware Notification System (feature/context-notification-system)
+// ---------------------------------------------------------------------------
+// The Core Backend acts as the Context Engine: it receives smart location
+// updates from the mobile frontend (only when the user moves >1KM or crosses
+// a GeoFence boundary), aggregates context from GeoContext + Risk Intelligence
+// + the user profile, asks the AI Service to analyze the single aggregated
+// Context Object, then generates deduplicated/cooldown-protected notifications
+// and Context Intelligence Reports. No external notification provider is used.
+
+enum NotificationCategory {
+  SAFETY
+  SECURITY
+  WEATHER
+  TRAFFIC
+  TOURIST
+  HISTORICAL
+  EMERGENCY
+  RESTRICTED_AREA
+  PHOTOGRAPHY
+  RECOMMENDATION
+  SYSTEM
+
+  @@map("notification_category")
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+
+  @@map("notification_priority")
+}
+
+enum NotificationSource {
+  SYSTEM
+  AI
+  ADMIN
+  CONTEXT
+  EMERGENCY
+
+  @@map("notification_source")
+}
+
+enum NotificationStatus {
+  SCHEDULED
+  SENDING
+  SENT
+  FAILED
+  CANCELLED
+
+  @@map("notification_status")
+}
+
+model NotificationTemplate {
+  id        String           @id @default(uuid()) @db.Uuid
+  code      String           @unique @db.VarChar(100)
+  name      String           @db.VarChar(200)
+  title     String           @db.VarChar(200)
+  message   String           @db.Text
+  type      NotificationType @default(INFO) @map("type")
+  category  NotificationCategory @default(SYSTEM)
+  priority  NotificationPriority @default(NORMAL)
+  variables Json?
+  data      Json?
+  isActive  Boolean          @default(true) @map("is_active")
+  createdById String?        @map("created_by_id") @db.Uuid
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  createdBy User? @relation("CreatedNotificationTemplates", fields: [createdById], references: [id], onDelete: SetNull)
+  history NotificationHistory[]
+
+  @@index([category])
+  @@index([isActive])
+  @@map("notification_templates")
+}
+
+model NotificationHistory {
+  id        String           @id @default(uuid()) @db.Uuid
+  templateId String?         @map("template_id") @db.Uuid
+  title     String           @db.VarChar(200)
+  message   String           @db.Text
+  type      NotificationType @default(INFO) @map("type")
+  category  NotificationCategory @default(SYSTEM)
+  priority  NotificationPriority @default(NORMAL)
+  source    NotificationSource @default(ADMIN)
+  audience  Json             @default("{}")
+  schedule  Json?
+  status    NotificationStatus @default(SCHEDULED)
+  scheduledAt DateTime?      @map("scheduled_at") @db.Timestamptz
+  sentAt    DateTime?        @map("sent_at") @db.Timestamptz
+  recipients Int             @default(0)
+  delivered Int              @default(0)
+  read      Int              @default(0)
+  createdById String?        @map("created_by_id") @db.Uuid
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  createdBy User? @relation("CreatedNotificationHistory", fields: [createdById], references: [id], onDelete: SetNull)
+  template NotificationTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  inboxes NotificationInbox[]
+
+  @@index([status])
+  @@index([category])
+  @@index([createdAt])
+  @@map("notification_history")
+}
+
+model NotificationInbox {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @map("user_id") @db.Uuid
+  historyId String?          @map("history_id") @db.Uuid
+  templateId String?         @map("template_id") @db.Uuid
+  contextReportId String?    @map("context_report_id") @db.Uuid
+
+  type      NotificationType @default(INFO) @map("type")
+  category  NotificationCategory @default(SYSTEM)
+  priority  NotificationPriority @default(NORMAL)
+  source    NotificationSource @default(SYSTEM)
+
+  title   String  @db.VarChar(200)
+  message String  @db.Text
+  data    Json?
+  cooldownKey String? @map("cooldown_key")
+  lat     Float?
+  lng     Float?
+  isRead  Boolean @default(false) @map("is_read")
+  readAt  DateTime? @map("read_at") @db.Timestamptz
+  deliveredAt DateTime @default(now()) @map("delivered_at") @db.Timestamptz
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  history      NotificationHistory? @relation(fields: [historyId], references: [id], onDelete: SetNull)
+  contextReport ContextReport?      @relation(fields: [contextReportId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, cooldownKey])
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@index([historyId])
+  @@map("notification_inbox")
+}
+
+model NotificationAnalytics {
+  id        String    @id @default(uuid()) @db.Uuid
+  date      DateTime  @db.Date
+  totalSent Int       @default(0) @map("total_sent")
+  totalDelivered Int  @default(0) @map("total_delivered")
+  totalRead Int       @default(0) @map("total_read")
+  totalUnread Int     @default(0) @map("total_unread")
+  byCategory Json?
+  byPriority Json?
+  bySource   Json?
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([date])
+  @@map("notification_analytics")
+}
+
+model NotificationLog {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String?   @map("user_id") @db.Uuid
+  notificationId String? @map("notification_id") @db.Uuid
+  historyId String?   @map("history_id") @db.Uuid
+  event     String    @db.VarChar(50)
+  detail    String?   @db.Text
+  metadata  Json?
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([historyId])
+  @@index([notificationId])
+  @@index([event])
+  @@map("notification_logs")
+}
+
+model UserNotificationStatus {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @unique @map("user_id") @db.Uuid
+  lastLat   Float?    @map("last_lat")
+  lastLng   Float?    @map("last_lng")
+  lastReportedAt DateTime? @map("last_reported_at") @db.Timestamptz
+  lastSyncAt DateTime? @map("last_sync_at") @db.Timestamptz
+  activeGeofences Json? @map("active_geofences")
+  preferences Json?
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_notification_status")
+}
+
+model ContextReport {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  lat       Float?
+  lng       Float?
+  areaName  String?   @map("area_name")
+  context   Json?
+  report    Json?
+  notifications Json?
+  summary   String?   @db.Text
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user    User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  inboxes NotificationInbox[]
+
+  @@index([userId, createdAt])
+  @@map("context_reports")
+}
+
+model NotificationSetting {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique @db.VarChar(100)
+  value     Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("notification_settings")
 }
