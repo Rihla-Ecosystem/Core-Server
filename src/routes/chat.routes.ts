@@ -20,6 +20,10 @@ const chatSchema = z.object({
 
 const idempotencyKeySchema = z.string().uuid();
 
+const conversationIdParamSchema = z.object({
+  id: z.string().uuid(),
+});
+
 function readIdempotencyKey(req: Request): string {
   const value = req.headers['idempotency-key'];
   if (typeof value !== 'string' || value.trim() === '') {
@@ -65,7 +69,7 @@ router.get('/conversations', authenticate, async (req, res, next) => {
   }
 });
 
-router.get('/conversations/:id/messages', authenticate, async (req, res, next) => {
+router.get('/conversations/:id/messages', authenticate, validate(conversationIdParamSchema, 'params'), async (req, res, next) => {
   try {
     const msgs = await getMessages(req.user!.userId, req.params.id as string);
     res.json({ messages: msgs });
@@ -74,7 +78,7 @@ router.get('/conversations/:id/messages', authenticate, async (req, res, next) =
   }
 });
 
-router.delete('/conversations/:id', authenticate, async (req, res, next) => {
+router.delete('/conversations/:id', authenticate, validate(conversationIdParamSchema, 'params'), async (req, res, next) => {
   try {
     await deleteConversation(req.user!.userId, req.params.id as string);
     res.status(204).end();

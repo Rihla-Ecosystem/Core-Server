@@ -14,6 +14,7 @@ import {
   resolveBillingRateCard,
 } from './billing-rate-card.service.js';
 import { parseChatLimitsConfig } from '../config/chat-limits.js';
+import { detectPromptInjection } from '../utils/prompt-injection.js';
 
 export interface StreamChatResult {
   body: ReadableStream<Uint8Array>;
@@ -47,6 +48,11 @@ async function dispatchChatStreamCore(
   options: StreamChatOptions,
   user: StreamChatUser,
 ): Promise<{ aiResponse: globalThis.Response; body: ReadableStream<Uint8Array>; conversationId: string }> {
+  const injection = detectPromptInjection(message);
+  if (injection) {
+    throw new AppError(400, 'Message blocked: looks like a prompt-injection attempt');
+  }
+
   const preferences = await prisma.userPreference.findMany({
     where: { userId },
     select: { key: true, value: true },

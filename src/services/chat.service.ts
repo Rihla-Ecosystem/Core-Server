@@ -16,6 +16,7 @@ import {
   resolveBillingRateCard,
 } from './billing-rate-card.service.js';
 import { parseChatLimitsConfig } from '../config/chat-limits.js';
+import { detectPromptInjection } from '../utils/prompt-injection.js';
 
 const CHAT_LIMITS = parseChatLimitsConfig(process.env);
 
@@ -63,6 +64,11 @@ async function performChatCore(
   options: ChatOptions,
   user: ChatUserContext,
 ): Promise<ChatCoreResult> {
+  const injection = detectPromptInjection(message);
+  if (injection) {
+    throw new AppError(400, 'Message blocked: looks like a prompt-injection attempt');
+  }
+
   const preferences = await prisma.userPreference.findMany({
     where: { userId },
     select: { key: true, value: true },

@@ -5,21 +5,10 @@ import { getSystemHealth } from './system.service.js';
 import { getAiUsageSummary } from './ai-usage.service.js';
 import { getOverview, getEntityStatistics } from './admin-enterprise.service.js';
 import { getApiMonitoringSummary } from './api-monitor.service.js';
+import { detectPromptInjection } from '../utils/prompt-injection.js';
 
 export const ADMIN_ASSISTANT_QUESTION_MAX_LENGTH = 4000;
 export const ADMIN_ASSISTANT_TIMEOUT_MS = 60_000;
-
-const INJECTION_PATTERNS: RegExp[] = [
-  /ignore\s+(all\s+)?(previous|above|prior)\s+(instructions|prompts|rules|directions)/i,
-  /you\s+are\s+(now|no longer)\s+/i,
-  /system\s+prompt/i,
-  /forget\s+(everything|all|previous)/i,
-  /new\s+instruction/i,
-  /override\s+(your|all|previous)/i,
-  /reveal\s+(your|the)\s+(system|internal|prompt|secret|key|token)/i,
-  /print\s+your\s+(system|instructions)/i,
-  /dan\s*:|do\s+anything\s+now/i,
-];
 
 export interface AdminAssistantResult {
   answer: string;
@@ -36,14 +25,6 @@ function sanitizeQuestion(value: unknown): string {
     throw new AppError(400, `Question must be at most ${ADMIN_ASSISTANT_QUESTION_MAX_LENGTH} characters`);
   }
   return trimmed;
-}
-
-function detectInjection(question: string): string | null {
-  for (const pattern of INJECTION_PATTERNS) {
-    const match = pattern.exec(question);
-    if (match) return match[0];
-  }
-  return null;
 }
 
 function summarizeAiUsage(value: unknown): unknown {
@@ -126,7 +107,7 @@ export async function runAdminAssistant(actorId: string, rawQuestion: unknown): 
   const question = sanitizeQuestion(rawQuestion);
 
   // Defense-in-depth: refuse obvious prompt-injection attempts before the LLM.
-  const injection = detectInjection(question);
+  const injection = detectPromptInjection(question);
   if (injection) {
     await prisma.auditLog.create({
       data: {

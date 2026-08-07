@@ -20,13 +20,19 @@ const isLocalhostOrigin = (origin: string | undefined): boolean => {
 };
 app.use(
   cors({
-    origin: true,
+    origin: (origin, callback) => {
+      if (!origin || corsOrigins.includes(origin) || isLocalhostOrigin(origin)) {
+        callback(null, true);
+      } else {
+        callback(null, false);
+      }
+    },
     credentials: true,
   })
 );
 
 app.use(cookieParser());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use(apiLogMiddleware);
 
 // Serialize bigint as exact decimal strings in all JSON responses

@@ -54,7 +54,10 @@ const loginLimiter = rateLimit({
   message: { error: 'Too many login attempts, please try again later' },
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => `${req.ip}-${req.body.email}`,
+  keyGenerator: (req) => {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : 'unknown';
+    return `${req.ip}-${email}`;
+  },
 });
 
 const forgotPasswordLimiter = rateLimit({
@@ -71,7 +74,10 @@ const resendVerificationLimiter = rateLimit({
   message: { error: 'Please wait before requesting another verification email' },
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => req.body.email,
+  keyGenerator: (req) => {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : 'unknown';
+    return email;
+  },
 });
 
 const resetPasswordLimiter = rateLimit({
