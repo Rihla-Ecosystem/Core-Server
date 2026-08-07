@@ -374,15 +374,28 @@ export async function getMonthlyStats(months = 6) {
   return data;
 }
 
-export async function getAuditLogs() {
-  return prisma.auditLog.findMany({
-    orderBy: { createdAt: 'desc' },
-    take: 100,
-    include: {
-      actor: { select: { displayName: true, email: true } },
-      target: { select: { displayName: true, email: true } },
+export async function getAuditLogs(page = 1, limit = 50) {
+  const [logs, total] = await Promise.all([
+    prisma.auditLog.findMany({
+      skip: (page - 1) * limit,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        actor: { select: { displayName: true, email: true } },
+        target: { select: { displayName: true, email: true } },
+      },
+    }),
+    prisma.auditLog.count(),
+  ]);
+  return {
+    logs,
+    pagination: {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
     },
-  })
+  };
 }
 
 

@@ -264,4 +264,31 @@ router.post('/boundaries', authenticate, async (req, res, next) => {
   }
 });
 
+router.get('/boundaries/:id', authenticate, async (req, res, next) => {
+  try {
+    const result = await geocontextProxyApi.getBoundary(req.params.id as string, authHeader(req));
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put('/boundaries/:id', authenticate, async (req, res, next) => {
+  try {
+    const result = await geocontextProxyApi.updateBoundary(req.params.id as string, req.body, authHeader(req));
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete('/boundaries/:id', authenticate, async (req, res, next) => {
+  try {
+    await geocontextProxyApi.deleteBoundary(req.params.id as string, authHeader(req));
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

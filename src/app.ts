@@ -20,10 +20,11 @@ const isLocalhostOrigin = (origin: string | undefined): boolean => {
 };
 app.use(
   cors({
-    origin: "http://localhost:3001",
+    origin: true,
     credentials: true,
   })
 );
+
 app.use(cookieParser());
 app.use(express.json());
 app.use(apiLogMiddleware);
