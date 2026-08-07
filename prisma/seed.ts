@@ -1,5 +1,13 @@
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import { PROVIDER_RATE_CARD } from '../src/config/provider-rate-card/index.js';
+import { createPrismaProviderRateCardAdminRepository } from '../src/repositories/provider-rate-card-admin.repository.js';
+import {
+  createDefaultProviderRateCardAdminDependencies,
+  importStaticRateCardAsDraft,
+  validateRateCardDraft,
+  publishRateCard,
+} from '../src/services/admin-rate-card.service.js';
 
 const prisma = new PrismaClient();
 
@@ -159,6 +167,44 @@ const JOURNEYS: JourneySeed[] = [
   },
 ];
 
+async function seedProviderRateCard(actorUserId: string): Promise<void> {
+  const version = PROVIDER_RATE_CARD.version;
+  const adminRepo = createPrismaProviderRateCardAdminRepository(prisma);
+  const adminDeps = createDefaultProviderRateCardAdminDependencies(adminRepo);
+
+  const existing = await adminDeps.repository.findSnapshotByVersion(version);
+  if (existing !== null) {
+    if (existing.status === 'ACTIVE') {
+      const validation = await validateRateCardDraft(adminDeps, version);
+      if (validation.valid) {
+        console.log(`Provider Rate Card v${version} is already ACTIVE and valid (${existing.entries.length} entries).`);
+        return;
+      }
+      throw new Error(`Provider Rate Card v${version} is ACTIVE but failed validation`);
+    } else if (existing.status === 'DRAFT') {
+      const validation = await validateRateCardDraft(adminDeps, version);
+      if (!validation.valid) {
+        throw new Error(`Provider Rate Card DRAFT v${version} failed validation`);
+      }
+      await publishRateCard(adminDeps, { version, effectiveFrom: '2026-08-03' }, actorUserId);
+      console.log(`Published existing DRAFT Provider Rate Card v${version} as ACTIVE.`);
+      return;
+    } else {
+      throw new Error(`Provider Rate Card v${version} exists in unexpected state: ${existing.status}`);
+    }
+  }
+
+  await importStaticRateCardAsDraft(adminDeps, { version }, actorUserId);
+
+  const validation = await validateRateCardDraft(adminDeps, version);
+  if (!validation.valid) {
+    throw new Error(`Provider Rate Card DRAFT v${version} failed validation`);
+  }
+
+  await publishRateCard(adminDeps, { version, effectiveFrom: '2026-08-03' }, actorUserId);
+  console.log(`Seeded and published initial ACTIVE Provider Rate Card v${version} (${validation.entryCount} entries).`);
+}
+
 async function main() {
   const roles = [
     { name: 'user', permissions: [] },
@@ -222,7 +268,7 @@ async function main() {
 
   const passwordHash = await bcrypt.hash('Admin1234!', 10);
 
-  await prisma.user.upsert({
+  const adminUser = await prisma.user.upsert({
     where: { email: 'admin@example.com' },
     update: {},
     create: {
@@ -239,6 +285,9 @@ async function main() {
   console.log(
     `Seeded ${roles.length} roles, ${BADGES.length} badges, ${JOURNEYS.length} quests, and admin user (admin@example.com / Admin1234!)`,
   );
+
+  // Seed Provider Rate Card
+  await seedProviderRateCard(adminUser.id);
 }
 
 main()
