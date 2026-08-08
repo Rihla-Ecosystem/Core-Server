@@ -18,6 +18,7 @@ import type {
   AdminRateCardImportBody,
   AdminRateCardPublishBody,
   AdminRateCardRetireBody,
+  AdminRateCardCloneBody,
   AdminRateCardVersionParams,
   AdminRateCardListQuery,
   AdminRateCardEntryBody,
@@ -115,6 +116,22 @@ export async function retire(req: Request, res: Response, next: NextFunction): P
     const body = req.body as AdminRateCardRetireBody;
     const result = await adminRateCardService.retireRateCard(deps, { version, ...body }, actor(req));
     res.status(200).json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/** POST /api/admin/rate-cards/:version/clone */
+export async function clone(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { version } = req.params as AdminRateCardVersionParams;
+    const body = req.body as AdminRateCardCloneBody;
+    const result = await adminRateCardService.cloneRateCard(
+      deps,
+      { sourceVersion: version, newVersion: body.newVersion },
+      actor(req),
+    );
+    res.status(201).json({ success: true, data: result });
   } catch (err) {
     next(err);
   }

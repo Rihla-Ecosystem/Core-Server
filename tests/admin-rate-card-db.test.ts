@@ -24,6 +24,7 @@ import {
   validateRateCardDraft,
   publishRateCard,
   retireRateCard,
+  cloneRateCard,
   listRateCardSnapshots,
   getRateCardByVersion,
   importStaticRateCardAsDraft,
@@ -73,12 +74,54 @@ function cardEntries(): unknown[] {
   ];
 }
 
+function richCardEntries(): unknown[] {
+  return [
+    {
+      provider: 'google',
+      model: `gemini-rich-${crypto.randomUUID().slice(0, 8)}`,
+      status: 'PREVIEW',
+      tier: 'priority',
+      billingUnit: 'TOKEN',
+      tokenRates: {
+        inputMicrosPerMillion: 1_250_000,
+        outputMicrosPerMillion: 5_000_000,
+        cachedInputMicrosPerMillion: 250_000,
+        cachedOutputMicrosPerMillion: 1_000_000,
+      },
+      modalityRates: { audioInputMicrosPerMillion: 2_000_000 },
+      tts: { audioOutputMicrosPerMillion: 8_000_000, tokensPerSecond: 25 },
+      cachedInputAccounting: 'INCLUDED_IN_INPUT',
+      aliases: [`gm-${crypto.randomUUID().slice(0, 8)}`],
+      effectiveFrom: '2026-08-03',
+      effectiveTo: '2026-12-31',
+      inactive: false,
+      source: 'https://example.test/pricing',
+      verifiedAt: '2026-08-03',
+    },
+    {
+      provider: 'azure',
+      model: `dall-e-rich-${crypto.randomUUID().slice(0, 8)}`,
+      status: 'DEPRECATED',
+      tier: 'fast_mode',
+      billingUnit: 'IMAGE',
+      perUnitMicros: 40_000,
+      aliases: [`dl-${crypto.randomUUID().slice(0, 8)}`],
+      effectiveFrom: '2026-09-01',
+      effectiveTo: '2027-01-31',
+      inactive: true,
+      source: 'https://example.test/image-pricing',
+      verifiedAt: '2026-09-01',
+    },
+  ];
+}
+
 const AUDIT_ACTIONS = [
   'rate_card_draft_created',
   'rate_card_entries_imported',
   'rate_card_published',
   'rate_card_retired',
   'rate_card_static_imported',
+  'rate_card_draft_cloned',
 ];
 
 async function cleanupRateCardData(): Promise<void> {
@@ -864,4 +907,227 @@ test('42. static parity: every DB row keeps exact bigint money, UTC dates, and D
     assert.equal(row.effectiveFrom.getUTCHours(), 0);
     assert.ok(['STANDARD', 'BATCH', 'PRIORITY', 'FAST_MODE'].includes(row.tier ?? ''));
   }
+});
+
+// ---------------------------------------------------------------------------
+// CLONE (Update Prices: clone an existing snapshot into a fresh DRAFT)
+// ---------------------------------------------------------------------------
+
+/** Seed a source snapshot and flip it to ACTIVE directly (bypasses the publish
+ *  overlap check so clone tests stay isolated from any pre-seeded ACTIVE card). */
+async function createActiveSource(v: string, entries?: unknown[]): Promise<void> {
+  await createDraft(v);
+  await importRateCardEntries(
+    adminDeps,
+    { version: v, source: 'https://example.test/pricing', generatedAt: '2026-08-03', entries: entries ?? cardEntries() },
+    ACTOR,
+  );
+  await prisma.providerRateCardSnapshot.update({
+    where: { version: v },
+    data: {
+      status: 'ACTIVE',
+      publishedAt: utcDate('2026-08-03'),
+      effectiveFrom: utcDate('2026-08-03'),
+    },
+  });
+}
+
+test('43. cloneRateCard clones an ACTIVE source into a fresh DRAFT', async () => {
+  const src = version();
+  await createActiveSource(src);
+  const target = version();
+  const meta = await cloneRateCard(adminDeps, { sourceVersion: src, newVersion: target }, ACTOR);
+  assert.equal(meta.status, 'DRAFT');
+  assert.equal(meta.version, target);
+  assert.equal(meta.entryCount, 1);
+  assert.equal(meta.publishedAt, null);
+  assert.equal(meta.retiredAt, null);
+  assert.equal(meta.effectiveFrom, null);
+  assert.equal(meta.effectiveTo, null);
+  const sourceRow = await prisma.providerRateCardSnapshot.findUnique({ where: { version: src } });
+  assert.equal(sourceRow!.status, 'ACTIVE', 'the source must remain unchanged');
+  assert.equal(await auditCountFor('rate_card_draft_cloned', target), 1);
+});
+
+test('44. cloneRateCard copies snapshot metadata and every pricing-definition field verbatim with fresh database IDs', async () => {
+  const src = version();
+  await createActiveSource(src, richCardEntries());
+  // Give the source distinctive snapshot pricing metadata so the test proves
+  // the clone copies it explicitly instead of silently falling back to the
+  // database column defaults (schemaVersion 1 / USD / MICROS / NANO_USD / RESEARCH_SNAPSHOT).
+  await prisma.providerRateCardSnapshot.update({
+    where: { version: src },
+    data: {
+      schemaVersion: 7,
+      currency: 'EUR',
+      storageUnit: 'NANOS',
+      engineUnit: 'MICRO_USD',
+      provenance: 'MANUAL_ADMIN',
+    },
+  });
+
+  const target = version();
+  await cloneRateCard(adminDeps, { sourceVersion: src, newVersion: target }, ACTOR);
+
+  const srcRow = await prisma.providerRateCardSnapshot.findUnique({ where: { version: src } });
+  const targetRow = await prisma.providerRateCardSnapshot.findUnique({ where: { version: target } });
+  assert.ok(srcRow && targetRow, 'both snapshots must exist');
+  assert.notEqual(targetRow.id, srcRow.id, 'the clone must receive a NEW snapshot ID');
+  assert.equal(targetRow.status, 'DRAFT', 'the clone must always be a fresh DRAFT');
+  assert.equal(targetRow.schemaVersion, srcRow.schemaVersion, 'schemaVersion must be copied');
+  assert.equal(targetRow.currency, srcRow.currency, 'currency must be copied');
+  assert.equal(targetRow.storageUnit, srcRow.storageUnit, 'storageUnit must be copied');
+  assert.equal(targetRow.engineUnit, srcRow.engineUnit, 'engineUnit must be copied');
+  assert.equal(targetRow.provenance, srcRow.provenance, 'provenance must be copied');
+  assert.equal(targetRow.effectiveFrom, null, 'lifecycle window must NOT be copied');
+  assert.equal(targetRow.effectiveTo, null, 'lifecycle window must NOT be copied');
+  assert.equal(targetRow.publishedAt, null, 'publishedAt must NOT be copied');
+  assert.equal(targetRow.retiredAt, null, 'retiredAt must NOT be copied');
+
+  const srcEntries = await prisma.providerRateCardEntry.findMany({
+    where: { snapshot: { version: src } },
+    orderBy: [{ provider: 'asc' }, { model: 'asc' }],
+  });
+  const targetEntries = await prisma.providerRateCardEntry.findMany({
+    where: { snapshot: { version: target } },
+    orderBy: [{ provider: 'asc' }, { model: 'asc' }],
+  });
+  assert.equal(targetEntries.length, srcEntries.length);
+  assert.ok(targetEntries.length >= 2, 'the rich source must carry multiple entries');
+  const srcIds = new Set(srcEntries.map((e) => e.id));
+  const srcSnapshotIds = new Set(srcEntries.map((e) => e.snapshotId));
+  for (let i = 0; i < srcEntries.length; i++) {
+    const se = srcEntries[i];
+    const te = targetEntries[i];
+    assert.ok(!srcIds.has(te.id), 'cloned entries must receive NEW database IDs');
+    assert.ok(!srcSnapshotIds.has(te.snapshotId), 'cloned entries must point to the NEW snapshot');
+    assert.notEqual(te.id, se.id);
+    assert.notEqual(te.snapshotId, se.snapshotId);
+    // Identity + tier + status + billing semantics
+    assert.equal(te.provider, se.provider);
+    assert.equal(te.model, se.model);
+    assert.equal(te.status, se.status);
+    assert.equal(te.tier, se.tier);
+    assert.equal(te.billingUnit, se.billingUnit);
+    assert.equal(te.cachedInputAccounting, se.cachedInputAccounting);
+    assert.equal(te.inactive, se.inactive);
+    assert.equal(te.source, se.source);
+    // Money (exact BigInt)
+    assert.equal(te.inputMicrosPerMillion, se.inputMicrosPerMillion);
+    assert.equal(te.outputMicrosPerMillion, se.outputMicrosPerMillion);
+    assert.equal(te.cachedInputMicrosPerMillion, se.cachedInputMicrosPerMillion);
+    assert.equal(te.cachedOutputMicrosPerMillion, se.cachedOutputMicrosPerMillion);
+    assert.equal(te.perUnitMicros, se.perUnitMicros);
+    assert.equal(te.audioInputMicrosPerMillion, se.audioInputMicrosPerMillion);
+    assert.equal(te.audioOutputMicrosPerMillion, se.audioOutputMicrosPerMillion);
+    assert.equal(te.tokensPerSecond, se.tokensPerSecond);
+    // Aliases (JSON) + dates
+    assert.deepEqual(te.aliases, se.aliases);
+    assert.equal(te.effectiveFrom.toISOString(), se.effectiveFrom.toISOString());
+    assert.equal(
+      te.effectiveTo === null ? null : te.effectiveTo.toISOString(),
+      se.effectiveTo === null ? null : se.effectiveTo.toISOString(),
+    );
+    assert.equal(
+      te.verifiedAt === null ? null : te.verifiedAt.toISOString(),
+      se.verifiedAt === null ? null : se.verifiedAt.toISOString(),
+    );
+  }
+});
+
+test('45. cloneRateCard duplicate newVersion -> RATE_CARD_ADMIN_VERSION_TAKEN', async () => {
+  const src = version();
+  await createActiveSource(src);
+  const target = version();
+  await cloneRateCard(adminDeps, { sourceVersion: src, newVersion: target }, ACTOR);
+  await assert.rejects(
+    cloneRateCard(adminDeps, { sourceVersion: src, newVersion: target }, ACTOR),
+    rejectsWith('RATE_CARD_ADMIN_VERSION_TAKEN'),
+  );
+});
+
+test('46. cloneRateCard source not found -> RATE_CARD_ADMIN_NOT_FOUND', async () => {
+  await assert.rejects(
+    cloneRateCard(adminDeps, { sourceVersion: version(), newVersion: version() }, ACTOR),
+    rejectsWith('RATE_CARD_ADMIN_NOT_FOUND'),
+  );
+});
+
+test('47. cloneRateCard same source and new version -> RATE_CARD_ADMIN_INVALID_PAYLOAD', async () => {
+  const v = version();
+  await createDraft(v);
+  await assert.rejects(
+    cloneRateCard(adminDeps, { sourceVersion: v, newVersion: v }, ACTOR),
+    rejectsWith('RATE_CARD_ADMIN_INVALID_PAYLOAD'),
+  );
+});
+
+test('49. cloneRateCard rejects a DRAFT source -> RATE_CARD_ADMIN_ACTIVE_REQUIRED', async () => {
+  const src = version();
+  await createDraft(src);
+  await importRateCardEntries(
+    adminDeps,
+    { version: src, source: 's', generatedAt: '2026-08-03', entries: cardEntries() },
+    ACTOR,
+  );
+  await assert.rejects(
+    cloneRateCard(adminDeps, { sourceVersion: src, newVersion: version() }, ACTOR),
+    rejectsWith('RATE_CARD_ADMIN_ACTIVE_REQUIRED'),
+  );
+});
+
+test('50. cloneRateCard rejects a RETIRED source -> RATE_CARD_ADMIN_ACTIVE_REQUIRED', async () => {
+  const src = version();
+  await createActiveSource(src);
+  await retireRateCard(adminDeps, { version: src }, ACTOR);
+  await assert.rejects(
+    cloneRateCard(adminDeps, { sourceVersion: src, newVersion: version() }, ACTOR),
+    rejectsWith('RATE_CARD_ADMIN_ACTIVE_REQUIRED'),
+  );
+});
+
+test('48. cloneRateCard failure rolls back everything (no target DRAFT remains)', async () => {
+  const src = version();
+  await createActiveSource(src);
+  const target = version();
+
+  let failNextCopy = true;
+  const failingClient = {
+    ...prisma,
+    $transaction: (
+      fn: (tx: object) => Promise<unknown>,
+      options?: { isolationLevel?: unknown },
+    ) =>
+      prisma.$transaction(async (tx) => {
+        const bound = (obj: object, prop: PropertyKey) => {
+          const value = (obj as Record<PropertyKey, unknown>)[prop];
+          return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(obj) : value;
+        };
+        const entryProxy = new Proxy(tx.providerRateCardEntry, {
+          get: (target, prop) => {
+            if (prop === 'createMany' && failNextCopy) {
+              throw new Error('injected clone copy failure');
+            }
+            return bound(target, prop);
+          },
+        });
+        const txProxy = new Proxy(tx, {
+          get: (target, prop) => (prop === 'providerRateCardEntry' ? entryProxy : bound(target, prop)),
+        });
+        return fn(txProxy);
+      }, options),
+  } as unknown as typeof prisma;
+
+  const failingRepo = createPrismaProviderRateCardAdminRepository(failingClient);
+  await assert.rejects(
+    cloneRateCard({ repository: failingRepo }, { sourceVersion: src, newVersion: target }, ACTOR),
+    rejectsWith('RATE_CARD_ADMIN_DATABASE_ERROR'),
+  );
+
+  const targetRow = await prisma.providerRateCardSnapshot.findUnique({ where: { version: target } });
+  assert.equal(targetRow, null, 'no target DRAFT may remain after a failed clone');
+  const targetEntries = await prisma.providerRateCardEntry.count({ where: { snapshot: { version: target } } });
+  assert.equal(targetEntries, 0, 'no cloned entries may remain after a failed clone');
+  const sourceRow = await prisma.providerRateCardSnapshot.findUnique({ where: { version: src } });
+  assert.equal(sourceRow!.status, 'ACTIVE', 'the source must remain unchanged');
 });

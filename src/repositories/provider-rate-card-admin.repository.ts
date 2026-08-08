@@ -232,6 +232,19 @@ export interface AdminEntryDeleteInput extends AdminAuditInput {
   entryId: string;
 }
 
+export type AdminCloneOutcome =
+  | { kind: 'cloned'; snapshot: ProviderRateCardSnapshotRow }
+  | { kind: 'source_not_found' }
+  | { kind: 'source_not_active' }
+  | { kind: 'target_version_taken' };
+
+export interface AdminCloneInput extends AdminAuditInput {
+  /** The immutable source snapshot version to clone pricing from. */
+  sourceVersion: string;
+  /** The new, unique DRAFT version that receives the copied pricing. */
+  newVersion: string;
+}
+
 export interface AdminSnapshotListItem {
   id: string;
   version: string;
@@ -268,6 +281,7 @@ export interface ProviderRateCardAdminRepository {
   createEntry(input: AdminEntryCreateInput): Promise<AdminEntryCreateOutcome>;
   updateEntry(input: AdminEntryUpdateInput): Promise<AdminEntryUpdateOutcome>;
   deleteEntry(input: AdminEntryDeleteInput): Promise<AdminEntryDeleteOutcome>;
+  cloneSnapshot(input: AdminCloneInput): Promise<AdminCloneOutcome>;
   list(query: AdminListQuery): Promise<AdminListResult>;
   findSnapshotByVersion(version: string): Promise<ProviderRateCardSnapshotRow | null>;
 }
@@ -379,6 +393,40 @@ function entryMutationData(
     inactive: row.inactive,
     source: row.source,
     verifiedAt: row.verifiedAt,
+  };
+}
+
+/**
+ * Map a persisted source entry row to the unchecked create payload of a
+ * cloned entry. Every pricing field is copied verbatim (exact bigint money,
+ * dates, DB-native enum spellings); only the row identity (id, snapshotId) is
+ * regenerated so the clone receives fresh database IDs.
+ */
+function snapshotEntryToCreateData(
+  entry: ProviderRateCardEntryRow,
+): Omit<Prisma.ProviderRateCardEntryUncheckedCreateInput, 'snapshotId'> {
+  type CreateData = Omit<Prisma.ProviderRateCardEntryUncheckedCreateInput, 'snapshotId'>;
+  return {
+    provider: entry.provider,
+    model: entry.model,
+    status: entry.status as CreateData['status'],
+    tier: entry.tier as CreateData['tier'],
+    billingUnit: entry.billingUnit as CreateData['billingUnit'],
+    inputMicrosPerMillion: entry.inputMicrosPerMillion,
+    outputMicrosPerMillion: entry.outputMicrosPerMillion,
+    cachedInputMicrosPerMillion: entry.cachedInputMicrosPerMillion,
+    cachedOutputMicrosPerMillion: entry.cachedOutputMicrosPerMillion,
+    perUnitMicros: entry.perUnitMicros,
+    audioInputMicrosPerMillion: entry.audioInputMicrosPerMillion,
+    audioOutputMicrosPerMillion: entry.audioOutputMicrosPerMillion,
+    tokensPerSecond: entry.tokensPerSecond,
+    cachedInputAccounting: entry.cachedInputAccounting as CreateData['cachedInputAccounting'],
+    aliases: entry.aliases === null ? Prisma.DbNull : entry.aliases,
+    effectiveFrom: entry.effectiveFrom,
+    effectiveTo: entry.effectiveTo,
+    inactive: entry.inactive,
+    source: entry.source,
+    verifiedAt: entry.verifiedAt,
   };
 }
 
@@ -861,6 +909,86 @@ export function createPrismaProviderRateCardAdminRepository(
         });
       } catch (err) {
         throw databaseError(`could not delete entry from draft "${input.version}"`, err);
+      }
+    },
+
+    async cloneSnapshot(input) {
+      try {
+        return await client.$transaction(async (tx) => {
+          const source = await tx.providerRateCardSnapshot.findUnique({
+            where: { version: input.sourceVersion },
+            include: entriesInclude,
+          });
+          if (source === null) {
+            return { kind: 'source_not_found' as const };
+          }
+          if (source.status !== 'ACTIVE') {
+            return { kind: 'source_not_active' as const };
+          }
+
+          const created = await tx.providerRateCardSnapshot.create({
+            data: {
+              version: input.newVersion,
+              status: 'DRAFT',
+              source: source.source,
+              generatedAt: source.generatedAt,
+              // Snapshot pricing metadata is copied verbatim so the clone is a
+              // true replica rather than a row silently carrying DB defaults.
+              schemaVersion: source.schemaVersion,
+              currency: source.currency,
+              storageUnit: source.storageUnit,
+              engineUnit: source.engineUnit,
+              provenance: source.provenance,
+              // Lifecycle state is never copied: the clone is a fresh DRAFT
+              // with a null business window, no publishedAt, no retiredAt.
+              effectiveFrom: null,
+              effectiveTo: null,
+              publishedAt: null,
+              retiredAt: null,
+            },
+          });
+
+          // Copy every source pricing entry verbatim with fresh database IDs.
+          // Snapshot creation + entry copying happen inside ONE transaction:
+          // any failure aborts the whole clone and leaves no target DRAFT.
+          await tx.providerRateCardEntry.createMany({
+            data: source.entries.map((entry) => ({
+              ...snapshotEntryToCreateData(entry),
+              snapshotId: created.id,
+            })),
+          });
+
+          await tx.auditLog.create({
+            data: {
+              actorId: input.actorId,
+              action: input.action,
+              metadata:
+                input.metadata ?? {
+                  sourceVersion: input.sourceVersion,
+                  version: input.newVersion,
+                  snapshotId: created.id,
+                  entryCount: source.entries.length,
+                },
+            },
+          });
+
+          const snapshot = await tx.providerRateCardSnapshot.findUnique({
+            where: { id: created.id },
+            include: entriesInclude,
+          });
+          return {
+            kind: 'cloned' as const,
+            snapshot: toSnapshotRow(snapshot as unknown as PrismaSnapshot),
+          };
+        });
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          return { kind: 'target_version_taken' as const };
+        }
+        throw databaseError(
+          `could not clone rate card "${input.sourceVersion}" to "${input.newVersion}"`,
+          err,
+        );
       }
     },
 

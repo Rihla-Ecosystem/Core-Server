@@ -61,6 +61,7 @@ const AUDIT_ACTIONS = [
   'rate_card_published',
   'rate_card_retired',
   'rate_card_static_imported',
+  'rate_card_draft_cloned',
 ];
 
 async function cleanupRateCardData(): Promise<void> {
@@ -1165,5 +1166,121 @@ describe('Admin Rate Card API (Phase 2F-C)', () => {
     // Large value exceeds engine range, expect validation error
     assert.equal(res.status, 400);
     assert.equal(res.body.error, 'Validation error');
+  });
+
+  // =============================================================================
+  // CLONE (POST /:version/clone → atomic ACTIVE → DRAFT for Update Prices)
+  // =============================================================================
+
+  test('50. POST /:version/clone returns 201 and clones a snapshot into a DRAFT', async () => {
+    const src = version();
+    await request('POST', '/api/admin/rate-cards/drafts', ADMIN_TOKEN, { version: src, source: 's', generatedAt: '2026-08-03' });
+    await request('POST', `/api/admin/rate-cards/drafts/${src}/import`, ADMIN_TOKEN, {
+      source: 's',
+      generatedAt: '2026-08-03',
+      entries: cardEntries(),
+    });
+    // Flip the source to ACTIVE directly: the environment's pre-seeded ACTIVE
+    // card overlaps every publish window, so the publish endpoint is unusable
+    // in this suite. Cloning is restricted to ACTIVE sources only.
+    await prisma.providerRateCardSnapshot.update({
+      where: { version: src },
+      data: { status: 'ACTIVE', publishedAt: new Date('2026-08-03T00:00:00Z'), effectiveFrom: new Date('2026-08-03T00:00:00Z') },
+    });
+
+    const target = version();
+    const res = await request('POST', `/api/admin/rate-cards/${src}/clone`, ADMIN_TOKEN, { newVersion: target });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.success, true);
+    const data = res.body.data as { status: string; version: string; entryCount: number; publishedAt: null };
+    assert.equal(data.status, 'DRAFT');
+    assert.equal(data.version, target);
+    assert.equal(data.entryCount, 1);
+    assert.equal(data.publishedAt, null);
+
+    const detail = await request('GET', `/api/admin/rate-cards/${target}`, ADMIN_TOKEN);
+    assert.equal(detail.status, 200);
+    assert.equal((detail.body.data as { status: string }).status, 'DRAFT');
+    const sourceDetail = await request('GET', `/api/admin/rate-cards/${src}`, ADMIN_TOKEN);
+    assert.equal((sourceDetail.body.data as { status: string }).status, 'ACTIVE', 'the source must remain unchanged');
+  });
+
+  test('51. POST /:version/clone duplicate newVersion -> 409 VERSION_TAKEN', async () => {
+    const src = version();
+    await request('POST', '/api/admin/rate-cards/drafts', ADMIN_TOKEN, { version: src, source: 's', generatedAt: '2026-08-03' });
+    await prisma.providerRateCardSnapshot.update({
+      where: { version: src },
+      data: { status: 'ACTIVE', publishedAt: new Date('2026-08-03T00:00:00Z'), effectiveFrom: new Date('2026-08-03T00:00:00Z') },
+    });
+    const target = version();
+    await request('POST', `/api/admin/rate-cards/${src}/clone`, ADMIN_TOKEN, { newVersion: target });
+    const res = await request('POST', `/api/admin/rate-cards/${src}/clone`, ADMIN_TOKEN, { newVersion: target });
+    assert.equal(res.status, 409);
+    assert.equal(res.body.code, 'RATE_CARD_ADMIN_VERSION_TAKEN');
+  });
+
+  test('51b. POST /:version/clone on a DRAFT source -> 409 ACTIVE_REQUIRED', async () => {
+    const src = version();
+    await request('POST', '/api/admin/rate-cards/drafts', ADMIN_TOKEN, { version: src, source: 's', generatedAt: '2026-08-03' });
+    const res = await request('POST', `/api/admin/rate-cards/${src}/clone`, ADMIN_TOKEN, { newVersion: version() });
+    assert.equal(res.status, 409);
+    assert.equal(res.body.code, 'RATE_CARD_ADMIN_ACTIVE_REQUIRED');
+  });
+
+  test('51c. POST /:version/clone on a RETIRED source -> 409 ACTIVE_REQUIRED', async () => {
+    const src = version();
+    await request('POST', '/api/admin/rate-cards/drafts', ADMIN_TOKEN, { version: src, source: 's', generatedAt: '2026-08-03' });
+    await prisma.providerRateCardSnapshot.update({
+      where: { version: src },
+      data: {
+        status: 'RETIRED',
+        publishedAt: new Date('2026-08-03T00:00:00Z'),
+        retiredAt: new Date('2026-08-03T12:00:00Z'),
+        effectiveFrom: new Date('2026-08-03T00:00:00Z'),
+      },
+    });
+    const res = await request('POST', `/api/admin/rate-cards/${src}/clone`, ADMIN_TOKEN, { newVersion: version() });
+    assert.equal(res.status, 409);
+    assert.equal(res.body.code, 'RATE_CARD_ADMIN_ACTIVE_REQUIRED');
+  });
+
+  test('52. POST /:version/clone unknown source -> 404 NOT_FOUND', async () => {
+    const res = await request('POST', `/api/admin/rate-cards/${version()}/clone`, ADMIN_TOKEN, { newVersion: version() });
+    assert.equal(res.status, 404);
+    assert.equal(res.body.code, 'RATE_CARD_ADMIN_NOT_FOUND');
+  });
+
+  test('53. POST /:version/clone same source/new version -> 400 INVALID_PAYLOAD', async () => {
+    const v = version();
+    await request('POST', '/api/admin/rate-cards/drafts', ADMIN_TOKEN, { version: v, source: 's', generatedAt: '2026-08-03' });
+    const res = await request('POST', `/api/admin/rate-cards/${v}/clone`, ADMIN_TOKEN, { newVersion: v });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.code, 'RATE_CARD_ADMIN_INVALID_PAYLOAD');
+  });
+
+  test('54. POST /:version/clone with an unknown body key -> 400 Validation error (strict schema)', async () => {
+    const src = version();
+    await request('POST', '/api/admin/rate-cards/drafts', ADMIN_TOKEN, { version: src, source: 's', generatedAt: '2026-08-03' });
+    const res = await request('POST', `/api/admin/rate-cards/${src}/clone`, ADMIN_TOKEN, { newVersion: version(), unexpectedKey: true });
+    assert.equal(res.status, 400);
+    assert.equal(res.body.error, 'Validation error');
+  });
+
+  test('55. POST /:version/clone unauthenticated -> 401', async () => {
+    const src = version();
+    await request('POST', '/api/admin/rate-cards/drafts', ADMIN_TOKEN, { version: src, source: 's', generatedAt: '2026-08-03' });
+    const res = await fetch(`${baseUrl}/api/admin/rate-cards/${src}/clone`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newVersion: version() }),
+    });
+    assert.equal(res.status, 401);
+  });
+
+  test('56. POST /:version/clone non-admin token -> 403', async () => {
+    const src = version();
+    await request('POST', '/api/admin/rate-cards/drafts', ADMIN_TOKEN, { version: src, source: 's', generatedAt: '2026-08-03' });
+    const res = await request('POST', `/api/admin/rate-cards/${src}/clone`, USER_TOKEN, { newVersion: version() });
+    assert.equal(res.status, 403);
   });
 });
