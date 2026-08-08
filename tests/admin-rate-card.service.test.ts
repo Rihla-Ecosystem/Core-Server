@@ -22,6 +22,8 @@ import type {
   AdminPublishOutcome,
   AdminRetireInput,
   AdminRetireOutcome,
+  AdminCloneInput,
+  AdminCloneOutcome,
   AdminListQuery,
   AdminListResult,
   AdminSnapshotListItem,
@@ -33,6 +35,7 @@ import {
   validateRateCardDraft,
   publishRateCard,
   retireRateCard,
+  cloneRateCard,
   listRateCardSnapshots,
   getRateCardByVersion,
   importStaticRateCardAsDraft,
@@ -116,6 +119,7 @@ class FakeAdminRepository implements ProviderRateCardAdminRepository {
   publishOutcome?: AdminPublishOutcome;
   importOutcome?: AdminImportOutcome;
   retireOutcome?: AdminRetireOutcome;
+  cloneOutcome?: AdminCloneOutcome;
   findResult?: ProviderRateCardSnapshotRow | null | 'default';
   calls: Array<{ op: string; args: unknown }> = [];
 
@@ -208,6 +212,39 @@ class FakeAdminRepository implements ProviderRateCardAdminRepository {
     };
     this.drafts.set(input.version, updated);
     return { kind: 'retired', snapshot: updated };
+  }
+
+  async cloneSnapshot(input: AdminCloneInput): Promise<AdminCloneOutcome> {
+    this.record('cloneSnapshot', {
+      sourceVersion: input.sourceVersion,
+      newVersion: input.newVersion,
+      actorId: input.actorId,
+      action: input.action,
+    });
+    if (this.cloneOutcome !== undefined) return this.cloneOutcome;
+    const source = this.drafts.get(input.sourceVersion);
+    if (source === undefined) return { kind: 'source_not_found' };
+    if (source.status !== 'ACTIVE') return { kind: 'source_not_active' };
+    if (this.drafts.has(input.newVersion)) return { kind: 'target_version_taken' };
+    const targetId = `snap-${input.newVersion}`;
+    const cloned: ProviderRateCardSnapshotRow = {
+      ...source,
+      id: targetId,
+      version: input.newVersion,
+      status: 'DRAFT',
+      publishedAt: null,
+      retiredAt: null,
+      effectiveFrom: null,
+      effectiveTo: null,
+      updatedAt: new Date(),
+      entries: source.entries.map((entry) => ({
+        ...entry,
+        id: `entry-clone-${entry.id}`,
+        snapshotId: targetId,
+      })),
+    };
+    this.drafts.set(input.newVersion, cloned);
+    return { kind: 'cloned', snapshot: cloned };
   }
 
   async list(query: AdminListQuery): Promise<AdminListResult> {
@@ -926,4 +963,144 @@ test('34. importStaticRateCardAsDraft source/generatedAt mirror the static card'
   const meta = await importStaticRateCardAsDraft({ repository: repo }, {}, ACTOR);
   assert.equal(meta.source, PROVIDER_RATE_CARD.source);
   assert.equal(meta.generatedAt, PROVIDER_RATE_CARD.generatedAt);
+});
+
+// ---------------------------------------------------------------------------
+// CLONE (Update Prices: clone an existing snapshot into a fresh DRAFT)
+// ---------------------------------------------------------------------------
+
+test('35. cloneRateCard clones an ACTIVE snapshot into a DRAFT, copying all pricing entries', async () => {
+  const repo = newRepo();
+  await createDraftRateCard({ repository: repo }, { version: 'active-1', source: 's', generatedAt: '2026-08-03' }, ACTOR);
+  await importRateCardEntries(
+    { repository: repo },
+    { version: 'active-1', source: 's', generatedAt: '2026-08-03', entries: validCardEntries() },
+    ACTOR,
+  );
+  repo.drafts.set('active-1', makeSnapshotRow({
+    version: 'active-1',
+    status: 'ACTIVE',
+    publishedAt: new Date('2026-08-03T00:00:00Z'),
+    effectiveFrom: new Date('2026-08-03T00:00:00Z'),
+    entries: (repo.drafts.get('active-1')?.entries ?? []).map((e) => ({ ...e, id: `src-${e.id}`, snapshotId: 'snap-active-1' })),
+  }));
+
+  const meta = await cloneRateCard({ repository: repo }, { sourceVersion: 'active-1', newVersion: '1.1.0' }, ACTOR);
+  assert.equal(meta.status, 'DRAFT');
+  assert.equal(meta.version, '1.1.0');
+  assert.equal(meta.entryCount, 1);
+  assert.equal(meta.publishedAt, null);
+  assert.equal(meta.retiredAt, null);
+  assert.equal(meta.effectiveFrom, null);
+  assert.equal(meta.effectiveTo, null);
+  const call = repo.calls.find((c) => c.op === 'cloneSnapshot');
+  assert.ok(call);
+  const args = call.args as AdminCloneInput;
+  assert.equal(args.sourceVersion, 'active-1');
+  assert.equal(args.newVersion, '1.1.0');
+  assert.equal(args.action, 'rate_card_draft_cloned');
+  assert.equal(args.actorId, ACTOR);
+});
+
+test('36. cloneRateCard cloned entries get new IDs and the source stays unchanged', async () => {
+  const repo = newRepo();
+  await seededDraft(repo, 'active-1');
+  const sourceRow = makeSnapshotRow({
+    version: 'active-1',
+    status: 'ACTIVE',
+    publishedAt: new Date('2026-08-03T00:00:00Z'),
+    effectiveFrom: new Date('2026-08-03T00:00:00Z'),
+    entries: (repo.drafts.get('active-1')?.entries ?? []).map((e) => ({
+      ...e,
+      id: `src-${e.id}`,
+      snapshotId: 'snap-active-1',
+    })),
+  });
+  repo.drafts.set('active-1', sourceRow);
+  const sourceEntry = sourceRow.entries[0];
+
+  const meta = await cloneRateCard({ repository: repo }, { sourceVersion: 'active-1', newVersion: '1.1.0' }, ACTOR);
+  assert.equal(meta.entryCount, 1);
+
+  const target = repo.drafts.get('1.1.0');
+  assert.ok(target);
+  assert.equal(target.status, 'DRAFT');
+  assert.notEqual(target.id, sourceRow.id, 'the clone must be a NEW snapshot');
+  assert.equal(target.entries.length, 1);
+  assert.notEqual(target.entries[0].id, sourceEntry.id, 'cloned entries must have NEW database IDs');
+  assert.equal(target.entries[0].snapshotId, target.id, 'cloned entries must point to the new snapshot');
+  assert.equal(target.entries[0].provider, sourceEntry.provider);
+  assert.equal(target.entries[0].model, sourceEntry.model);
+  assert.equal(target.entries[0].inputMicrosPerMillion, sourceEntry.inputMicrosPerMillion);
+  assert.equal(target.entries[0].outputMicrosPerMillion, sourceEntry.outputMicrosPerMillion);
+
+  const stored = repo.drafts.get('active-1');
+  assert.ok(stored);
+  assert.equal(stored.status, 'ACTIVE', 'the source must remain unchanged');
+  assert.deepEqual(stored, sourceRow, 'the source must remain unchanged');
+});
+
+test('37. cloneRateCard duplicate newVersion -> RATE_CARD_ADMIN_VERSION_TAKEN', async () => {
+  const repo = newRepo();
+  repo.cloneOutcome = { kind: 'target_version_taken' };
+  await assert.rejects(
+    cloneRateCard({ repository: repo }, { sourceVersion: 'active-1', newVersion: '1.1.0' }, ACTOR),
+    (e: unknown) => { asAdminError(e, 'RATE_CARD_ADMIN_VERSION_TAKEN'); return true; },
+  );
+});
+
+test('38. cloneRateCard source not found -> RATE_CARD_ADMIN_NOT_FOUND', async () => {
+  const repo = newRepo();
+  repo.cloneOutcome = { kind: 'source_not_found' };
+  await assert.rejects(
+    cloneRateCard({ repository: repo }, { sourceVersion: 'missing', newVersion: '1.1.0' }, ACTOR),
+    (e: unknown) => {
+      const err = asAdminError(e, 'RATE_CARD_ADMIN_NOT_FOUND');
+      assert.equal(err.version, 'missing');
+      return true;
+    },
+  );
+});
+
+test('39. cloneRateCard same source and new version -> RATE_CARD_ADMIN_INVALID_PAYLOAD', async () => {
+  const repo = newRepo();
+  await assert.rejects(
+    cloneRateCard({ repository: repo }, { sourceVersion: '1.1.0', newVersion: '1.1.0' }, ACTOR),
+    (e: unknown) => { asAdminError(e, 'RATE_CARD_ADMIN_INVALID_PAYLOAD'); return true; },
+  );
+  assert.ok(!repo.calls.some((c) => c.op === 'cloneSnapshot'), 'a same-version clone must not reach the repository');
+});
+
+test('40. cloneRateCard blank newVersion -> RATE_CARD_ADMIN_INVALID_VERSION', async () => {
+  const repo = newRepo();
+  await assert.rejects(
+    cloneRateCard({ repository: repo }, { sourceVersion: 'active-1', newVersion: '   ' }, ACTOR),
+    (e: unknown) => { asAdminError(e, 'RATE_CARD_ADMIN_INVALID_VERSION'); return true; },
+  );
+});
+
+test('41. cloneRateCard rejects a DRAFT source -> RATE_CARD_ADMIN_ACTIVE_REQUIRED', async () => {
+  const repo = newRepo();
+  await seededDraft(repo, 'draft-1');
+  await assert.rejects(
+    cloneRateCard({ repository: repo }, { sourceVersion: 'draft-1', newVersion: '1.1.0' }, ACTOR),
+    (e: unknown) => { asAdminError(e, 'RATE_CARD_ADMIN_ACTIVE_REQUIRED'); return true; },
+  );
+  assert.ok(!repo.drafts.has('1.1.0'), 'no clone may be created from a DRAFT source');
+});
+
+test('42. cloneRateCard rejects a RETIRED source -> RATE_CARD_ADMIN_ACTIVE_REQUIRED', async () => {
+  const repo = newRepo();
+  repo.drafts.set('retired-1', makeSnapshotRow({
+    version: 'retired-1',
+    status: 'RETIRED',
+    publishedAt: new Date('2026-08-03T00:00:00Z'),
+    retiredAt: new Date('2026-09-01T00:00:00Z'),
+    effectiveFrom: new Date('2026-08-03T00:00:00Z'),
+  }));
+  await assert.rejects(
+    cloneRateCard({ repository: repo }, { sourceVersion: 'retired-1', newVersion: '1.1.0' }, ACTOR),
+    (e: unknown) => { asAdminError(e, 'RATE_CARD_ADMIN_ACTIVE_REQUIRED'); return true; },
+  );
+  assert.ok(!repo.drafts.has('1.1.0'), 'no clone may be created from a RETIRED source');
 });

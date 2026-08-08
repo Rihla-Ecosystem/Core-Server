@@ -126,6 +126,13 @@ export interface AdminRetireInput {
   effectiveTo?: string;
 }
 
+export interface AdminCloneInput {
+  /** The immutable source snapshot version to clone pricing from. */
+  sourceVersion: string;
+  /** The new, unique DRAFT version that receives the copied pricing. */
+  newVersion: string;
+}
+
 export interface AdminStaticImportInput {
   version?: string;
 }
@@ -155,6 +162,7 @@ const AUDIT_ACTIONS = {
   published: 'rate_card_published',
   retired: 'rate_card_retired',
   staticImported: 'rate_card_static_imported',
+  draftCloned: 'rate_card_draft_cloned',
 } as const;
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -960,6 +968,64 @@ export async function retireRateCard(
     );
   }
   return { ...metadataFromRow(outcome.snapshot), idempotentReplay: false };
+}
+
+/**
+ * Clone an existing snapshot into a brand-new DRAFT (the "Update Prices" flow).
+ *
+ * The repository performs the whole clone — target snapshot creation plus the
+ * verbatim copy of every source pricing entry — inside ONE database
+ * transaction, so a failed copy rolls the target back completely and leaves no
+ * DRAFT behind. Only an ACTIVE source may be cloned: DRAFT and RETIRED sources
+ * are rejected with RATE_CARD_ADMIN_ACTIVE_REQUIRED. The source is never
+ * modified and never retired, and its ACTIVE/RETIRED lifecycle state (status,
+ * publishedAt, retiredAt, business window) is never copied — while its pricing
+ * metadata (schemaVersion, currency, storageUnit, engineUnit, provenance) IS
+ * preserved — so the clone is always a fresh DRAFT with a null window, ready
+ * for the admin to edit, validate, and publish through the existing workflow.
+ */
+export async function cloneRateCard(
+  deps: ProviderRateCardAdminDependencies,
+  input: AdminCloneInput,
+  actorId: string,
+): Promise<ProviderRateCardSnapshotMetadata> {
+  const sourceVersion = requireVersion(input.sourceVersion);
+  const newVersion = requireVersion(input.newVersion);
+  if (sourceVersion === newVersion) {
+    throw adminError(
+      'RATE_CARD_ADMIN_INVALID_PAYLOAD',
+      'newVersion must differ from the source version',
+      { version: newVersion },
+    );
+  }
+  const outcome = await deps.repository.cloneSnapshot({
+    sourceVersion,
+    newVersion,
+    actorId,
+    action: AUDIT_ACTIONS.draftCloned,
+  });
+  if (outcome.kind === 'source_not_found') {
+    throw adminError(
+      'RATE_CARD_ADMIN_NOT_FOUND',
+      `rate card version "${sourceVersion}" was not found`,
+      { version: sourceVersion },
+    );
+  }
+  if (outcome.kind === 'source_not_active') {
+    throw adminError(
+      'RATE_CARD_ADMIN_ACTIVE_REQUIRED',
+      `rate card version "${sourceVersion}" must be ACTIVE to be cloned`,
+      { version: sourceVersion },
+    );
+  }
+  if (outcome.kind === 'target_version_taken') {
+    throw adminError(
+      'RATE_CARD_ADMIN_VERSION_TAKEN',
+      `rate card version "${newVersion}" already exists`,
+      { version: newVersion },
+    );
+  }
+  return metadataFromRow(outcome.snapshot);
 }
 
 /** List snapshots (pagination + optional lifecycle status filter). */

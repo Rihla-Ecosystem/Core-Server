@@ -152,6 +152,17 @@ export const adminRateCardRetireBodySchema = z
   })
   .strict();
 
+/**
+ * Clone body: copy an existing snapshot's pricing into a brand-new DRAFT
+ * under a fresh, unique version. `newVersion` must differ from the source
+ * `:version` (enforced by the service).
+ */
+export const adminRateCardCloneBodySchema = z
+  .object({
+    newVersion: z.string().trim().min(1),
+  })
+  .strict();
+
 export const adminRateCardVersionParamsSchema = z.object({
   version: z.string().trim().min(1),
 }).strict();
@@ -202,5 +213,6 @@ export type AdminRateCardDraftBody = z.infer<typeof adminRateCardDraftBodySchema
 export type AdminRateCardImportBody = z.infer<typeof adminRateCardImportBodySchema>;
 export type AdminRateCardPublishBody = z.infer<typeof adminRateCardPublishBodySchema>;
 export type AdminRateCardRetireBody = z.infer<typeof adminRateCardRetireBodySchema>;
+export type AdminRateCardCloneBody = z.infer<typeof adminRateCardCloneBodySchema>;
 export type AdminRateCardVersionParams = z.infer<typeof adminRateCardVersionParamsSchema>;
 export type AdminRateCardListQuery = z.infer<typeof adminRateCardListQuerySchema>;

@@ -6,6 +6,7 @@ import {
   adminRateCardImportBodySchema,
   adminRateCardPublishBodySchema,
   adminRateCardRetireBodySchema,
+  adminRateCardCloneBodySchema,
   adminRateCardVersionParamsSchema,
   adminRateCardListQuerySchema,
   adminRateCardEntryBodySchema,
@@ -356,6 +357,56 @@ router.post(
   validate(adminRateCardVersionParamsSchema, 'params'),
   validate(adminRateCardRetireBodySchema),
   adminRateCardController.retire,
+);
+
+/**
+ * @openapi
+ * /admin/rate-cards/{version}/clone:
+ *   post:
+ *     tags: [Admin]
+ *     summary: Clone a snapshot's pricing into a new DRAFT (atomic; admin only)
+ *     description: |
+ *       Copies ALL pricing entries of the source snapshot into a brand-new
+ *       DRAFT under `newVersion`. Snapshot creation + entry copying happen in
+ *       ONE database transaction, so a failed copy rolls back completely. The
+ *       source is never modified, never retired, and its ACTIVE/RETIRED
+ *       lifecycle state is never copied. `newVersion` must differ from
+ *       `:version`.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: version
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [newVersion]
+ *             properties:
+ *               newVersion: { type: string }
+ *     responses:
+ *       201:
+ *         description: Clone created as a DRAFT
+ *       400:
+ *         description: newVersion equals the source version
+ *       401:
+ *         description: Authentication required
+ *       403:
+ *         description: Insufficient permissions
+ *       404:
+ *         description: Source snapshot not found
+ *       409:
+ *         description: newVersion already exists
+ */
+router.post(
+  '/:version/clone',
+  validate(adminRateCardVersionParamsSchema, 'params'),
+  validate(adminRateCardCloneBodySchema),
+  adminRateCardController.clone,
 );
 
 export default router;
