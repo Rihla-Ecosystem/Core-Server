@@ -20,6 +20,8 @@ import { detectPromptInjection } from '../utils/prompt-injection.js';
 
 const CHAT_LIMITS = parseChatLimitsConfig(process.env);
 
+const AI_CHAT_TIMEOUT_MS = 120_000;
+
 export type ChatPersona = 'auto' | 'tour_guide' | 'local_expert' | 'safety_guru';
 
 interface ChatUserContext {
@@ -165,6 +167,7 @@ async function performChatCore(
         ...(options?.authorization ? { Authorization: options.authorization } : {}),
         'X-Internal-Api-Key': env.INTERNAL_API_KEY,
       },
+      AI_CHAT_TIMEOUT_MS,
     ).catch(() => {
       throw new AppError(502, 'AI service unavailable');
     });
