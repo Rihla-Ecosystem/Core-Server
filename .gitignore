@@ -6,3 +6,6 @@ dist/
 .prisma/
 .tmp/
 data/
+
+# Cloud deployment env (gitignored)
+.env.cloud
