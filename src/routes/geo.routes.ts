@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
-import { fetchPois, searchPlaces, fetchSitesByGovernorate, fetchGovernorates, fetchCountryBoundary, fetchSiteById } from '../services/geo.service.js';
+import { fetchPois, searchPlaces, fetchSitesByGovernorate, fetchGovernorates, fetchCountryBoundary, fetchSiteById, fetchAreaNotice } from '../services/geo.service.js';
 
 const router = Router();
 
@@ -143,6 +143,22 @@ router.get('/country', authenticate, async (req, res, next) => {
 router.get('/sites/:id', authenticate, async (req, res, next) => {
   try {
     const result = await fetchSiteById(req.params.id as string, req.headers.authorization);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const noticeSchema = z.object({
+  lat: z.coerce.number().min(-90).max(90),
+  lon: z.coerce.number().min(-180).max(180),
+  radius: z.coerce.number().positive().optional(),
+});
+
+router.get('/notice', authenticate, validate(noticeSchema, 'query'), async (req, res, next) => {
+  try {
+    const { lat, lon, radius } = req.query as unknown as { lat: number; lon: number; radius?: number };
+    const result = await fetchAreaNotice(lat, lon, radius, req.headers.authorization);
     res.json(result);
   } catch (err) {
     next(err);
