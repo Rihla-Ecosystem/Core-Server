@@ -30,7 +30,18 @@ export const uploadAvatar = multer({
   },
 });
 
-const AUDIO_MIMES = new Set(['audio/wav', 'audio/mpeg', 'audio/ogg', 'audio/webm', 'audio/mp4', 'audio/x-wav']);
+/** Matches the formats the billed Voice service can parse and duration-check. */
+const AUDIO_MIMES = new Set([
+  'audio/wav',
+  'audio/x-wav',
+  'audio/mpeg',
+  'audio/aiff',
+  'audio/x-aiff',
+  'audio/aac',
+  'audio/ogg',
+  'audio/flac',
+  'audio/x-flac',
+]);
 export const uploadAudio = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -38,7 +49,7 @@ export const uploadAudio = multer({
     if (AUDIO_MIMES.has(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(rejectImage('Only audio files (WAV, MP3, OGG, WEBM) are allowed'));
+      cb(rejectImage('Only WAV, MP3, AIFF, AAC, OGG, and FLAC audio files are allowed'));
     }
   },
 });

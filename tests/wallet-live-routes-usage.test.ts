@@ -31,6 +31,7 @@ import { Gender, TokenTransactionSource, TokenTransactionType, WalletStatus } fr
 
 const { default: app } = await import('../src/app.js');
 const { env } = await import('../src/config/env.js');
+const { walletPolicyConfig } = await import('../src/config/env.js');
 const { prisma } = await import('../src/config/prisma.js');
 const { ensureUserRole } = await import('./helpers/test-role-fixtures.js');
 const { signAccessToken } = await import('../src/utils/token.js');
@@ -230,8 +231,8 @@ describe('Wallet usage-based live route cutover (USAGE_BASED mode)', () => {
     };
   }
 
-  test('1. POST /api/chat charges priced usage tokens (not the fixed cost) and settles', async () => {
-    const { userId, walletId, token } = await createUser({ balance: 1000 });
+  test('1. POST /api/chat settles only the priced amount and returns the unused 1000-token reservation', async () => {
+    const { userId, walletId, token } = await createUser({ balance: 5000 });
     const idempotencyKey = crypto.randomUUID();
     try {
       const res = await fetch(`${baseUrl}/api/chat`, {
@@ -244,7 +245,7 @@ describe('Wallet usage-based live route cutover (USAGE_BASED mode)', () => {
       assert.equal(body.response, 'hello from ai');
 
       // Usage-based: 155000 nano-USD -> 2 Wallet Tokens (fixed cost was 1).
-      assert.equal(await balance(userId), 998);
+      assert.equal(await balance(userId), 4998);
 
       const consume = await prisma.tokenTransaction.findFirst({
         where: { userId, type: TokenTransactionType.CONSUME },
@@ -263,13 +264,20 @@ describe('Wallet usage-based live route cutover (USAGE_BASED mode)', () => {
       assert.ok(operation);
       assert.equal(operation.status, 'SETTLED');
       assert.equal(operation.actualWalletTokens, 2);
-      assert.equal(operation.reservedTokens, 1000);
+      assert.equal(
+        operation.reservedTokens,
+        walletPolicyConfig.maxReservationTokensByFeature.AI_CHAT_QUERY,
+      );
 
       const reservation = await prisma.tokenReservation.findUnique({
         where: { id: operation.reservationId },
       });
       assert.ok(reservation);
       assert.equal(reservation.status, 'COMPLETED');
+      const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+      assert.ok(wallet);
+      assert.equal(wallet.tokenBalance, 4998);
+      assert.equal(wallet.reservedBalance, 0);
       assert.ok(walletId);
     } finally {
       await cleanupUser(userId);

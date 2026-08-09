@@ -57,6 +57,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
   let aiCallCount = 0;
   let providerError = false;
   let delayedProviderError = false;
+  let cacheHit = false;
   const originalAiServiceUrl = env.AI_SERVICE_URL;
   const EMAIL_PREFIX = 'test_identify_token_';
 
@@ -116,7 +117,17 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
           return;
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(mockIdentifyResponse));
+        res.end(JSON.stringify(
+          cacheHit
+            ? {
+                ...mockIdentifyResponse,
+                cached: true,
+                usage: null,
+                providerCalls: [],
+                providerAttempts: [],
+              }
+            : mockIdentifyResponse,
+        ));
       });
       aiServer.listen(0, () => {
         const address = aiServer.address() as AddressInfo;
@@ -267,6 +278,44 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
       assert.equal(aiCallCount, callsBefore);
     } finally {
+      await deleteUserWithRelated(userId);
+    }
+  });
+
+  test('cache hit settles at zero and returns the complete reservation', async () => {
+    const { userId, token } = await createUser(5000);
+    const key = crypto.randomUUID();
+    const callsBefore = aiCallCount;
+    cacheHit = true;
+    try {
+      const res = await identifyRequest(token, key);
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.cached, true);
+      assert.equal(body.name, mockIdentifyResponse.name);
+      assert.equal(aiCallCount, callsBefore + 1);
+
+      const wallet = await prisma.tokenWallet.findUnique({ where: { userId } });
+      assert.ok(wallet);
+      assert.equal(wallet.tokenBalance, 5000);
+      assert.equal(wallet.reservedBalance, 0);
+      const cacheSettlementTransactions = await prisma.tokenTransaction.findMany({
+        where: { userId, type: TokenTransactionType.CONSUME },
+      });
+      assert.equal(cacheSettlementTransactions.length, 1);
+      assert.equal(cacheSettlementTransactions[0].tokens, 0);
+
+      const operation = await prisma.aIBillingOperation.findUnique({
+        where: { operationId: `usage:AI_IMAGE_ANALYSIS:${key}` },
+      });
+      assert.ok(operation);
+      assert.equal(operation.status, AIBillingOperationStatus.SETTLED);
+      assert.equal(operation.actualWalletTokens, 0);
+      const reservation = await prisma.tokenReservation.findUnique({ where: { id: operation.reservationId } });
+      assert.ok(reservation);
+      assert.equal(reservation.status, 'COMPLETED');
+    } finally {
+      cacheHit = false;
       await deleteUserWithRelated(userId);
     }
   });
@@ -434,7 +483,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
   });
 
   test('9. Concurrent distinct requests cannot overspend', async () => {
-    const { userId, token } = await createUser(1000);
+    const { userId, token } = await createUser(100);
     const callsBefore = aiCallCount;
     try {
       const [resA, resB] = await Promise.all([
@@ -451,7 +500,7 @@ describe('Identify token consumption - AI_IMAGE_ANALYSIS integration', () => {
       const insufficientBody = await insufficientRes.json();
       assert.equal(insufficientBody.error, 'Insufficient token balance');
 
-      assert.equal(await getBalance(userId), 998);
+      assert.equal(await getBalance(userId), 98);
       assert.equal(
         await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.CONSUME } }),
         1,

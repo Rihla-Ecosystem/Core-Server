@@ -80,6 +80,29 @@ export function buildSuccessOutcome<T>(
 }
 
 /**
+ * Build the only accepted zero-provider-cost success outcome.  The Identify
+ * service explicitly marks a stored-result response with `cached: true` and
+ * `providerCalls: []`; it intentionally has no provider usage because no
+ * provider request occurred.  The execution identity is an internal cache
+ * marker used only for durable operation evidence, never for rate-card
+ * pricing: the coordinator settles this outcome at zero before pricing calls.
+ */
+export function buildExplicitCacheHitOutcome<T>(data: T): AIExecutionOutcome<T> {
+  return {
+    kind: 'SUCCESS',
+    data,
+    execution: { provider: 'cache', model: 'identify-cache-hit' },
+    usage: {
+      provider: 'cache',
+      model: 'identify-cache-hit',
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    },
+  };
+}
+
+/**
  * Non-billable failure for an upstream AI service error. Mirrors the historical
  * FIXED-mode refund semantics: the business request never produced a billable
  * execution, so the reservation is fully released and nothing is charged.

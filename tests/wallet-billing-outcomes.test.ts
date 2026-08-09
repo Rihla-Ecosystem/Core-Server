@@ -38,6 +38,7 @@ import type { UsageBasedBillingInput } from '../src/types/usage-based-ai-billing
 import { runUsageBasedAIBilling } from '../src/services/usage-based-ai-billing.service.js';
 
 const WALLET_POLICY: WalletPolicyConfig = parseWalletPolicyConfig({});
+const CHAT_RESERVATION = WALLET_POLICY.maxReservationTokensByFeature.AI_CHAT_QUERY;
 const CHAT_LIMITS: ChatLimitsConfig = {
   maxInputTokens: 12000,
   maxCurrentMessageTokens: 3000,
@@ -201,7 +202,7 @@ describe('Usage-based AI Wallet billing outcomes (real PostgreSQL)', () => {
       assert.equal(result.actualWalletTokens, 2);
       assert.equal(result.recoveryRequired, false);
       assert.equal(result.billing.actualTokens, 2);
-      assert.equal(result.billing.releasedTokens, 998);
+      assert.equal(result.billing.releasedTokens, 148);
       assert.equal(result.billing.consumedTokens, 2);
       assert.equal(result.billing.pricedCostNanoUsd, '155000');
       assert.equal(result.billing.requestedMode, 'USAGE_BASED');
@@ -323,8 +324,8 @@ describe('Usage-based AI Wallet billing outcomes (real PostgreSQL)', () => {
 
       const wallet = await walletState(userId);
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 0);
-      assert.equal(wallet.reservedBalance, 1000);
+      assert.equal(wallet.tokenBalance, 850);
+      assert.equal(wallet.reservedBalance, CHAT_RESERVATION);
 
       const reservation = await prisma.tokenReservation.findUnique({
         where: { id: result.reservationId },
@@ -411,8 +412,8 @@ describe('Usage-based AI Wallet billing outcomes (real PostgreSQL)', () => {
 
       const wallet = await walletState(userId);
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 0);
-      assert.equal(wallet.reservedBalance, 1000);
+      assert.equal(wallet.tokenBalance, 850);
+      assert.equal(wallet.reservedBalance, CHAT_RESERVATION);
 
       const reservation = await prisma.tokenReservation.findUnique({
         where: { id: result.reservationId },
@@ -439,14 +440,14 @@ describe('Usage-based AI Wallet billing outcomes (real PostgreSQL)', () => {
         userId,
         execute: async () => ({
           kind: 'SUCCESS',
-          data: { providerCalls: [] },
-          execution: { provider: 'google', model: 'gemini-3.5-flash-lite' },
+          data: { cached: true, providerCalls: [] },
+          execution: { provider: 'cache', model: 'identify-cache-hit' },
           usage: {
-            provider: 'google',
-            model: 'gemini-3.5-flash-lite',
-            inputTokens: 100,
-            outputTokens: 50,
-            totalTokens: 150,
+            provider: 'cache',
+            model: 'identify-cache-hit',
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
           },
         }),
       });
@@ -454,7 +455,7 @@ describe('Usage-based AI Wallet billing outcomes (real PostgreSQL)', () => {
       const result = await runUsageBasedAIBilling(input);
       assert.equal(result.outcome, 'SETTLED');
       assert.equal(result.actualWalletTokens, 0);
-      assert.equal(result.billing.releasedTokens, 1000);
+      assert.equal(result.billing.releasedTokens, CHAT_RESERVATION);
 
       const wallet = await walletState(userId);
       assert.ok(wallet);
@@ -499,8 +500,8 @@ describe('Usage-based AI Wallet billing outcomes (real PostgreSQL)', () => {
 
       const wallet = await walletState(userId);
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 0);
-      assert.equal(wallet.reservedBalance, 1000);
+      assert.equal(wallet.tokenBalance, 850);
+      assert.equal(wallet.reservedBalance, CHAT_RESERVATION);
 
       const operation = await prisma.aIBillingOperation.findUnique({
         where: { operationId: input.operationId },
@@ -515,7 +516,7 @@ describe('Usage-based AI Wallet billing outcomes (real PostgreSQL)', () => {
   // --- Insufficient balance ---------------------------------------------------
 
   test('8. Insufficient balance is denied with 402 and reserves nothing', async () => {
-    const { userId } = await createUserWithWallet(500);
+    const { userId } = await createUserWithWallet(149);
     try {
       const input = buildInput({ userId });
 
@@ -526,7 +527,7 @@ describe('Usage-based AI Wallet billing outcomes (real PostgreSQL)', () => {
 
       const wallet = await walletState(userId);
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 500);
+      assert.equal(wallet.tokenBalance, 149);
       assert.equal(wallet.reservedBalance, 0);
       assert.equal(await prisma.tokenReservation.count({ where: { userId } }), 0);
       assert.equal(await prisma.aIBillingOperation.count({ where: { userId } }), 0);
@@ -616,8 +617,8 @@ describe('Usage-based AI Wallet billing outcomes (real PostgreSQL)', () => {
 
       const wallet = await walletState(userId);
       assert.ok(wallet);
-      assert.equal(wallet.tokenBalance, 0);
-      assert.equal(wallet.reservedBalance, 1000);
+      assert.equal(wallet.tokenBalance, 850);
+      assert.equal(wallet.reservedBalance, CHAT_RESERVATION);
       assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
     } finally {
       await cleanupUser(userId);

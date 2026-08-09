@@ -13,3 +13,36 @@ export const adminBillingRecoveryQueueQuerySchema = z.object({
 }).strict();
 
 export type AdminBillingRecoveryQueueQuery = z.infer<typeof adminBillingRecoveryQueueQuerySchema>;
+
+export const adminBillingRecoveryReservationParamsSchema = z.object({
+  reservationId: z.string().trim().uuid(),
+}).strict();
+
+export const adminBillingRecoveryWalletParamsSchema = z.object({
+  walletId: z.string().trim().uuid(),
+}).strict();
+
+const recoveryReasonSchema = z.string().trim().min(1).max(500);
+const evidenceReferenceSchema = z.string().trim().min(1).max(500).optional();
+
+export const adminBillingRecoveryActionBodySchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('SETTLE'),
+    confirmation: z.literal('ACTUAL_TOKENS_CONFIRMED'),
+    actualTokens: z.number().int().min(0),
+    reason: recoveryReasonSchema,
+    evidenceReference: evidenceReferenceSchema,
+  }).strict(),
+  z.object({
+    type: z.literal('RELEASE'),
+    confirmation: z.literal('CONFIRMED_NON_BILLABLE'),
+    reason: recoveryReasonSchema,
+    evidenceReference: evidenceReferenceSchema,
+  }).strict(),
+  z.object({
+    type: z.literal('REVIEW'),
+    reason: recoveryReasonSchema,
+  }).strict(),
+]);
+
+export type AdminBillingRecoveryActionBody = z.infer<typeof adminBillingRecoveryActionBodySchema>;
