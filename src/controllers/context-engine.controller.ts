@@ -79,7 +79,6 @@ export async function syncAfterReconnect(req: Request, res: Response, next: Next
 export async function stream(req: Request, res: Response, next: NextFunction) {
   try {
     const userId = actorId(req);
-    res.flushHeaders?.();
     subscribeToNotifications(res, userId);
   } catch (err) {
     next(err);
