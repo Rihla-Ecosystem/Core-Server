@@ -21,9 +21,11 @@ export async function getAdminRouter(): Promise<Router> {
     branding: { companyName: 'ITI Hub' },
   } as any);
 
-  const { default: AdminJSExpress } = await import('@adminjs/express');
+  const AdminJSExpress = (await import('@adminjs/express')).default as unknown as {
+    buildAuthenticatedRouter: typeof import('@adminjs/express').default.buildAuthenticatedRouter;
+  };
 
-  adminRouter = AdminJSExpress.buildAuthenticatedRouter(
+  const router = AdminJSExpress.buildAuthenticatedRouter(
     admin,
     {
       authenticate: async (email: string, password: string) => {
@@ -41,6 +43,7 @@ export async function getAdminRouter(): Promise<Router> {
     undefined,
     { secret: env.ADMIN_SESSION_SECRET, resave: false, saveUninitialized: false } as any,
   );
+  adminRouter = router;
 
-  return adminRouter;
+  return router;
 }
