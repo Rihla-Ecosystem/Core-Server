@@ -74,8 +74,6 @@ async function callAiVoice(
   }
 
   if (!response.ok) {
-
-  if (!response.ok) {
     throw new AppError(502, await upstreamError('AI voice service unavailable', response));
   }
 
