@@ -115,6 +115,7 @@ function normalizeCityMap(rawMap: Record<string, unknown> | null, refLat?: numbe
       scamRiskLevel: cityRaw.scamRiskLevel ?? 'low',
       activeAlertsCount: alertEvents.length,
       totalSignals: events.length,
+      govNote: cityRaw.govNote ? String(cityRaw.govNote) : undefined,
     };
   }
   return result;
