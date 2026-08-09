@@ -6,6 +6,7 @@ import { fetchPois } from './geo.service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import {
   beginChatStreamUsageBasedBilling,
+  failChatStreamUsageBasedBilling,
 } from './chat-stream-billing.service.js';
 import type { ChatStreamBillingContext } from './chat-stream-billing.service.js';
 import { isTokenExemptUser } from '../utils/token-exempt.js';
@@ -15,6 +16,8 @@ import {
 } from './billing-rate-card.service.js';
 import { parseChatLimitsConfig } from '../config/chat-limits.js';
 import { detectPromptInjection } from '../utils/prompt-injection.js';
+
+const AI_CHAT_STREAM_TIMEOUT_MS = 120_000;
 
 export interface StreamChatResult {
   body: ReadableStream<Uint8Array>;
@@ -104,6 +107,18 @@ async function dispatchChatStreamCore(
     data: { conversationId: conversationId!, role: 'user', content: message },
   });
 
+  const conversation = await prisma.conversation.findFirst({
+    where: { id: conversationId, userId },
+    include: {
+      messages: {
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: { role: true, content: true },
+      },
+    },
+  });
+  if (!conversation) throw new AppError(404, 'Conversation not found');
+
   const aiPayload: Record<string, unknown> = {
     message,
     conversation_id: conversationId,
@@ -128,7 +143,11 @@ async function dispatchChatStreamCore(
   if (geoContext) aiPayload.geography = geoContext;
   if (options?.context) aiPayload.context = options.context;
 
-  const aiResponse = await fetch(`${env.AI_SERVICE_URL}/chat/stream`, {
+  const upstreamAbort = new AbortController();
+  const timeout = setTimeout(() => upstreamAbort.abort(), AI_CHAT_STREAM_TIMEOUT_MS);
+  let aiResponse: globalThis.Response;
+  try {
+    aiResponse = await fetch(`${env.AI_SERVICE_URL}/chat/stream`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -136,18 +155,48 @@ async function dispatchChatStreamCore(
       'X-Internal-Api-Key': env.INTERNAL_API_KEY,
     },
     body: JSON.stringify(aiPayload),
-  });
+      signal: upstreamAbort.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
 
   if (!aiResponse.ok) {
+    clearTimeout(timeout);
     throw new AppError(502, 'AI service unavailable');
   }
 
   const body = aiResponse.body;
   if (!body) {
+    clearTimeout(timeout);
     throw new AppError(502, 'AI service unavailable');
   }
 
-  return { aiResponse, body, conversationId: conversationId! };
+  const reader = body.getReader();
+  const timedBody = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          clearTimeout(timeout);
+          controller.close();
+          return;
+        }
+        controller.enqueue(next.value);
+      } catch (err) {
+        clearTimeout(timeout);
+        controller.error(err);
+      }
+    },
+    async cancel(reason) {
+      clearTimeout(timeout);
+      upstreamAbort.abort();
+      await reader.cancel(reason);
+    },
+  });
+
+  return { aiResponse, body: timedBody, conversationId: conversationId! };
 }
 
 export async function streamChat(
@@ -197,12 +246,19 @@ export async function streamChat(
     walletPolicy: walletPolicyConfig,
   });
 
-  const { body, conversationId } = await dispatchChatStreamCore(
-    userId,
-    message,
-    options,
-    user,
-  );
+  let dispatched;
+  try {
+    dispatched = await dispatchChatStreamCore(userId, message, options, user);
+  } catch (err) {
+    if (billing.mode === 'USAGE_BASED') {
+      await failChatStreamUsageBasedBilling({
+        operationId: billing.operationId,
+        reservationId: billing.reservationId,
+      });
+    }
+    throw err;
+  }
+  const { body, conversationId } = dispatched;
 return {
   body,
   conversationId,

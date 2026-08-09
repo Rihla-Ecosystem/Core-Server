@@ -4,7 +4,12 @@ import { runUsageBasedAIBilling } from './usage-based-ai-billing.service.js';
 import { recordAiUsage } from './ai-usage.service.js';
 import { upstreamError } from '../utils/http-client.js';
 import { isTokenExemptUser } from '../utils/token-exempt.js';
-import { buildSuccessOutcome, aiUnavailableOutcome, resolveUsageBasedBillingResult } from '../utils/usage-billing.js';
+import {
+  buildExplicitCacheHitOutcome,
+  buildSuccessOutcome,
+  aiUnavailableOutcome,
+  resolveUsageBasedBillingResult,
+} from '../utils/usage-billing.js';
 import {
   BillingRateCardUnavailableError,
   resolveBillingRateCard,
@@ -128,6 +133,11 @@ export async function identifyLandmarkWithTokens(
     execute: async () => {
       try {
         const identified = await identifyCore(input);
+        // This is the AI-service's explicit cache contract. It is the sole
+        // path allowed to omit usage evidence and settle as zero cost.
+        if (identified.cached === true && Array.isArray(identified.providerCalls) && identified.providerCalls.length === 0) {
+          return buildExplicitCacheHitOutcome(identified);
+        }
         return buildSuccessOutcome(identified, identified.usage);
       } catch (err) {
         if (err instanceof AppError && err.statusCode === 502) {

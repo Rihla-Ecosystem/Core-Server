@@ -20,7 +20,12 @@ import {
   adminRecomputeBodySchema,
 } from '../schemas/admin-shadow-pricing.schema.js';
 import * as adminBillingRecoveryController from '../controllers/admin-billing-recovery.controller.js';
-import { adminBillingRecoveryQueueQuerySchema } from '../schemas/admin-billing-recovery.schema.js';
+import {
+  adminBillingRecoveryActionBodySchema,
+  adminBillingRecoveryQueueQuerySchema,
+  adminBillingRecoveryReservationParamsSchema,
+  adminBillingRecoveryWalletParamsSchema,
+} from '../schemas/admin-billing-recovery.schema.js';
 
 
 const router = Router();
@@ -190,6 +195,28 @@ router.get(
   '/ai-shadow-pricing/summary',
   requireRole('admin'),
   shadowPricingAdminController.getShadowPricingSummary,
+);
+
+router.get(
+  '/billing-recovery/wallets/:walletId/reconcile',
+  requireRole('admin'),
+  validate(adminBillingRecoveryWalletParamsSchema, 'params'),
+  adminBillingRecoveryController.reconcileWallet,
+);
+
+router.get(
+  '/billing-recovery/:reservationId',
+  requireRole('admin'),
+  validate(adminBillingRecoveryReservationParamsSchema, 'params'),
+  adminBillingRecoveryController.inspectRecoveryReservation,
+);
+
+router.post(
+  '/billing-recovery/:reservationId/action',
+  requireRole('admin'),
+  validate(adminBillingRecoveryReservationParamsSchema, 'params'),
+  validate(adminBillingRecoveryActionBodySchema),
+  adminBillingRecoveryController.recoverReservation,
 );
 
 router.get(

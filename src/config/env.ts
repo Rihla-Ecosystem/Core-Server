@@ -188,11 +188,11 @@ const envSchema = z.object({
     z.enum(['STATIC', 'DATABASE_SHADOW', 'DATABASE_PRIMARY']),
   ).default('STATIC'),
 
-  // Free tier: tokens granted to a new account on registration.
+  // Free tier: tokens granted on a new tourist's first successful login.
   SIGNUP_TOKEN_GRANT: z.preprocess(
-    (value) => parseStrictNonNegativeIntValue(value, 100, 'SIGNUP_TOKEN_GRANT'),
+    (value) => parseStrictNonNegativeIntValue(value, 400, 'SIGNUP_TOKEN_GRANT'),
     z.number(),
-  ).default(100),
+  ).default(400),
 
   // Phase 2G-A Wallet usage-based billing policy.
   // Denomination: one Wallet Token = WALLET_TOKEN_VALUE_NANO_USD nano-USD

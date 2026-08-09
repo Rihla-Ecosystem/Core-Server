@@ -61,12 +61,19 @@ async function callAiVoice(
   };
   if (options?.authorization) headers['Authorization'] = options.authorization;
 
-  const response = await fetch(`${env.AI_SERVICE_URL}/voice`, {
-    method: 'POST',
-    headers,
-    body: formData,
-    signal: AbortSignal.timeout(150_000),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${env.AI_SERVICE_URL}/voice`, {
+      method: 'POST',
+      headers,
+      body: formData,
+      signal: AbortSignal.timeout(150_000),
+    });
+  } catch (err) {
+    throw new AppError(502, `AI voice service unavailable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  if (!response.ok) {
 
   if (!response.ok) {
     throw new AppError(502, await upstreamError('AI voice service unavailable', response));

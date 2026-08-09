@@ -8,6 +8,7 @@ import {
   DEFAULT_WALLET_MARKUP_BASIS_POINTS,
   DEFAULT_MINIMUM_WALLET_CHARGE,
   DEFAULT_MAX_RESERVATION_TOKENS,
+  DEFAULT_MAX_RESERVATION_TOKENS_BY_FEATURE,
   WALLET_POLICY_VERSION,
 } from '../src/config/wallet-policy.js';
 
@@ -15,7 +16,7 @@ describe('Wallet policy config - defaults', () => {
   test('1. Missing values fall back to the documented defaults', () => {
     const config = parseWalletPolicyConfig({});
     assert.equal(config.signupTokenGrant, DEFAULT_SIGNUP_TOKEN_GRANT);
-    assert.equal(config.signupTokenGrant, 100);
+    assert.equal(config.signupTokenGrant, 400);
     assert.equal(config.walletTokenValueNanoUsd, DEFAULT_WALLET_TOKEN_VALUE_NANO_USD);
     assert.equal(config.walletTokenValueNanoUsd, 100000);
     assert.equal(config.markupBasisPoints, DEFAULT_WALLET_MARKUP_BASIS_POINTS);
@@ -23,9 +24,15 @@ describe('Wallet policy config - defaults', () => {
     assert.equal(config.minimumWalletTokens, DEFAULT_MINIMUM_WALLET_CHARGE);
     assert.equal(config.minimumWalletTokens, 1);
     assert.equal(config.version, WALLET_POLICY_VERSION);
-    for (const value of Object.values(config.maxReservationTokensByFeature)) {
-      assert.equal(value, DEFAULT_MAX_RESERVATION_TOKENS);
-    }
+    assert.equal(config.maxReservationTokensByFeature.AI_CHAT_QUERY, 150);
+    assert.equal(config.maxReservationTokensByFeature.AI_IMAGE_ANALYSIS, 75);
+    assert.equal(config.maxReservationTokensByFeature.REAL_TIME_TRANSLATION, 313);
+    assert.equal(config.maxReservationTokensByFeature.AI_TRIP_ITINERARY, 195);
+    assert.equal(
+      config.maxReservationTokensByFeature.PERSONALIZED_RECOMMENDATIONS,
+      DEFAULT_MAX_RESERVATION_TOKENS,
+    );
+    assert.equal(DEFAULT_MAX_RESERVATION_TOKENS_BY_FEATURE.AI_CHAT_QUERY, 150);
     assert.equal(Object.isFrozen(config), true);
   });
 });
@@ -133,7 +140,7 @@ describe('Wallet policy config - reservation ceilings', () => {
     assert.equal(config.maxReservationTokensByFeature.AI_IMAGE_ANALYSIS, 150);
     assert.equal(
       config.maxReservationTokensByFeature.AI_TRIP_ITINERARY,
-      DEFAULT_MAX_RESERVATION_TOKENS,
+      195,
     );
   });
 });

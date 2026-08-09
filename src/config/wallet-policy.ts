@@ -28,13 +28,26 @@ import type { BusinessTokenFeature } from './business-token-features.js';
  * `WalletPolicyConfigurationError`. No silent coercion.
  */
 
-export const DEFAULT_SIGNUP_TOKEN_GRANT = 100;
+export const DEFAULT_SIGNUP_TOKEN_GRANT = 400;
 export const DEFAULT_WALLET_TOKEN_VALUE_NANO_USD = 100_000;
 export const DEFAULT_WALLET_MARKUP_BASIS_POINTS = 10_000;
 export const DEFAULT_MINIMUM_WALLET_CHARGE = 1;
 
 /** Default per-feature reservation ceiling (Wallet Tokens). */
 export const DEFAULT_MAX_RESERVATION_TOKENS = 1_000;
+
+/**
+ * Default reservation ceilings for the live usage-billed AI features. Voice
+ * is derived from the bounded Voice media and TTS execution envelope.
+ */
+export const DEFAULT_MAX_RESERVATION_TOKENS_BY_FEATURE: Readonly<
+  Partial<Record<BusinessTokenFeature, number>>
+> = Object.freeze({
+  AI_CHAT_QUERY: 150,
+  AI_IMAGE_ANALYSIS: 75,
+  REAL_TIME_TRANSLATION: 313,
+  AI_TRIP_ITINERARY: 195,
+});
 
 export const WALLET_POLICY_VERSION = '1';
 
@@ -176,7 +189,9 @@ function parseMaxReservationTokens(
   const result = {} as Record<BusinessTokenFeature, number>;
 
   for (const feature of BUSINESS_TOKEN_FEATURES) {
-    result[feature] = DEFAULT_MAX_RESERVATION_TOKENS;
+    result[feature] =
+      DEFAULT_MAX_RESERVATION_TOKENS_BY_FEATURE[feature] ??
+      DEFAULT_MAX_RESERVATION_TOKENS;
   }
 
   if (raw === undefined || raw === '') {

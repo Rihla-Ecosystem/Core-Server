@@ -1097,14 +1097,28 @@ export async function recordAIBillingOperationExecutionSuccess(
     throw opError('OPERATION_NOT_FOUND', 'AI billing operation not found', { operationId });
   }
 
-  if (operation.requestedProvider !== null && execution.provider !== operation.requestedProvider) {
+  // An explicit cache hit has no upstream provider request. Its fixed internal
+  // identity is durable evidence for the zero-cost settlement path and must not
+  // be compared to the provider/model originally requested for the operation.
+  const isExplicitCacheExecution =
+    execution.provider === 'cache' && execution.model === 'identify-cache-hit';
+
+  if (
+    !isExplicitCacheExecution &&
+    operation.requestedProvider !== null &&
+    execution.provider !== operation.requestedProvider
+  ) {
     throw opError(
       'INTEGRITY_CONFLICT',
       'AI billing actual provider does not match the requested provider',
       { operationId, reservationId: operation.reservationId },
     );
   }
-  if (operation.requestedModel !== null && execution.model !== operation.requestedModel) {
+  if (
+    !isExplicitCacheExecution &&
+    operation.requestedModel !== null &&
+    execution.model !== operation.requestedModel
+  ) {
     throw opError(
       'INTEGRITY_CONFLICT',
       'AI billing actual model does not match the requested model',
