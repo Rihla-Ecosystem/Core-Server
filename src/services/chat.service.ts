@@ -43,6 +43,8 @@ interface ChatOptions {
   authorization?: string;
   baseCurrency?: string;
   persona?: ChatPersona;
+  context?: Record<string, unknown>;
+  title?: string;
 }
 
 type ChatCoreResult =
@@ -98,7 +100,10 @@ async function performChatCore(
   let conversationId = options?.conversationId;
   if (!conversationId) {
     const conv = await prisma.conversation.create({
-      data: { userId, title: message.slice(0, 100) },
+      data: {
+        userId,
+        title: options?.title?.trim() ? options.title.trim().slice(0, 100) : message.slice(0, 100),
+      },
     });
     conversationId = conv.id;
   }
@@ -139,6 +144,7 @@ async function performChatCore(
   if (safetyContext) aiPayload.safety = safetyContext;
   if (currencyContext) aiPayload.currency = currencyContext;
   if (journeyProgress) aiPayload.user_journeys = journeyProgress;
+  if (options?.context) aiPayload.context = options.context;
 
   let aiResponse: {
     response: string;

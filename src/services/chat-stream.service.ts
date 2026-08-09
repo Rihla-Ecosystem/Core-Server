@@ -40,6 +40,8 @@ interface StreamChatOptions {
   conversationId?: string;
   authorization?: string;
   persona?: string;
+  context?: Record<string, unknown>;
+  title?: string;
 }
 
 async function dispatchChatStreamCore(
@@ -80,10 +82,23 @@ async function dispatchChatStreamCore(
   }
   if (!conversationId) {
     const conv = await prisma.conversation.create({
-      data: { userId, title: message.slice(0, 100) },
+      data: {
+        userId,
+        title: options?.title?.trim() ? options.title.trim().slice(0, 100) : message.slice(0, 100),
+      },
     });
     conversationId = conv.id;
   }
+
+  const priorMessages = await prisma.message.findMany({
+    where: { conversationId: conversationId! },
+    orderBy: { createdAt: 'asc' },
+    take: 20,
+    select: { role: true, content: true },
+  });
+  const history = priorMessages
+    .filter((item) => item.role === 'assistant' || item.role === 'user')
+    .map((item) => ({ role: item.role, content: item.content }));
 
   await prisma.message.create({
     data: { conversationId: conversationId!, role: 'user', content: message },
@@ -105,11 +120,13 @@ async function dispatchChatStreamCore(
       accommodation_type: user.accommodationType,
       preferences: prefs,
     },
+    history,
   };
   if (options?.lat !== undefined) aiPayload.lat = options.lat;
   if (options?.lon !== undefined) aiPayload.lon = options.lon;
   if (envContext) aiPayload.environment = envContext;
   if (geoContext) aiPayload.geography = geoContext;
+  if (options?.context) aiPayload.context = options.context;
 
   const aiResponse = await fetch(`${env.AI_SERVICE_URL}/chat/stream`, {
     method: 'POST',

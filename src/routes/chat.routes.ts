@@ -16,6 +16,8 @@ const chatSchema = z.object({
   base_currency: z.string().length(3).optional(),
   conversation_id: z.string().uuid().optional(),
   persona: z.enum(['auto', 'tour_guide', 'local_expert', 'safety_guru']).default('auto').optional(),
+  context: z.record(z.string(), z.any()).optional(),
+  title: z.string().min(1).max(120).optional(),
 });
 
 const idempotencyKeySchema = z.string().uuid();
@@ -43,7 +45,7 @@ router.post(
   validate(chatSchema),
   async (req, res, next) => {
   try {
-    const { message, lat, lon, conversation_id, base_currency, persona } = req.body;
+    const { message, lat, lon, conversation_id, base_currency, persona, context, title } = req.body;
     const businessRequestId = readIdempotencyKey(req);
     const result = await chat(req.user!.userId, message, {
       businessRequestId,
@@ -53,6 +55,8 @@ router.post(
       authorization: req.headers.authorization,
       baseCurrency: base_currency,
       persona,
+      context,
+      title,
     });
     res.json(result);
   } catch (err) {

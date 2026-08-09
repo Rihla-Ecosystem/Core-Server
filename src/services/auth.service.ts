@@ -21,7 +21,7 @@ export async function registerUser(data: {
   accommodationType?: string;
 }) {
   const { email, password, displayName, gender, nationality, language, budgetLevel, arrivalDate, departureDate, travelStyle, interests, accommodationType } = data;
-  const existing = await prisma.user.findUnique({ where: { email } });
+  const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
   if (existing) {
     throw new AppError(409, 'Unable to register with these details');
   }
@@ -29,7 +29,7 @@ export async function registerUser(data: {
   const passwordHash = await hashPassword(password);
   const user = await prisma.user.create({
     data: {
-      email,
+      email: email.toLowerCase(),
       passwordHash,
       displayName,
       gender,
@@ -85,7 +85,7 @@ export async function verifyEmail(token: string) {
 }
 
 export async function resendVerification(email: string) {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
   if (!user || user.isEmailVerified) return;
 
   const { raw, hash } = generateOpaqueToken();
@@ -98,7 +98,7 @@ export async function resendVerification(email: string) {
 }
 
 export async function loginUser(email: string, password: string, ipAddress?: string, deviceInfo?: string) {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
   if (!user) {
     throw new AppError(401, 'Invalid credentials');
   }
@@ -193,7 +193,7 @@ export async function logoutAllUsers(userId: string) {
 }
 
 export async function forgotPassword(email: string) {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
   if (!user) return;
 
   const { raw, hash } = generateOpaqueToken();

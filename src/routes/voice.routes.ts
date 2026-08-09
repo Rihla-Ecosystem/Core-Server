@@ -88,6 +88,20 @@ router.post(
       const lat = req.body.lat ? Number(req.body.lat) : undefined;
       const lon = req.body.lon ? Number(req.body.lon) : undefined;
       const conversationId = req.body.conversation_id;
+      const persona = typeof req.body.persona === 'string' ? req.body.persona : undefined;
+      const title = typeof req.body.title === 'string' ? req.body.title : undefined;
+      const transcript = typeof req.body.transcript === 'string' ? req.body.transcript : undefined;
+      let context: Record<string, unknown> | undefined;
+      if (typeof req.body.context === 'string' && req.body.context.trim()) {
+        try {
+          const parsed = JSON.parse(req.body.context);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            context = parsed;
+          }
+        } catch {
+          context = undefined;
+        }
+      }
 
       if (lat !== undefined && (isNaN(lat) || lat < -90 || lat > 90)) {
         res.status(400).json({ error: 'Invalid latitude' });
@@ -112,6 +126,10 @@ router.post(
         lon,
         conversationId,
         authorization: req.headers.authorization,
+        persona,
+        context,
+        title,
+        transcript,
         user: req.user,
       });
       res.json(result);

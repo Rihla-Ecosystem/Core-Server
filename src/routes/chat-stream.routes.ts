@@ -24,6 +24,8 @@ const streamSchema = z.object({
   lon: z.coerce.number().min(-180).max(180).optional(),
   conversation_id: z.string().uuid().optional(),
   persona: z.enum(['auto', 'tour_guide', 'local_expert', 'safety_guru']).default('auto').optional(),
+  context: z.record(z.string(), z.any()).optional(),
+  title: z.string().min(1).max(120).optional(),
 });
 
 const idempotencyKeySchema = z.string().uuid();
@@ -47,7 +49,7 @@ router.post(
   validate(streamSchema),
   async (req, res, next) => {
   try {
-    const { message, lat, lon, conversation_id, persona } = req.body;
+    const { message, lat, lon, conversation_id, persona, context, title } = req.body;
     const businessRequestId = readIdempotencyKey(req);
     const userId = req.user?.userId;
     if (!userId) {
@@ -61,6 +63,8 @@ router.post(
       conversationId: conversation_id,
       authorization: req.headers.authorization,
       persona,
+      context,
+      title,
     });
 
     res.setHeader('Content-Type', 'text/event-stream');
