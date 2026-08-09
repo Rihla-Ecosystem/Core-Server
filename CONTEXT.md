@@ -29,4 +29,5 @@
 - DB creds/port: started with `docker start core-server-db geocontext_db`.
 
 ## Changelog
+- 2026-08-09: DEPLOYED to VPS + Supabase. Pushed `f58fef1` → GHCR image rebuilt → `docker-compose up -d core-server` on `88.222.220.235`; `prisma migrate deploy` auto-applied `20260809023822_add_incident_reports` to Supabase (confirmed in container logs). Container healthy; smoke: POST `/api/reports` created uuid, admin list + PATCH→RESOLVED OK, `/context-notifications/location` throttle path OK.
 - 2026-08-09: INCIDENT REPORTS RE-ADDED (feature dropped from GeoContext now lives in Core). Model + `IncidentReportType/Severity/Status` enums, `relatedSiteName` varchar(255), user FK cascade, indexes `[userId, createdAt]`/`[status]`. User API `/api/reports` (5/min, zod bound lat/lng, status starts PENDING) + admin `/api/admin/incident-reports` (list/get/patch status+adminNotes, requireRole admin/moderator). Context-engine: 50m min-distance throttle — repeated movement pings skip AI + report write (`skipped:true`, null report); bounds + 60/min limiter on `/location`. 2173/2173 tests + tsc clean.
