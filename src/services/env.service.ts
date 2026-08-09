@@ -19,6 +19,14 @@ function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number): num
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function round0(value: number): number {
+  return Math.round(value);
+}
+
 function parseEvent(raw: Record<string, unknown>): {
   source: string;
   headline: string;
@@ -61,14 +69,14 @@ function extractWeatherFromCity(city: Record<string, unknown>): {
     if (event.category === 'weather') {
       const tempMatch = headline.match(/(-?\d+(?:\.\d+)?)\s*°c\s*in/);
       if (tempMatch) {
-        temperature = Number(tempMatch[1]);
+        temperature = round0(Number(tempMatch[1]));
         condition = condition ?? 'Clear';
         description = description ?? 'clear sky';
         continue;
       }
       const uvMatch = headline.match(/uv index\s+(\d+(?:\.\d+)?)/);
       if (uvMatch) {
-        uvIndex = Number(uvMatch[1]);
+        uvIndex = round1(Number(uvMatch[1]));
         continue;
       }
     }
@@ -76,7 +84,7 @@ function extractWeatherFromCity(city: Record<string, unknown>): {
     if (event.source === 'openweather_air' || event.category === 'weather' || event.category === 'air_quality') {
       const aqiMatch = headline.match(/aqi\s+(\d+(?:\.\d+)?)/);
       if (aqiMatch) {
-        aqi = Number(aqiMatch[1]);
+        aqi = round0(Number(aqiMatch[1]));
       }
     }
   }
