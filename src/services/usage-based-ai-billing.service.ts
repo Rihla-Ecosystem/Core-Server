@@ -53,6 +53,15 @@ function defaultProviderCallsOf(data: unknown): unknown {
   return data.providerCalls;
 }
 
+function isExplicitCacheHit(data: unknown, providerCalls: unknown): boolean {
+  return (
+    isRecord(data) &&
+    data.cached === true &&
+    Array.isArray(providerCalls) &&
+    providerCalls.length === 0
+  );
+}
+
 function trimOperationId(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
@@ -459,7 +468,8 @@ export async function runUsageBasedAIBilling<T>(
   const providerCalls = providerCallsOf(outcome.data);
 
   // Absent or non-array providerCalls are NOT authoritative: unknown cost must
-  // never be treated as zero. Only an explicit empty array is a cache hit.
+  // never be treated as zero. An empty array is zero cost only when paired with
+  // the AI service's explicit cache marker.
   if (providerCalls === undefined || providerCalls === null || !Array.isArray(providerCalls)) {
     return recovery<T>(operationId, 'PRICING', 'UNPRICED_PROVIDER_CALLS', {
       reservationId,
@@ -467,7 +477,7 @@ export async function runUsageBasedAIBilling<T>(
     });
   }
 
-  if (providerCalls.length === 0) {
+  if (isExplicitCacheHit(outcome.data, providerCalls)) {
     return runCacheHitSettlement<T>(
       dependencies,
       input,
@@ -475,6 +485,13 @@ export async function runUsageBasedAIBilling<T>(
       reservationId,
       outcome,
     );
+  }
+
+  if (providerCalls.length === 0) {
+    return recovery<T>(operationId, 'PRICING', 'UNPRICED_PROVIDER_CALLS', {
+      reservationId,
+      operationStatus: 'EXECUTION_SUCCEEDED',
+    });
   }
 
   let pricing;
