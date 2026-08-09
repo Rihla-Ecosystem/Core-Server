@@ -186,24 +186,29 @@ export interface GeneratedNotification {
 
 export interface ContextEngineResult {
   notifications: GeneratedNotification[];
-  contextReport: {
-    areaInformation: Record<string, unknown>;
-    aiSummary: ContextAnalysisResult;
-    safetyScore: number;
-    riskLevel: string;
-    historicalInformation: string;
-    touristTips: string[];
-    recommendations: string[];
-    thingsToAvoid: string[];
-    nearbyAttractions: NearbyPoi[];
-    nearbyRestaurants: NearbyPoi[];
-    nearbyHotels: NearbyPoi[];
-    nearbyHospitals: NearbyPoi[];
-    nearbyPoliceStations: NearbyPoi[];
-    nearbyTransportation: NearbyPoi[];
-    emergencyContacts: Array<{ type: string; name: string; phone: string }>;
-    generatedAt: string;
-  };
+  /** True when a routine GPS ping was throttled (no AI, no report emitted). */
+  skipped?: boolean;
+  contextReport: ContextReport | null;
+}
+
+/** The Context Intelligence Report emitted by the Smart Engine. */
+export interface ContextReport {
+  areaInformation: Record<string, unknown>;
+  aiSummary: ContextAnalysisResult;
+  safetyScore: number;
+  riskLevel: string;
+  historicalInformation: string;
+  touristTips: string[];
+  recommendations: string[];
+  thingsToAvoid: string[];
+  nearbyAttractions: NearbyPoi[];
+  nearbyRestaurants: NearbyPoi[];
+  nearbyHotels: NearbyPoi[];
+  nearbyHospitals: NearbyPoi[];
+  nearbyPoliceStations: NearbyPoi[];
+  nearbyTransportation: NearbyPoi[];
+  emergencyContacts: Array<{ type: string; name: string; phone: string }>;
+  generatedAt: string;
 }
 
 /** Emergency contacts exposed in the Context Report (static reference data). */

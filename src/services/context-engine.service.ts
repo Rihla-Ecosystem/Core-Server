@@ -15,13 +15,46 @@ import { publishToUser, isUserOnline } from './notification-realtime.service.js'
 import { EGYPT_EMERGENCY_CONTACTS } from '../types/context-notification.js';
 import { getNotificationSettings } from './notification-admin.service.js';
 import type {
+  ContextAnalysisResult,
   ContextEngineResult,
   ContextObject,
+  ContextReport,
   GeneratedNotification,
   LocationPoint,
 } from '../types/context-notification.js';
 
 const UNKNOWN_SERVER_ERROR = 'Failed to process location update';
+
+// Only a movement of at least this distance from the last reported point
+// re-triggers the full context pipeline. Keeps repeated GPS pings from
+// re-running the AI analyze + writing a new ContextReport on every ping.
+const MIN_REPORT_DISTANCE_METERS = 50;
+
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const R = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// A manual / geofence-triggered or first-ever report always processes; only
+// routine `movement` pings are throttled when the GPS point barely moved.
+async function shouldProcessLocationUpdate(
+  userId: string,
+  location: LocationPoint,
+): Promise<boolean> {
+  if (location.reason !== 'movement') return true;
+  const status = await prisma.userNotificationStatus.findUnique({
+    where: { userId },
+    select: { lastLat: true, lastLng: true },
+  });
+  if (!status?.lastLat || !status?.lastLng) return true;
+  return haversineMeters(status.lastLat, status.lastLng, location.lat, location.lng) >= MIN_REPORT_DISTANCE_METERS;
+}
 
 async function upsertUserStatus(userId: string, location: LocationPoint): Promise<void> {
   await prisma.userNotificationStatus.upsert({
@@ -90,13 +123,19 @@ export async function processLocationUpdate(
     throw new AppError(400, 'lat and lng are required');
   }
 
+  // Repeated GPS pings that barely move do not re-run the AI pipeline; only
+  // the freshest position is kept so the next real movement is detected.
+  const process = await shouldProcessLocationUpdate(userId, location);
   await upsertUserStatus(userId, location);
+  if (!process) {
+    return { notifications: [], contextReport: null, skipped: true };
+  }
 
   // 1. Aggregate the full Context Object.
   const context = await buildContextObject(userId, location);
 
   // 2. Ask the AI Service to analyze the aggregated context.
-  let aiReport: ContextEngineResult['contextReport']['aiSummary'];
+  let aiReport: ContextAnalysisResult;
   let aiGenerated: GeneratedNotification[] = [];
   try {
     const ai = await analyzeContext(context);
@@ -315,9 +354,9 @@ function contextSnapshot(context: ContextObject): Record<string, unknown> {
 
 function buildContextReport(
   context: ContextObject,
-  ai: ContextEngineResult['contextReport']['aiSummary'],
+  ai: ContextAnalysisResult,
   notifications: GeneratedNotification[],
-): Omit<ContextEngineResult['contextReport'], 'generatedAt'> {
+): Omit<ContextReport, 'generatedAt'> {
   return {
     areaInformation: buildAreaInformation(context),
     aiSummary: ai,

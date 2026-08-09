@@ -9,3 +9,4 @@ data/
 
 # Cloud deployment env (gitignored)
 .env.cloud
+.code-graph/

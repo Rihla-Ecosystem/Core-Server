@@ -14,6 +14,7 @@ import adminEnterpriseRoutes from './admin-enterprise.routes.js';
 import notificationAdminRoutes from './notification-admin.routes.js';
 
 import adminRateCardRoutes from './admin-rate-card.routes.js';
+import incidentReportAdminRoutes from './incident-report-admin.routes.js';
 import {
   adminObservationsQuerySchema,
   adminRecomputeBodySchema,
@@ -70,6 +71,12 @@ router.use(
   '/rate-cards',
   requireRole('admin'),
   adminRateCardRoutes,
+);
+
+router.use(
+  '/incident-reports',
+  requireRole('admin', 'moderator'),
+  incidentReportAdminRoutes,
 );
 
 const roleUpdateSchema = z.object({

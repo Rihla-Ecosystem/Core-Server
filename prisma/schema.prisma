@@ -30,6 +30,29 @@ enum NotificationType {
   SYSTEM
 }
 
+enum IncidentReportType {
+  SAFETY
+  SCAM
+  SERVICE
+  DAMAGE
+  ACCESSIBILITY
+  OTHER
+}
+
+enum IncidentReportSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IncidentReportStatus {
+  PENDING
+  IN_REVIEW
+  RESOLVED
+  REJECTED
+}
+
 model TokenPackage {
   id Int @id @default(autoincrement())
 
@@ -397,6 +420,7 @@ model User {
   notificationStatus      UserNotificationStatus?
   contextReports          ContextReport[]
   notificationLogs        NotificationLog[]
+  incidentReports         IncidentReport[]
 
 
   @@map("users")
@@ -1049,4 +1073,27 @@ model NotificationSetting {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   @@map("notification_settings")
+}
+
+model IncidentReport {
+  id         String                 @id @default(uuid()) @db.Uuid
+  userId     String                 @map("user_id") @db.Uuid
+  type       IncidentReportType     @map("type")
+  severity   IncidentReportSeverity
+  description String                @db.Text
+  lat        Float?
+  lng        Float?
+  relatedSiteName String?           @map("related_site_name") @db.VarChar(255)
+  status     IncidentReportStatus   @default(PENDING)
+  adminNotes String?                @map("admin_notes") @db.Text
+  reviewedBy String?                @map("reviewed_by") @db.VarChar(255)
+  reviewedAt DateTime?              @map("reviewed_at") @db.Timestamptz
+  createdAt DateTime                @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime                @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("incident_reports")
 }

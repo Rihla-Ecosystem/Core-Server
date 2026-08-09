@@ -22,6 +22,7 @@ import dashboardUsersRoutes from './dashboard/users.routes.js';
 import notificationRoutes from './notification.routes.js';
 import aiServiceRoutes from './ai-service.routes.js';
 import contextNotificationRoutes from './context-notification.routes.js';
+import incidentReportRoutes from './incident-report.routes.js';
 import * as userController from '../controllers/user.controller.js';
 
 const router = Router();
@@ -48,6 +49,7 @@ router.use('/itinerary', itineraryRoutes);
 router.use('/dashboard/users', dashboardUsersRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/context-notifications', contextNotificationRoutes);
+router.use('/reports', incidentReportRoutes);
 router.use('/ai-service', aiServiceRoutes);
 
 router.get('/leaderboard', userController.getLeaderboard);

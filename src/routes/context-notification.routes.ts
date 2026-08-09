@@ -2,16 +2,17 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { authenticate } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
+import { userRateLimit } from '../utils/rate-limit.js';
 import * as ctrl from '../controllers/context-engine.controller.js';
 
 const router = Router();
 
 const locationSchema = z.object({
-  lat: z.number(),
-  lng: z.number(),
-  accuracy: z.number().optional(),
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  accuracy: z.number().min(0).optional(),
   altitude: z.number().optional(),
-  speed: z.number().optional(),
+  speed: z.number().min(0).optional(),
   heading: z.number().optional(),
   timestamp: z.number().optional(),
   reason: z.enum(['movement', 'geofence_enter', 'geofence_exit', 'initial', 'manual']).default('movement'),
@@ -35,7 +36,9 @@ const idParam = z.object({ id: z.string().uuid() });
 
 router.use(authenticate);
 
-router.post('/location', validate(locationSchema), ctrl.reportLocation);
+const locationReportLimiter = userRateLimit({ windowMs: 60 * 1000, max: 60 });
+
+router.post('/location', locationReportLimiter, validate(locationSchema), ctrl.reportLocation);
 
 router.get('/inbox', ctrl.getInbox);
 router.get('/unread-count', ctrl.getUnreadCount);
