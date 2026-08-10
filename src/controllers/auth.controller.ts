@@ -6,7 +6,7 @@ const REFRESH_COOKIE_OPTIONS = {
   secure: process.env.NODE_ENV === 'production',
   sameSite: 'strict' as const,
   maxAge: 30 * 24 * 60 * 60 * 1000,
-  path: '/api/auth',
+  path: '/',
 };
 
 export async function register(req: Request, res: Response, next: NextFunction) {
@@ -111,7 +111,7 @@ export async function logout(req: Request, res: Response, next: NextFunction) {
       await authService.logoutUser(refreshToken);
     }
 
-    res.clearCookie('refreshToken', { path: '/api/auth' });
+    res.clearCookie('refreshToken', { path: '/' });
     res.json({ message: 'Logged out successfully' });
   } catch (err) {
     next(err);
@@ -121,7 +121,7 @@ export async function logout(req: Request, res: Response, next: NextFunction) {
 export async function logoutAll(req: Request, res: Response, next: NextFunction) {
   try {
     await authService.logoutAllUsers(req.user!.userId);
-    res.clearCookie('refreshToken', { path: '/api/auth' });
+    res.clearCookie('refreshToken', { path: '/' });
     res.json({ message: 'Logged out of all devices' });
   } catch (err) {
     next(err);
