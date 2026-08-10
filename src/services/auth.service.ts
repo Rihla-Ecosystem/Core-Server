@@ -1,4 +1,5 @@
 import { prisma } from '../config/prisma.js';
+import { env } from '../config/env.js';
 import { hashPassword, comparePassword, hashToken } from '../utils/hash.js';
 import { signAccessToken, generateOpaqueToken, getRefreshTokenExpiry } from '../utils/token.js';
 import { sendVerificationEmail, sendPasswordResetEmail, resolveLocale } from '../utils/email.js';
@@ -41,9 +42,14 @@ export async function registerUser(data: {
       ...(travelStyle && { travelStyle }),
       ...(interests && { interests }),
       ...(accommodationType && { accommodationType }),
+      ...(env.AUTO_VERIFY_EMAIL && { isEmailVerified: true }),
     },
     select: { id: true, email: true, displayName: true, gender: true, nationality: true, language: true, createdAt: true },
   });
+
+  if (env.AUTO_VERIFY_EMAIL) {
+    return user;
+  }
 
   const { raw, hash } = generateOpaqueToken();
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);

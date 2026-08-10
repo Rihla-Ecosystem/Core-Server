@@ -96,6 +96,7 @@ const envSchema = z.object({
   SMTP_USER: z.string().min(1),
   SMTP_PASS: z.string().min(1),
   EMAIL_FROM: z.string().default('ITI Hub <noreply@itihub.com>'),
+  AUTO_VERIFY_EMAIL: z.coerce.boolean().default(false),
 
   CLOUDINARY_CLOUD_NAME: z.string().min(1),
   CLOUDINARY_API_KEY: z.string().min(1),
