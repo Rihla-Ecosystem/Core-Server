@@ -98,6 +98,13 @@ async function performChatCore(
   const journeyProgress = await getJourneyProgress(userId).catch(() => null);
 
   let conversationId = options?.conversationId;
+  if (conversationId) {
+    const existing = await prisma.conversation.findFirst({
+      where: { id: conversationId, userId },
+      select: { id: true },
+    });
+    if (!existing) conversationId = undefined;
+  }
   if (!conversationId) {
     const conv = await prisma.conversation.create({
       data: {
