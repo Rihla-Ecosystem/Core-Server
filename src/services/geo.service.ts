@@ -33,7 +33,14 @@ async function fetchNearbySites(lat: number, lon: number, radius?: number, categ
   if (authorization) headers['Authorization'] = authorization;
   const params: Record<string, string | number> = { lat, lon };
   if (radius !== undefined) params.radius = radius;
-  if (categories) params.category = categories;
+  // `categories` arrives comma-joined (e.g. the frontend's heritage default
+  // "archaeological,islamic,christian"). GeoContext only supports a SINGLE
+  // category per query (`Site.categories.contains([category])`), so forwarding
+  // a comma-joined string matches nothing. When more than one category is
+  // requested, omit the filter entirely and let GeoContext return all public
+  // sites within radius (filterPublicPois already strips restricted/military).
+  const categoryList = categories?.split(',').map((c) => c.trim()).filter(Boolean);
+  if (categoryList && categoryList.length === 1) params.category = categoryList[0];
   const pois = await get(`${base}/api/v1/nearby-sites`, params, headers).catch(() => null);
 
   return { pois } as GeoContext;

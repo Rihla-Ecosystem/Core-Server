@@ -136,6 +136,14 @@ const options: swaggerJsdoc.Options = {
             criteriaValue: { type: 'integer', nullable: true },
           },
         },
+        Role: {
+          type: 'object',
+          properties: {
+            id: { type: 'integer' },
+            name: { type: 'string' },
+            permissions: { type: 'array', items: { type: 'string' } },
+          },
+        },
         AuditLog: {
           type: 'object',
           properties: {

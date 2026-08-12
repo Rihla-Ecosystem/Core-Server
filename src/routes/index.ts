@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import authRoutes from './auth.routes.js';
+import favoritePlaceRoutes from './favorite-place.routes.js';
 import userRoutes from './user.routes.js';
 import adminRoutes from './admin.routes.js';
 import memoryRoutes from './memory.routes.js';
@@ -50,6 +51,7 @@ router.use('/dashboard/users', dashboardUsersRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/context-notifications', contextNotificationRoutes);
 router.use('/reports', incidentReportRoutes);
+router.use('/places', favoritePlaceRoutes);
 router.use('/ai-service', aiServiceRoutes);
 
 router.get('/leaderboard', userController.getLeaderboard);

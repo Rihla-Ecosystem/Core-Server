@@ -412,6 +412,8 @@ model User {
 
   notifications           Notification[]
 
+  favoritePlaces          FavoritePlace[]
+
   aiUsageLogs             AiUsageLog[]
 
   notificationTemplates   NotificationTemplate[] @relation("CreatedNotificationTemplates")
@@ -1096,4 +1098,24 @@ model IncidentReport {
   @@index([userId, createdAt])
   @@index([status])
   @@map("incident_reports")
+}
+
+model FavoritePlace {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  placeId     String   @map("place_id") @db.VarChar(255)
+  placeName   String   @map("place_name") @db.VarChar(255)
+  category    String?  @db.VarChar(100)
+  governorate String?  @db.VarChar(100)
+  lat         Float?
+  lon         Float?
+  img         String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, placeId])
+  @@index([userId, updatedAt])
+  @@map("favorite_places")
 }

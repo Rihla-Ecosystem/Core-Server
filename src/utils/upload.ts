@@ -41,6 +41,10 @@ const AUDIO_MIMES = new Set([
   'audio/ogg',
   'audio/flac',
   'audio/x-flac',
+  'audio/webm',
+  'audio/x-webm',
+  'audio/mp4',
+  'audio/x-m4a',
 ]);
 export const uploadAudio = multer({
   storage: multer.memoryStorage(),
@@ -49,7 +53,7 @@ export const uploadAudio = multer({
     if (AUDIO_MIMES.has(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(rejectImage('Only WAV, MP3, AIFF, AAC, OGG, and FLAC audio files are allowed'));
+      cb(rejectImage('Only WAV, MP3, AIFF, AAC, OGG, FLAC, and WebM audio files are allowed'));
     }
   },
 });

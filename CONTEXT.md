@@ -1,15 +1,15 @@
 # Core-Server — Handoff
 
 > Read relevant section only. Appends 3–6 lines. Prune Changelog > 25.
-> Last updated: 2026-08-10
+> Last updated: 2026-08-12
 
 ## Current status
 - Express + Prisma + PostgreSQL core service (port 3000). DB container `core-server-db` (5434) hosting `core_server`; test DB `core_server_test`.
-- Prisma 6.19.3 (CLI). Migration `20260809023822_add_incident_reports` applied; client regenerated.
-- `tsc --noEmit` clean; full test suite `node --test` under `.env.test` passes 2173/2173.
+- Prisma 6.19.3 (CLI). Migrations applied incl. `20260812090000_add_favorite_places`; client regenerated.
+- `tsc --noEmit` clean; full test suite 2182 tests: 2177 pass / 5 fail — failures (chat-token, phase-2e-c, phase-2g-b AI-billing) PRE-EXISTING on clean tree at HEAD `b66e0e7`, unrelated to this task.
 
 ## In-progress / next
-- Everyththing for this task landed and verified locally. Next: restart core on 3000, then smoke `/api/reports` (user) + `/api/admin/incident-reports` (admin role), and confirm `POST /context-notifications/location` returns `skipped:true` on <50m movement.
+- 2026-08-12 FAVORITES: `favorite_places` table (userId+placeId unique, snapshot) + `/api/places/favorites` GET/POST/DELETE + GET/:placeId (auth, 20/min) + `/api/places/events` (202 ack, 60/min). Wired Ahmed frontend `placesApi` to unwrap `{success,data}`. Browser-verified end-to-end (save→saved page→remove→empty, 0 console errors). 8 new tests pass. Next: deploy to VPS (`prisma migrate deploy` + compose recreate), then decide monuments (GeoContext `details` too sparse — no prices/hours/images — so `egymonuments.clean.json` stays unless GeoContext seeded).
 - 2026-08-10 ASSESSMENT: added `AUTO_VERIFY_EMAIL` flag (env, default false) — when true, `registerUser` sets `isEmailVerified:true` and skips verification email → new signups can login immediately (was 403 lockout). Deployed: pushed `23ca3b9`, VPS `/opt/rihla-prod` env += `AUTO_VERIFY_EMAIL=true`, compose core env line added, `docker-compose --env-file ./env up -d --no-deps core-server` recreated. Live-verified: fresh register 201 → login 200.
 
 ## Architecture notes
@@ -30,6 +30,9 @@
 - DB creds/port: started with `docker start core-server-db geocontext_db`.
 
 ## Changelog
+- 2026-08-12: CHAT/IDENTIFY/VOICE DEBUG + FIXES from Ahmed-frontend Phase 1 verification. ai-service was down (`POST /chat/stream` 500 + identify timeouts) → restarted on `:3003` (`.venv/bin/python3 -m uvicorn app.main:app --host 0.0.0.0 --port 3003`, log `/tmp/ai-service.log`; Qdrant alive on 6333). Fixed `identify.service.ts:62` upstream timeout 15s→150s (cold Gemini-vision exceeded 15s → Core 500 while ai-service 200). Fixed `utils/upload.ts` AUDIO_MIMES → added `audio/webm`, `audio/x-webm`, `audio/mp4`, `audio/x-m4a` (Chrome recorder emits webm/opus; previously `400 "Only WAV, MP3…"`). GeoContext still down on `:8000` (non-blocking). Browser-verified text stream/identify/voice 200.
+- 2026-08-12: FAVORITE PLACES. New `favorite_places` table + `/api/places/*` (favorites CRUD + events ack, auth'd, rate-limited) so the Ahmed frontend Save/بookmark flow works live instead of dead `/places/*` 404s. Wired `placesApi` to unwrap `{success,data}`; 8 service tests added; migration applied to dev + test DBs; browser smoke passed (0 console errors). NOT yet deployed to VPS.
+- 2026-08-10: CHAT 500 FIX. Non-streaming `chat.service.ts` threw 404 "Conversation not found" when the supplied `conversation_id` didn't belong to the user (client sends a fabricated UUID for brand-new conversations), and the usage-billing wrapper converted it to a 500. Now mirrors voice/stream fallback: unknown conversation_id → create a fresh conversation. Pushed `b66e0e7` → GHCR → VPS `docker-compose --env-file ./env up -d --no-deps core-server` recreated. Verified live via `/api/v1` proxy: new conv 200 + follow-up in same conv 200; 0 "Conversation not found" in logs. Also credited demo wallet +1000 (token balance was drained by tests → 402).
 - 2026-08-10: AUTO_VERIFY_EMAIL flag (`src/config/env.ts` + `src/services/auth.service.ts` `registerUser`) — new signups verified immediately when flag on. Pushed `23ca3b9` → CI GHCR image → VPS pull + compose recreate (added env + compose line). 201→login 200 verified live.
 - 2026-08-09: FIXED realtime SSE stream. `context-engine.controller.ts` `stream` called `res.flushHeaders()` then `notification-realtime.service.ts` `subscribeToNotifications` called `res.writeHead()` again → `ERR_HTTP_HEADERS_SENT` → stream died (ERR_INCOMPLETE_CHUNKED_ENCODING), client reconnected in infinite loop. Removed the redundant `flushHeaders()`; verified SSE stays open (`retry:10000` → `ready` → heartbeat) with demo token. Note: running via `tsx watch` auto-restarts.
 - 2026-08-09: DEPLOYED to VPS + Supabase. Pushed `f58fef1` → GHCR image rebuilt → `docker-compose up -d core-server` on `88.222.220.235`; `prisma migrate deploy` auto-applied `20260809023822_add_incident_reports` to Supabase (confirmed in container logs). Container healthy; smoke: POST `/api/reports` created uuid, admin list + PATCH→RESOLVED OK, `/context-notifications/location` throttle path OK.
