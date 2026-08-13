@@ -40,6 +40,7 @@ import type {
 import type {
   UsageBasedBillingDependencies,
   UsageBasedBillingExposure,
+  UsageBasedBillingExecutionContext,
   UsageBasedBillingInput,
   UsageBasedBillingReasonCode,
   UsageBasedBillingResult,
@@ -332,7 +333,7 @@ export async function runUsageBasedAIBilling<T>(
 
   const providerCallsOf = input.providerCallsOf ?? defaultProviderCallsOf;
   const providerAttemptsOf = input.providerAttemptsOf ?? defaultProviderAttemptsOf;
-  const executeContext = {
+  const executeContext: UsageBasedBillingExecutionContext = {
     operationId,
     reservationId: '',
     executionBudget: input.executionBudget,
@@ -749,7 +750,11 @@ async function runAdminExemptFlow<T>(
   operationId: string,
   providerCallsOf: (data: T) => unknown,
 ): Promise<UsageBasedBillingResult<T>> {
-  const executeContext = { operationId, reservationId: '' };
+  const executeContext: UsageBasedBillingExecutionContext = {
+    operationId,
+    reservationId: '',
+    executionBudget: input.executionBudget,
+  };
 
   let raw: unknown;
   try {

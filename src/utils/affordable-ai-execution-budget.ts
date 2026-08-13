@@ -1,10 +1,10 @@
 import type { AIExecutionBudget } from '../config/ai-execution-budget.js';
-import type { BusinessTokenFeature } from '../config/business-token-features.js';
+import type { UsageBasedAIFeature } from '../config/ai-runtime-routing.js';
 import type { ProviderRateCard } from '../types/provider-pricing.js';
 import type { WalletPolicyConfig } from '../config/wallet-policy.js';
 import { calculateDynamicAIReservationQuote } from './dynamic-ai-reservation-quote.js';
 
-const MIN_OUTPUT: Record<BusinessTokenFeature, number> = {
+const MIN_OUTPUT: Record<UsageBasedAIFeature, number> = {
   AI_CHAT_QUERY: 64,
   AI_IMAGE_ANALYSIS: 64,
   REAL_TIME_TRANSLATION: 64,
@@ -12,7 +12,7 @@ const MIN_OUTPUT: Record<BusinessTokenFeature, number> = {
 };
 
 export interface AffordableBudgetInput {
-  feature: BusinessTokenFeature;
+  feature: UsageBasedAIFeature;
   budget: AIExecutionBudget;
   estimatedInputTokens: number;
   /** The optional Chat-history portion already included in estimatedInputTokens. */

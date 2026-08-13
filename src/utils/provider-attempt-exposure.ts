@@ -1,5 +1,7 @@
 import { normalizeProviderAttempts } from './ai-usage.js';
 
+type ProviderAttempt = NonNullable<ReturnType<typeof normalizeProviderAttempts>>[number];
+
 /** JSON-safe evidence only. It is never input to provider pricing or Wallet settlement. */
 export interface ProviderAttemptExposure {
   totalAttempts: number;
@@ -10,13 +12,14 @@ export interface ProviderAttemptExposure {
   providerErrorCount: number;
   indeterminateAttempts: number;
   hasIndeterminateCostExposure: boolean;
-  attempts: ReturnType<typeof normalizeProviderAttempts> extends infer T ? Exclude<T, undefined> : never;
+  attempts: ProviderAttempt[];
 }
 
 export function summarizeProviderAttemptExposure(raw: unknown): ProviderAttemptExposure | undefined {
-  const attempts = normalizeProviderAttempts(raw);
-  if (attempts === undefined) return undefined;
-  const count = (predicate: (attempt: typeof attempts[number]) => boolean) => attempts.filter(predicate).length;
+  const normalizedAttempts = normalizeProviderAttempts(raw);
+  if (normalizedAttempts === undefined) return undefined;
+  const attempts: ProviderAttempt[] = normalizedAttempts ?? [];
+  const count = (predicate: (attempt: ProviderAttempt) => boolean) => attempts.filter(predicate).length;
   const indeterminateAttempts = count((attempt) => attempt.outcome === 'INDETERMINATE');
   return {
     totalAttempts: attempts.length,

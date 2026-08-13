@@ -1,5 +1,5 @@
 import type { AIBillingOperationStatus } from '@prisma/client';
-import type { BusinessTokenFeature } from '../config/business-token-features.js';
+import type { UsageBasedAIFeature } from '../config/ai-runtime-routing.js';
 import type { ChatLimitsConfig } from '../config/chat-limits.js';
 import type { WalletPolicyConfig } from '../config/wallet-policy.js';
 import type { BusinessConsumptionSource } from '../services/business-token-consumption.service.js';
@@ -95,7 +95,7 @@ export interface UsageBasedBillingInput<T = unknown> {
   /** Stable operation id; also the replay idempotency key. */
   operationId: string;
   userId: string;
-  feature: BusinessTokenFeature;
+  feature: UsageBasedAIFeature;
   source: BusinessConsumptionSource;
   idempotencyKey: string;
 

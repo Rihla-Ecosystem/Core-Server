@@ -84,12 +84,15 @@ async function reconcile(refundId: string): Promise<RefundResult | null> {
 export async function requestPaymentRefund(paymentId: string, adminId: string): Promise<RefundResult> {
   let held: Awaited<ReturnType<typeof hold>>;
   try { held = await prisma.$transaction(tx => hold(tx, paymentId, adminId)); } catch (e) { if (e instanceof AppError) throw e; throw e; }
-  if ('existing' in held) return { paymentId, refundId: held.existing.id, status: held.existing.status, eligible: held.existing.status === PaymentRefundStatus.SUCCEEDED, reasonCode: held.existing.status === PaymentRefundStatus.SUCCEEDED ? 'ALREADY_REFUNDED' : 'REFUND_ALREADY_IN_PROGRESS' };
-  const refundId = held.refund.id;
+  const existing = 'existing' in held ? held.existing : undefined;
+  if (existing) return { paymentId, refundId: existing.id, status: existing.status, eligible: existing.status === PaymentRefundStatus.SUCCEEDED, reasonCode: existing.status === PaymentRefundStatus.SUCCEEDED ? 'ALREADY_REFUNDED' : 'REFUND_ALREADY_IN_PROGRESS' };
+  const refund = held.refund;
+  if (!refund) throw new AppError(500, 'Refund hold did not create a refund');
+  const refundId = refund.id;
   await prisma.paymentRefund.update({ where: { id: refundId }, data: { status: PaymentRefundStatus.PROVIDER_PENDING } });
   try {
-    const response = await refundPaymobTransaction({ transactionId: held.refund.originalProviderTransactionId, amountCents: held.refund.amountCents });
-    if (validSuccess(response, paymentId, held.refund.amountCents)) return finalizePaymentRefund(refundId, response);
+    const response = await refundPaymobTransaction({ transactionId: refund.originalProviderTransactionId, amountCents: refund.amountCents });
+    if (validSuccess(response, paymentId, refund.amountCents)) return finalizePaymentRefund(refundId, response);
     return reconcile(refundId) as Promise<RefundResult>;
   } catch (e) {
     if (e instanceof HttpClientError && (e.status === 400 || e.status === 422)) {

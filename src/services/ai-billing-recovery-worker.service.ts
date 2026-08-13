@@ -134,14 +134,16 @@ export async function processStaleAIBillingReservations(
         continue;
       }
 
+      const actualWalletTokens = operation.actualWalletTokens;
       if (
         operation.status === 'PRICED' &&
-        Number.isSafeInteger(operation.actualWalletTokens) &&
-        operation.actualWalletTokens >= 0
+        typeof actualWalletTokens === 'number' &&
+        Number.isFinite(actualWalletTokens) &&
+        actualWalletTokens >= 0
       ) {
         const settlement = await dependencies.settleReservation({
           reservationId: reservation.id,
-          actualTokens: operation.actualWalletTokens,
+          actualTokens: actualWalletTokens,
         });
         await dependencies.markSettled({ operationId: operation.operationId, settlement });
         result.settled += settlement.idempotentReplay ? 0 : 1;

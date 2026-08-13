@@ -36,7 +36,9 @@ export async function refund(req: Request, res: Response, next: NextFunction): P
 export async function resolveRefundReview(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     if (!req.user) throw new AppError(401, 'Authentication required');
-    const result = await adminPaymentService.resolveRefundReview(req.params.refundId, req.user.userId, (req.body as AdminPaymentRefundResolveBody).resolutionNote);
+    const refundId = req.params.refundId;
+    if (typeof refundId !== 'string' || !refundId) throw new AppError(400, 'Invalid refund id');
+    const result = await adminPaymentService.resolveRefundReview(refundId, req.user.userId, (req.body as AdminPaymentRefundResolveBody).resolutionNote);
     res.status(200).json({ success: true, data: result });
   } catch (err) { next(err); }
 }

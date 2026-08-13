@@ -1,4 +1,8 @@
 import type { BusinessTokenFeature } from './business-token-features.js';
+import type { AIBilledExecutionFeature } from './ai-execution-budget.js';
+
+/** Business-token features that dispatch to an AI runtime model route. */
+export type UsageBasedAIFeature = Extract<BusinessTokenFeature, AIBilledExecutionFeature>;
 
 /** Runtime model identities mirrored from AI Service's configured Gemini routes. */
 export const GEMINI_TEXT_RUNTIME_MODELS = Object.freeze([
@@ -15,7 +19,7 @@ export interface RuntimeModelRoute {
   ttsModels?: readonly string[];
 }
 
-export const AI_RUNTIME_MODEL_ROUTES: Readonly<Record<BusinessTokenFeature, RuntimeModelRoute>> = Object.freeze({
+export const AI_RUNTIME_MODEL_ROUTES: Readonly<Record<UsageBasedAIFeature, RuntimeModelRoute>> = Object.freeze({
   AI_CHAT_QUERY: { textModels: GEMINI_TEXT_RUNTIME_MODELS },
   AI_IMAGE_ANALYSIS: { textModels: GEMINI_TEXT_RUNTIME_MODELS },
   REAL_TIME_TRANSLATION: { textModels: GEMINI_TEXT_RUNTIME_MODELS, ttsModels: [GEMINI_TTS_RUNTIME_MODEL] },

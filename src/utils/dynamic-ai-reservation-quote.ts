@@ -1,15 +1,15 @@
-import type { BusinessTokenFeature } from '../config/business-token-features.js';
 import type { AIExecutionBudget } from '../config/ai-execution-budget.js';
 import type { WalletPolicyConfig } from '../config/wallet-policy.js';
 import type { ProviderRateCard } from '../types/provider-pricing.js';
 import { aggregateProviderCalls } from './provider-pricing/aggregate.js';
 import { computeWalletCharge } from './wallet-conversion.js';
 import { AI_RUNTIME_MODEL_ROUTES } from '../config/ai-runtime-routing.js';
+import type { UsageBasedAIFeature } from '../config/ai-runtime-routing.js';
 
 export class DynamicAIReservationQuoteError extends Error {}
 
 export interface DynamicAIReservationQuoteInput {
-  feature: BusinessTokenFeature;
+  feature: UsageBasedAIFeature;
   executionBudget: AIExecutionBudget;
   estimatedInputTokens: number;
   rateCard: ProviderRateCard;

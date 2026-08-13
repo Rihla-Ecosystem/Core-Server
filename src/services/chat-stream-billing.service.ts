@@ -22,7 +22,7 @@ import type { AIExecutionOutcome } from '../types/ai-execution.js';
 import type { AIUsagePricingResult } from '../types/ai-pricing.js';
 import type { ChatLimitsConfig } from '../config/chat-limits.js';
 import type { WalletPolicyConfig } from '../config/wallet-policy.js';
-import type { BusinessTokenFeature } from '../config/business-token-features.js';
+import type { UsageBasedAIFeature } from '../config/ai-runtime-routing.js';
 import type { BusinessConsumptionSource } from './business-token-consumption.service.js';
 import type { ProviderRateCard } from '../types/provider-pricing.js';
 import type { AIExecutionBudget } from '../config/ai-execution-budget.js';
@@ -60,7 +60,7 @@ export interface ChatStreamBillingContext {
 
 export interface BeginChatStreamUsageBasedBillingInput {
   userId: string;
-  feature: BusinessTokenFeature;
+  feature: UsageBasedAIFeature;
   source: BusinessConsumptionSource;
   idempotencyKey: string;
   operationId: string;
@@ -213,8 +213,9 @@ export interface SettleChatStreamUsageBasedBillingInput {
   operationId: string;
   reservationId: string;
   userId: string;
-  feature: BusinessTokenFeature;
+  feature: UsageBasedAIFeature;
   reservedTokens: number;
+  executionBudget: AIExecutionBudget;
   usage?: unknown;
   providerCalls?: unknown;
   providerAttempts?: unknown;
