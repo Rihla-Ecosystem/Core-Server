@@ -25,6 +25,9 @@ import type { WalletPolicyConfig } from '../config/wallet-policy.js';
 import type { BusinessTokenFeature } from '../config/business-token-features.js';
 import type { BusinessConsumptionSource } from './business-token-consumption.service.js';
 import type { ProviderRateCard } from '../types/provider-pricing.js';
+import type { AIExecutionBudget } from '../config/ai-execution-budget.js';
+import { deriveAffordableAIExecutionBudget } from '../utils/affordable-ai-execution-budget.js';
+import { summarizeProviderAttemptExposure } from '../utils/provider-attempt-exposure.js';
 
 /**
  * Phase 2G-A streaming chat usage-based billing lifecycle.
@@ -48,6 +51,8 @@ export interface ChatStreamBillingContext {
   operationId: string;
   reservationId: string;
   reservedTokens: number;
+  /** The exact bounded request sent to AI Service after affordability reduction. */
+  executionBudget: AIExecutionBudget;
   /** The resolved authoritative rate card used for this streaming operation. */
   rateCard: ProviderRateCard;
   pricingSource?: 'STATIC' | 'DATABASE_SHADOW' | 'DATABASE_PRIMARY';
@@ -61,6 +66,9 @@ export interface BeginChatStreamUsageBasedBillingInput {
   operationId: string;
   adminExempt: boolean;
   chatLimits: ChatLimitsConfig;
+  executionBudget: AIExecutionBudget;
+  estimatedInputTokens: number;
+  optionalHistoryInputTokens?: number;
   rateCard: ProviderRateCard;
   walletPolicy: WalletPolicyConfig;
   pricingSource?: 'STATIC' | 'DATABASE_SHADOW' | 'DATABASE_PRIMARY';
@@ -110,6 +118,7 @@ export async function beginChatStreamUsageBasedBilling(
       operationId: '',
       reservationId: '',
       reservedTokens: 0,
+      executionBudget: input.executionBudget,
       rateCard: input.rateCard,
       pricingSource: input.pricingSource,
     };
@@ -120,8 +129,33 @@ export async function beginChatStreamUsageBasedBilling(
     throw new AppError(409, 'Chat request already processed');
   }
 
-  const reservationTokens =
-    input.walletPolicy.maxReservationTokensByFeature[input.feature];
+  if (input.pricingSource !== 'DATABASE_PRIMARY') {
+    throw new AppError(503, 'Active database rate card is required for AI billing');
+  }
+  let reservationTokens: number;
+  let executionBudget: AIExecutionBudget;
+  try {
+    const wallet = await prisma.tokenWallet.findUnique({
+      where: { userId: input.userId },
+      select: { tokenBalance: true },
+    });
+    if (!wallet) throw new AppError(402, 'Insufficient token balance');
+    const affordable = deriveAffordableAIExecutionBudget({
+      feature: input.feature,
+      budget: input.executionBudget,
+      estimatedInputTokens: input.estimatedInputTokens,
+      optionalHistoryInputTokens: input.optionalHistoryInputTokens,
+      rateCard: input.rateCard,
+      walletPolicy: input.walletPolicy,
+      availableBalance: wallet.tokenBalance,
+    });
+    if (!affordable) throw new AppError(402, 'Insufficient token balance');
+    reservationTokens = affordable.reservationTokens;
+    executionBudget = affordable.budget;
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    throw new AppError(503, 'Active database rate card cannot price this AI request');
+  }
 
   let reservation;
   try {
@@ -169,6 +203,7 @@ export async function beginChatStreamUsageBasedBilling(
     operationId: input.operationId,
     reservationId,
     reservedTokens: reservationTokens,
+    executionBudget,
     rateCard: input.rateCard,
     pricingSource: input.pricingSource,
   };
@@ -193,23 +228,28 @@ export type ChatStreamSettleOutcome = 'SETTLED' | 'RECOVERY_REQUIRED' | 'SKIPPED
 
 async function recordStreamExposure(input: {
   reservationId: string;
-  pricedCallCount: number;
-  unpricedCallCount: number;
-  pricedCostNanoUsd: string;
-  markedUpNanoUsd: string;
-  walletTokens: string;
+  pricedCallCount?: number;
+  unpricedCallCount?: number;
+  pricedCostNanoUsd?: string;
+  markedUpNanoUsd?: string;
+  walletTokens?: string;
+  providerAttemptExposure?: unknown;
 }): Promise<void> {
+  const reservation = await prisma.tokenReservation.findUnique({
+    where: { id: input.reservationId }, select: { metadata: true },
+  });
+  const existing = reservation?.metadata !== null && typeof reservation?.metadata === 'object' && !Array.isArray(reservation.metadata)
+    ? reservation.metadata : {};
   await prisma.tokenReservation.update({
     where: { id: input.reservationId },
     data: {
       metadata: {
-        unresolvedCostExposure: {
-          pricedCallCount: input.pricedCallCount,
-          unpricedCallCount: input.unpricedCallCount,
-          pricedCostNanoUsd: input.pricedCostNanoUsd,
-          markedUpNanoUsd: input.markedUpNanoUsd,
-          walletTokens: input.walletTokens,
-        },
+        ...existing,
+        ...(input.pricedCallCount === undefined ? {} : { unresolvedCostExposure: {
+          pricedCallCount: input.pricedCallCount, unpricedCallCount: input.unpricedCallCount,
+          pricedCostNanoUsd: input.pricedCostNanoUsd, markedUpNanoUsd: input.markedUpNanoUsd, walletTokens: input.walletTokens,
+        } }),
+        ...(input.providerAttemptExposure === undefined ? {} : { providerAttemptExposure: input.providerAttemptExposure }),
       },
     },
   });
@@ -280,9 +320,21 @@ export async function settleChatStreamUsageBasedBilling(
     return recoveryRequired(input, 'EXECUTION_EVIDENCE_FAILED');
   }
 
+  const attemptExposure = summarizeProviderAttemptExposure(input.providerAttempts);
+  if (attemptExposure !== undefined) {
+    try {
+      await recordStreamExposure({ reservationId: input.reservationId, providerAttemptExposure: attemptExposure });
+      console.info('[chat-stream-billing] provider_attempt_exposure', {
+        operationId: input.operationId, feature: input.feature, fundingPolicy: 'USER_FUNDED', ...attemptExposure,
+      });
+    } catch {
+      return recoveryRequired(input, 'EXECUTION_EVIDENCE_FAILED');
+    }
+  }
+
   if (
     outcome.usage.inputTokens > input.chatLimits.maxInputTokens ||
-    outcome.usage.outputTokens > input.chatLimits.maxOutputTokens
+    outcome.usage.outputTokens > input.executionBudget.maxOutputTokens
   ) {
     return recoveryRequired(input, 'USAGE_LIMITS_EXCEEDED');
   }

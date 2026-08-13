@@ -6,6 +6,7 @@
 // never searches for additional information.
 import { env } from '../config/env.js';
 import { post } from '../utils/http-client.js';
+import { getAIExecutionBudget } from '../config/ai-execution-budget.js';
 import type {
   ContextAnalysisResult,
   ContextObject,
@@ -25,15 +26,22 @@ export interface ContextAnalysisResponse {
   }>;
   model?: string;
   usage?: Record<string, unknown>;
+  providerCalls?: unknown;
+  providerAttempts?: unknown;
 }
 
 export async function analyzeContext(
   context: ContextObject,
+  operationId: string,
   timeoutMs = 30_000,
 ): Promise<ContextAnalysisResponse> {
   const result = await post<ContextAnalysisResponse>(
     `${env.AI_SERVICE_URL}${CONTEXT_ANALYZE_ENDPOINT}`,
-    { context },
+    {
+      context,
+      operationId,
+      executionBudget: getAIExecutionBudget('AI_CONTEXT_ANALYZE'),
+    },
     { 'X-Internal-Api-Key': env.INTERNAL_API_KEY },
     timeoutMs,
   );

@@ -307,6 +307,14 @@ function normalizeProviderAttempt(raw: unknown): ProviderAttempt | undefined {
     attempt.providerCallStartedAt = startedAt;
   }
 
+  if (record.providerCompletedAt !== undefined && typeof record.providerCompletedAt === 'string' && isIso8601Timestamp(record.providerCompletedAt)) {
+    attempt.providerCompletedAt = record.providerCompletedAt.trim();
+  }
+  if (record.usageConfirmed !== undefined) {
+    if (typeof record.usageConfirmed !== 'boolean') return undefined;
+    attempt.usageConfirmed = record.usageConfirmed;
+  }
+
   const optionalString: Array<keyof RawProviderAttempt> = [
     'operation',
     'requestedModel',

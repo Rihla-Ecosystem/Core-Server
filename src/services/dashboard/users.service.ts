@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/prisma.js';
 import { AppError } from '../../middleware/errorHandler.js';
 import { hashPassword } from '../../utils/hash.js';
+import { consumeAvailableFundingLots } from '../token-funding-lot.service.js';
 
 export type DashboardOrder = 'asc' | 'desc';
 export type DashboardSortField = 'createdAt' | 'lastLoginAt' | 'displayName' | 'email' | 'xp' | 'level' | 'id' | 'walletBalance';
@@ -2498,6 +2499,9 @@ export async function resetWallet(targetUserId: string, actorId: string): Promis
         where: { userId: targetUserId },
         data: { tokenBalance: 0, status: 'ACTIVE' },
       });
+      // A reset removes available Wallet value, so it must deplete the same
+      // oldest funding lots as any other administrative debit.
+      await consumeAvailableFundingLots(tx, wallet.id, wallet.tokenBalance);
     } else if (!wallet) {
       await tx.tokenWallet.create({
         data: {

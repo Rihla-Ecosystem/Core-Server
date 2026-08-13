@@ -80,6 +80,17 @@ function parseStrictNonNegativeIntValue(
   throw new Error(`${name} must be a decimal integer string`);
 }
 
+function parseStrictBooleanValue(value: unknown, defaultValue: boolean, name: string): boolean {
+  if (value === undefined || value === null || value === '') return defaultValue;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  throw new Error(`${name} must be true or false`);
+}
+
 const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   JWT_ACCESS_SECRET: z.string().min(32),
@@ -225,6 +236,21 @@ const envSchema = z.object({
     (value) => (value === '' ? undefined : value),
     z.string().optional(),
   ),
+
+  // Phase 1 automatic stale-reservation recovery. Expiry remains the
+  // reservation service's existing TTL; these settings only control polling.
+  AI_BILLING_RECOVERY_ENABLED: z.preprocess(
+    (value) => parseStrictBooleanValue(value, true, 'AI_BILLING_RECOVERY_ENABLED'),
+    z.boolean(),
+  ).default(true),
+  AI_BILLING_RECOVERY_POLL_INTERVAL_MS: z.preprocess(
+    (value) => parseStrictPositiveIntValue(value, 60_000, 'AI_BILLING_RECOVERY_POLL_INTERVAL_MS'),
+    z.number().int().positive(),
+  ).default(60_000),
+  AI_BILLING_RECOVERY_BATCH_SIZE: z.preprocess(
+    (value) => parseStrictPositiveIntValue(value, 25, 'AI_BILLING_RECOVERY_BATCH_SIZE'),
+    z.number().int().min(1).max(100),
+  ).default(25),
 });
 
 export const env = envSchema.parse(process.env);

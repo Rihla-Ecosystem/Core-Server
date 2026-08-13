@@ -1,6 +1,7 @@
 import { Prisma, TokenTransactionSource, TokenTransactionType } from '@prisma/client';
 import { prisma } from '../config/prisma.js';
 import { walletPolicyConfig } from '../config/env.js';
+import { createFundingLot } from './token-funding-lot.service.js';
 import { MAX_TOKEN_BALANCE } from '../config/business-token-features.js';
 import { isTokenExemptUser } from '../utils/token-exempt.js';
 
@@ -133,7 +134,7 @@ export async function grantFirstLoginTokens(userId: string): Promise<FirstLoginG
         update: { tokenBalance: { increment: actualGrant } },
       });
 
-      await tx.tokenTransaction.create({
+      const transaction = await tx.tokenTransaction.create({
         data: {
           walletId: updatedWallet.id,
           userId,
@@ -147,6 +148,10 @@ export async function grantFirstLoginTokens(userId: string): Promise<FirstLoginG
             policyVersion: walletPolicyConfig.version,
           },
         },
+      });
+      await createFundingLot(tx, {
+        walletId: updatedWallet.id, userId, source: TokenTransactionSource.ADMIN,
+        sourceTransactionId: transaction.id, tokens: actualGrant,
       });
 
       return {

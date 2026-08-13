@@ -103,16 +103,17 @@ export function buildExplicitCacheHitOutcome<T>(data: T): AIExecutionOutcome<T> 
 }
 
 /**
- * Non-billable failure for an upstream AI service error. Mirrors the historical
- * FIXED-mode refund semantics: the business request never produced a billable
- * execution, so the reservation is fully released and nothing is charged.
+ * An upstream AI-service failure is indeterminate from Core's perspective:
+ * the service may have already dispatched a physical provider attempt. Never
+ * invent a user charge, but retain the reservation for conservative recovery
+ * instead of releasing it as a known zero-cost outcome.
  */
 export function aiUnavailableOutcome(message: string): AIExecutionOutcome<never> {
   return {
-    kind: 'NON_BILLABLE_FAILURE',
+    kind: 'INDETERMINATE_FAILURE',
     code: 'AI_SERVICE_UNAVAILABLE',
     message,
-    providerRequestSent: false,
+    providerRequestSent: true,
     retryable: true,
   };
 }

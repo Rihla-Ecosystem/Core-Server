@@ -105,6 +105,8 @@ model Payment {
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   tokenTransactions TokenTransaction[]
+  fundingLot TokenFundingLot?
+  refund PaymentRefund?
 
   tokenPackage TokenPackage @relation(fields: [tokenPackageId], references: [id], onDelete: Restrict)
 
@@ -135,6 +137,7 @@ model TokenWallet {
   user         User               @relation(fields: [userId], references: [id], onDelete: Restrict)
   transactions TokenTransaction[]
   reservations TokenReservation[]
+  fundingLots TokenFundingLot[]
 }
 
 enum TokenReservationStatus {
@@ -178,6 +181,7 @@ model TokenReservation {
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   billingOperation AIBillingOperation?
+  fundingAllocations TokenReservationFundingAllocation[]
 
   @@unique([referenceId])
   @@unique([userId, feature, idempotencyKey])
@@ -321,6 +325,7 @@ model TokenTransaction {
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   payment Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  fundingLot TokenFundingLot? @relation("FundingSourceTransaction")
 
   @@unique([source, referenceId])
   @@index([userId, createdAt])
@@ -330,6 +335,94 @@ model TokenTransaction {
   @@index([paymentId])
   @@index([createdAt])
   @@index([source])
+}
+
+/** Every positive Wallet credit owns one FIFO funding lot. */
+model TokenFundingLot {
+  id String @id @default(uuid()) @db.Uuid
+  walletId String @db.Uuid
+  userId String @db.Uuid
+  source TokenTransactionSource
+  sourceTransactionId String @unique @db.Uuid
+  paymentId String? @unique @db.Uuid
+  originalTokens Int
+  availableTokens Int
+  reservedTokens Int @default(0)
+  refundHeldTokens Int @default(0)
+  consumedTokens Int @default(0)
+  refundedTokens Int @default(0)
+  refundedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  wallet TokenWallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sourceTransaction TokenTransaction @relation("FundingSourceTransaction", fields: [sourceTransactionId], references: [id], onDelete: Restrict)
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  allocations TokenReservationFundingAllocation[]
+  refund PaymentRefund?
+
+  @@index([walletId, createdAt, id])
+  @@index([userId, paymentId])
+}
+
+enum PaymentRefundStatus {
+  HOLD_CREATED
+  PROVIDER_PENDING
+  SUCCEEDED
+  FAILED
+  INDETERMINATE
+  REVIEW_REQUIRED
+}
+
+/** One durable full-refund workflow per original Payment. */
+model PaymentRefund {
+  id String @id @default(uuid()) @db.Uuid
+  paymentId String @unique @db.Uuid
+  fundingLotId String @unique @db.Uuid
+  requestedByAdminId String? @db.Uuid
+  tokenAmount Int
+  amountCents Int
+  currency String
+  provider String
+  originalProviderTransactionId String
+  providerRefundTransactionId String? @unique
+  status PaymentRefundStatus @default(HOLD_CREATED)
+  failureReason String?
+  providerData Json?
+  completedAt DateTime?
+  resolvedAt DateTime?
+  resolvedByAdminId String? @db.Uuid
+  resolutionNote String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  fundingLot TokenFundingLot @relation(fields: [fundingLotId], references: [id], onDelete: Restrict)
+  requestedByAdmin User? @relation("PaymentRefundRequestedBy", fields: [requestedByAdminId], references: [id], onDelete: Restrict)
+  resolvedByAdmin User? @relation("PaymentRefundResolvedBy", fields: [resolvedByAdminId], references: [id], onDelete: Restrict)
+
+  @@index([status, updatedAt])
+  @@index([requestedByAdminId])
+  @@index([resolvedByAdminId])
+}
+
+/** Immutable source allocation made when a logical Wallet reservation is created. */
+model TokenReservationFundingAllocation {
+  id String @id @default(uuid()) @db.Uuid
+  reservationId String @db.Uuid
+  fundingLotId String @db.Uuid
+  reservedTokens Int
+  consumedTokens Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservation TokenReservation @relation(fields: [reservationId], references: [id], onDelete: Restrict)
+  fundingLot TokenFundingLot @relation(fields: [fundingLotId], references: [id], onDelete: Restrict)
+
+  @@unique([reservationId, fundingLotId])
+  @@index([reservationId, createdAt, id])
+  @@index([fundingLotId])
 }
 
 model Role {
@@ -408,6 +501,9 @@ model User {
   tokenWallet             TokenWallet?
   tokenTransactions       TokenTransaction[]
   tokenReservations       TokenReservation[]
+  fundingLots             TokenFundingLot[]
+  requestedPaymentRefunds PaymentRefund[] @relation("PaymentRefundRequestedBy")
+  resolvedPaymentRefunds PaymentRefund[] @relation("PaymentRefundResolvedBy")
   journeyProgress         UserJourney[]
 
   notifications           Notification[]

@@ -163,6 +163,7 @@ router.post(
             providerCalls,
             providerAttempts,
             chatLimits: parseChatLimitsConfig(process.env),
+            executionBudget: billing.executionBudget,
             rateCard: billing.rateCard,
             pricingSource: billing.pricingSource,
             walletPolicy: walletPolicyConfig,

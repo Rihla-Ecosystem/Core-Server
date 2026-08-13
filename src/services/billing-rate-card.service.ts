@@ -77,7 +77,10 @@ export function createDefaultBillingRateCardDependencies(): BillingRateCardDepen
     createPrismaProviderRateCardRepository(prisma),
   );
   return {
-    pricingSource: env.PROVIDER_RATE_CARD_PRICING_SOURCE,
+    // Dynamic reservation and settlement are database-rate-card-only. The
+    // legacy environment selector remains for explicit test dependency seams,
+    // but production resolution never permits a static authoritative card.
+    pricingSource: 'DATABASE_PRIMARY',
     staticCard: PROVIDER_RATE_CARD,
     loadActiveRateCardForDate: (pricingDate) => loadActiveRateCardForDate(loaderDeps, pricingDate),
     now: () => new Date(),

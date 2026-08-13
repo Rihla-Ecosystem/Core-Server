@@ -8,6 +8,7 @@ import {
 import { prisma } from '../config/prisma.js';
 import { MAX_TOKEN_BALANCE } from '../config/business-token-features.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { consumeAvailableFundingLots, createFundingLot } from './token-funding-lot.service.js';
 import { getTokenSummary } from './token.service.js';
 import type { TokenSummaryResult } from './token.service.js';
 import type {
@@ -654,6 +655,10 @@ export async function grantBonus(
             },
           },
         });
+        await createFundingLot(tx, {
+          walletId: updatedWallet.id, userId: targetUserId, source: TokenTransactionSource.ADMIN,
+          sourceTransactionId: transaction.id, tokens: input.tokens,
+        });
 
         await tx.auditLog.create({
           data: {
@@ -912,6 +917,7 @@ export async function adjust(
 
             throw new AppError(409, 'Insufficient token balance for adjustment');
           }
+          await consumeAvailableFundingLots(tx, existingWallet.id, input.tokens);
         }
 
         const updatedWallet = await tx.tokenWallet.findUnique({
@@ -954,6 +960,14 @@ export async function adjust(
             } satisfies AdjustmentTransactionMetadata,
           },
         });
+        if (input.operation === 'CREDIT') {
+          await createFundingLot(tx, {
+            walletId: updatedWallet.id, userId: targetUserId, source: TokenTransactionSource.ADMIN,
+            // Payment references on adjustments are audit context, not a
+            // purchase funding lot; only PURCHASE lots own a Payment.
+            sourceTransactionId: transaction.id, tokens: input.tokens,
+          });
+        }
 
         await tx.auditLog.create({
           data: {

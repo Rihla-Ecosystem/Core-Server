@@ -2,6 +2,7 @@ import app from './app.js';
 import { env } from './config/env.js';
 import { prisma } from './config/prisma.js';
 import { processScheduledNotifications } from './services/notification-admin.service.js';
+import { startAIBillingRecoveryWorker } from './services/ai-billing-recovery-worker.service.js';
 
 const SCHEDULED_POLL_INTERVAL_MS = 60_000;
 
@@ -20,6 +21,12 @@ async function main() {
   // Process anything already due on startup.
   processScheduledNotifications().catch((err) => {
     console.error('Startup scheduled notification processing failed:', err);
+  });
+
+  startAIBillingRecoveryWorker({
+    enabled: env.AI_BILLING_RECOVERY_ENABLED,
+    pollIntervalMs: env.AI_BILLING_RECOVERY_POLL_INTERVAL_MS,
+    batchSize: env.AI_BILLING_RECOVERY_BATCH_SIZE,
   });
 
   app.listen(env.PORT, () => {

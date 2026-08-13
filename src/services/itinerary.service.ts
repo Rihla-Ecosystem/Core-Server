@@ -10,6 +10,8 @@ import {
   resolveBillingRateCard,
 } from './billing-rate-card.service.js';
 import { parseChatLimitsConfig } from '../config/chat-limits.js';
+import { getAIExecutionBudget } from '../config/ai-execution-budget.js';
+import type { AIExecutionBudget } from '../config/ai-execution-budget.js';
 import type { TokenExemptUser } from '../utils/token-exempt.js';
 
 export interface ItineraryResult {
@@ -41,7 +43,7 @@ export interface GenerateItineraryInput {
 
 const CHAT_LIMITS = parseChatLimitsConfig(process.env);
 
-async function generateItinerary(input: GenerateItineraryInput): Promise<ItineraryResult> {
+async function generateItinerary(input: GenerateItineraryInput, executionBudget?: AIExecutionBudget): Promise<ItineraryResult> {
   const response = await fetch(`${env.AI_SERVICE_URL}/itinerary`, {
     method: 'POST',
     headers: {
@@ -56,6 +58,7 @@ async function generateItinerary(input: GenerateItineraryInput): Promise<Itinera
       style: input.style ?? 'cultural',
       cities: input.cities,
       base_currency: input.baseCurrency,
+      executionBudget: executionBudget ?? getAIExecutionBudget('AI_TRIP_ITINERARY'),
     }),
   });
 
@@ -98,12 +101,14 @@ export async function generateItineraryWithTokens(
     idempotencyKey: input.businessRequestId,
     adminExempt: isTokenExemptUser(input.user),
     chatLimits: CHAT_LIMITS,
+    executionBudget: getAIExecutionBudget('AI_TRIP_ITINERARY'),
+    estimatedInputTokens: Math.ceil((input.interests.join(' ') + (input.cities?.join(' ') ?? '')).length / 4),
     rateCard: resolved.card,
     pricingSource: resolved.source,
     walletPolicy: walletPolicyConfig,
-    execute: async () => {
+    execute: async ({ executionBudget }) => {
       try {
-        const itinerary = await generateItinerary(input);
+        const itinerary = await generateItinerary(input, executionBudget);
         return buildSuccessOutcome(itinerary, itinerary.usage);
       } catch (err) {
         if (err instanceof AppError && err.statusCode === 502) {

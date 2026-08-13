@@ -15,6 +15,8 @@ import {
   resolveBillingRateCard,
 } from './billing-rate-card.service.js';
 import { parseChatLimitsConfig } from '../config/chat-limits.js';
+import { getAIExecutionBudget } from '../config/ai-execution-budget.js';
+import type { AIExecutionBudget } from '../config/ai-execution-budget.js';
 import { detectPromptInjection } from '../utils/prompt-injection.js';
 
 const AI_CHAT_STREAM_TIMEOUT_MS = 120_000;
@@ -45,6 +47,7 @@ interface StreamChatOptions {
   persona?: string;
   context?: Record<string, unknown>;
   title?: string;
+  executionBudget?: AIExecutionBudget;
 }
 
 async function dispatchChatStreamCore(
@@ -136,6 +139,7 @@ async function dispatchChatStreamCore(
       preferences: prefs,
     },
     history,
+    executionBudget: options.executionBudget ?? getAIExecutionBudget('AI_CHAT_QUERY'),
   };
   if (options?.lat !== undefined) aiPayload.lat = options.lat;
   if (options?.lon !== undefined) aiPayload.lon = options.lon;
@@ -241,6 +245,12 @@ export async function streamChat(
     operationId: `usage:AI_CHAT_QUERY:${options.businessRequestId}`,
     adminExempt: isTokenExemptUser(user),
     chatLimits: parseChatLimitsConfig(process.env),
+    executionBudget: getAIExecutionBudget('AI_CHAT_QUERY'),
+    estimatedInputTokens: Math.min(
+      getAIExecutionBudget('AI_CHAT_QUERY').maxInputTokens,
+      Math.ceil(message.length / 4) + parseChatLimitsConfig(process.env).historyTokenBudget + parseChatLimitsConfig(process.env).summaryTokenBudget + parseChatLimitsConfig(process.env).inputHeadroomTokens,
+    ),
+    optionalHistoryInputTokens: parseChatLimitsConfig(process.env).historyTokenBudget,
     rateCard: resolved.card,
     pricingSource: resolved.source,
     walletPolicy: walletPolicyConfig,
@@ -248,7 +258,10 @@ export async function streamChat(
 
   let dispatched;
   try {
-    dispatched = await dispatchChatStreamCore(userId, message, options, user);
+    dispatched = await dispatchChatStreamCore(userId, message, {
+      ...options,
+      executionBudget: billing.executionBudget,
+    }, user);
   } catch (err) {
     if (billing.mode === 'USAGE_BASED') {
       await failChatStreamUsageBasedBilling({

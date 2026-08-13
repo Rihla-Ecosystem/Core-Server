@@ -15,6 +15,8 @@ import {
   resolveBillingRateCard,
 } from './billing-rate-card.service.js';
 import { parseChatLimitsConfig } from '../config/chat-limits.js';
+import { getAIExecutionBudget } from '../config/ai-execution-budget.js';
+import type { AIExecutionBudget } from '../config/ai-execution-budget.js';
 import type { TokenExemptUser } from '../utils/token-exempt.js';
 
 export interface IdentifyResponse {
@@ -41,6 +43,7 @@ export async function identifyLandmark(
     lon?: number;
     radius?: number;
     authorization?: string;
+    executionBudget?: AIExecutionBudget;
   },
 ): Promise<IdentifyResponse> {
   const formData = new FormData();
@@ -49,6 +52,7 @@ export async function identifyLandmark(
   if (options?.lat !== undefined) formData.append('lat', String(options.lat));
   if (options?.lon !== undefined) formData.append('lon', String(options.lon));
   if (options?.radius !== undefined) formData.append('radius', String(options.radius));
+  formData.append('executionBudget', JSON.stringify(options?.executionBudget ?? getAIExecutionBudget('AI_IMAGE_ANALYSIS')));
 
   const headers: Record<string, string> = {
     'X-Internal-Api-Key': env.INTERNAL_API_KEY,
@@ -95,13 +99,14 @@ export interface IdentifyLandmarkWithTokensInput {
 
 const CHAT_LIMITS = parseChatLimitsConfig(process.env);
 
-function identifyCore(input: IdentifyLandmarkWithTokensInput) {
+function identifyCore(input: IdentifyLandmarkWithTokensInput, executionBudget?: AIExecutionBudget) {
   return identifyLandmark(input.image, input.mimeType, {
     userId: input.userId,
     lat: input.lat,
     lon: input.lon,
     radius: input.radius,
     authorization: input.authorization,
+    executionBudget,
   });
 }
 
@@ -127,12 +132,16 @@ export async function identifyLandmarkWithTokens(
     idempotencyKey: input.businessRequestId,
     adminExempt: isTokenExemptUser(input.user),
     chatLimits: CHAT_LIMITS,
+    executionBudget: getAIExecutionBudget('AI_IMAGE_ANALYSIS'),
+    // Image bytes are not tokens. The quote utility prices the bounded Phase 2
+    // image-token exposure using the database card's token modality semantics.
+    estimatedInputTokens: 0,
     rateCard: resolved.card,
     pricingSource: resolved.source,
     walletPolicy: walletPolicyConfig,
-    execute: async () => {
+    execute: async ({ executionBudget }) => {
       try {
-        const identified = await identifyCore(input);
+        const identified = await identifyCore(input, executionBudget);
         // This is the AI-service's explicit cache contract. It is the sole
         // path allowed to omit usage evidence and settle as zero cost.
         if (identified.cached === true && Array.isArray(identified.providerCalls) && identified.providerCalls.length === 0) {

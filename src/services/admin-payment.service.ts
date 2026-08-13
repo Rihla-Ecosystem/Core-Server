@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../config/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import type { AdminPaymentListQuery, AdminPaymentIdParams } from '../schemas/admin-payment.schema.js';
+import { PaymentRefundStatus } from '@prisma/client';
 
 export interface AdminPaymentUser {
   id: string;
@@ -32,6 +33,7 @@ export interface AdminPaymentListItem {
   updatedAt: string;
   user: AdminPaymentUser;
   tokenPackage: AdminPaymentTokenPackage;
+  refund: { id: string; status: string; failureReason: string | null; providerRefundTransactionId: string | null; resolvedAt: string | null } | null;
 }
 
 export interface AdminPaymentDetails extends AdminPaymentListItem {
@@ -39,6 +41,7 @@ export interface AdminPaymentDetails extends AdminPaymentListItem {
   providerOrderId: string | null;
   providerTransactionId: string | null;
   failureReason: string | null;
+  refund: { id: string; status: string; failureReason: string | null; providerRefundTransactionId: string | null; createdAt: string; updatedAt: string; completedAt: string | null; resolvedAt: string | null; resolutionNote: string | null; fundingLot: { originalTokens: number; availableTokens: number; reservedTokens: number; refundHeldTokens: number; consumedTokens: number; refundedTokens: number }; resolvedByAdmin: { displayName: string | null; email: string } | null } | null;
 }
 
 export interface PaginatedAdminPaymentsResult {
@@ -66,6 +69,7 @@ const paymentListSelect = {
   paidAt: true,
   createdAt: true,
   updatedAt: true,
+  refund: { select: { id: true, status: true, failureReason: true, providerRefundTransactionId: true, resolvedAt: true } },
   user: {
     select: {
       id: true,
@@ -101,6 +105,7 @@ const paymentDetailsSelect = {
   paidAt: true,
   createdAt: true,
   updatedAt: true,
+  refund: { select: { id: true, status: true, failureReason: true, providerRefundTransactionId: true, createdAt: true, updatedAt: true, completedAt: true, resolvedAt: true, resolutionNote: true, fundingLot: { select: { originalTokens: true, availableTokens: true, reservedTokens: true, refundHeldTokens: true, consumedTokens: true, refundedTokens: true } }, resolvedByAdmin: { select: { displayName: true, email: true } } } },
   user: {
     select: {
       id: true,
@@ -133,6 +138,7 @@ function toAdminPaymentListItem(payment: PaymentListRaw): AdminPaymentListItem {
     paidAt: payment.paidAt?.toISOString() ?? null,
     createdAt: payment.createdAt.toISOString(),
     updatedAt: payment.updatedAt.toISOString(),
+    refund: payment.refund ? { ...payment.refund, resolvedAt: payment.refund.resolvedAt?.toISOString() ?? null } : null,
   };
 }
 
@@ -144,6 +150,7 @@ function toAdminPaymentDetails(payment: PaymentDetailsRaw): AdminPaymentDetails 
     paidAt: payment.paidAt?.toISOString() ?? null,
     createdAt: payment.createdAt.toISOString(),
     updatedAt: payment.updatedAt.toISOString(),
+    refund: payment.refund ? { ...payment.refund, createdAt: payment.refund.createdAt.toISOString(), updatedAt: payment.refund.updatedAt.toISOString(), completedAt: payment.refund.completedAt?.toISOString() ?? null, resolvedAt: payment.refund.resolvedAt?.toISOString() ?? null } : null,
   };
 }
 
@@ -165,6 +172,8 @@ function buildWhere(query: AdminPaymentListQuery): Prisma.PaymentWhereInput {
   if (query.userId !== undefined) {
     where.userId = query.userId;
   }
+  if (query.refundReview === 'active') where.refund = { is: { status: PaymentRefundStatus.REVIEW_REQUIRED, resolvedAt: null } };
+  if (query.refundReview === 'resolved') where.refund = { is: { status: PaymentRefundStatus.REVIEW_REQUIRED, resolvedAt: { not: null } } };
 
   if (query.dateFrom !== undefined || query.dateTo !== undefined) {
     where.createdAt = {};
@@ -232,4 +241,13 @@ export async function getById(params: AdminPaymentIdParams): Promise<AdminPaymen
   }
 
   return toAdminPaymentDetails(payment);
+}
+
+export async function resolveRefundReview(refundId: string, adminId: string, resolutionNote: string) {
+  const refund = await prisma.paymentRefund.findUnique({ where: { id: refundId } });
+  if (!refund) throw new AppError(404, 'Refund not found');
+  if (refund.resolvedAt) return { refundId, resolvedAt: refund.resolvedAt, idempotentReplay: true };
+  if (refund.status !== PaymentRefundStatus.REVIEW_REQUIRED) throw new AppError(409, 'Refund is not awaiting manual review');
+  const updated = await prisma.paymentRefund.update({ where: { id: refundId }, data: { resolvedAt: new Date(), resolvedByAdminId: adminId, resolutionNote } });
+  return { refundId: updated.id, resolvedAt: updated.resolvedAt, idempotentReplay: false };
 }

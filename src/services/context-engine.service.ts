@@ -14,6 +14,13 @@ import { evaluateRules, prioritizeEvaluations, RULE_COOLDOWN_MS } from './notifi
 import { publishToUser, isUserOnline } from './notification-realtime.service.js';
 import { EGYPT_EMERGENCY_CONTACTS } from '../types/context-notification.js';
 import { getNotificationSettings } from './notification-admin.service.js';
+import { resolveBillingRateCard, BillingRateCardUnavailableError } from './billing-rate-card.service.js';
+import {
+  indeterminateSystemFundedContextAnalyze,
+  priceSystemFundedContextAnalyze,
+  unavailableSystemFundedContextAnalyze,
+} from './context-analyze-billing.service.js';
+import { randomUUID } from 'node:crypto';
 import type {
   ContextAnalysisResult,
   ContextEngineResult,
@@ -137,8 +144,23 @@ export async function processLocationUpdate(
   // 2. Ask the AI Service to analyze the aggregated context.
   let aiReport: ContextAnalysisResult;
   let aiGenerated: GeneratedNotification[] = [];
+  const contextAnalyzeOperationId = `context-analyze:${randomUUID()}`;
+  let contextAnalyzeAudit;
   try {
-    const ai = await analyzeContext(context);
+    // Context Analyze is system-funded, but its actual provider cost is still
+    // recorded against this one active database rate-card snapshot. Do not
+    // execute the provider path if the authoritative card is unavailable.
+    const resolved = await resolveBillingRateCard();
+    if (resolved.source !== 'DATABASE_PRIMARY') {
+      throw new BillingRateCardUnavailableError('RATE_CARD_SOURCE_INVALID', 'active database rate card is required');
+    }
+    const ai = await analyzeContext(context, contextAnalyzeOperationId);
+    contextAnalyzeAudit = priceSystemFundedContextAnalyze({
+      operationId: contextAnalyzeOperationId,
+      providerCalls: ai.providerCalls,
+      providerAttempts: ai.providerAttempts,
+      rateCard: resolved.card,
+    });
     aiReport = ai.report;
     aiGenerated = (ai.generatedNotifications ?? [])
       .filter((n) => n.title && n.message)
@@ -153,7 +175,10 @@ export async function processLocationUpdate(
         lat: location.lat,
         lng: location.lng,
       }));
-  } catch {
+  } catch (err) {
+    contextAnalyzeAudit = err instanceof BillingRateCardUnavailableError
+      ? unavailableSystemFundedContextAnalyze(contextAnalyzeOperationId, err.code)
+      : indeterminateSystemFundedContextAnalyze(contextAnalyzeOperationId, 'AI_CONTEXT_ANALYZE_FAILED');
     // If the AI service is unavailable, fall back to deterministic sections
     // built entirely from the aggregated context (still useful, never throws).
     aiReport = {
@@ -227,7 +252,10 @@ export async function processLocationUpdate(
       lat: location.lat,
       lng: location.lng,
       areaName: context.geoContext.currentArea ?? null,
-      context: toInputJsonValue(contextSnapshot(context)),
+      context: toInputJsonValue({
+        ...contextSnapshot(context),
+        aiBilling: contextAnalyzeAudit,
+      }),
       report: toInputJsonValue(report as unknown as Record<string, unknown>),
       notifications: persisted.map((n) => ({ id: n.id, title: n.title, priority: n.priority })),
       summary: aiReport.executiveSummary,

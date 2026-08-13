@@ -126,7 +126,10 @@ export interface ProviderAttempt {
   providerCallStarted: boolean;
   /** ISO-8601 start time of the provider SDK call when one began (optional). */
   providerCallStartedAt?: string;
+  providerCompletedAt?: string;
   providerResponseReceived: boolean;
+  /** True only when this attempt has a linked confirmed provider usage record. */
+  usageConfirmed?: boolean;
   providerCallId?: string;
   errorCategory?: string;
   httpStatus?: number;
@@ -143,7 +146,9 @@ export interface RawProviderAttempt {
   outcome?: unknown;
   providerCallStarted?: unknown;
   providerCallStartedAt?: unknown;
+  providerCompletedAt?: unknown;
   providerResponseReceived?: unknown;
+  usageConfirmed?: unknown;
   providerCallId?: unknown;
   errorCategory?: unknown;
   httpStatus?: unknown;

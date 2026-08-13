@@ -2,9 +2,9 @@
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error('Safety check failed: DATABASE_URL is not set');
   const parsed = new URL(dbUrl);
-  if (parsed.pathname !== '/core_server_test') {
+  if (!['/core_server_test', '/core_server_test_suite'].includes(parsed.pathname)) {
     throw new Error(
-      `Safety check failed: DATABASE_URL must point to /core_server_test, got "${parsed.pathname}"`,
+      `Safety check failed: DATABASE_URL must point to an approved isolated test database, got "${parsed.pathname}"`,
     );
   }
 }
@@ -62,7 +62,9 @@ describe('Token Reservation Service', () => {
 
   async function cleanupSuiteData(): Promise<void> {
     const emailFilter = { email: { startsWith: 'test_reservation_' } };
+    await prisma.tokenReservationFundingAllocation.deleteMany({ where: { reservation: { user: emailFilter } } });
     await prisma.tokenReservation.deleteMany({ where: { user: emailFilter } });
+    await prisma.tokenFundingLot.deleteMany({ where: { user: emailFilter } });
     await prisma.tokenTransaction.deleteMany({ where: { user: emailFilter } });
     await prisma.tokenWallet.deleteMany({ where: { user: emailFilter } });
     await prisma.user.deleteMany({ where: emailFilter });
@@ -91,6 +93,15 @@ describe('Token Reservation Service', () => {
         status,
       },
     });
+
+    if (balance > 0) {
+      const transaction = await prisma.tokenTransaction.create({
+        data: { walletId: wallet.id, userId: user.id, type: TokenTransactionType.BONUS, tokens: balance, source: TokenTransactionSource.ADMIN, referenceId: `reservation-fixture:${crypto.randomUUID()}` },
+      });
+      await prisma.tokenFundingLot.create({
+        data: { walletId: wallet.id, userId: user.id, source: TokenTransactionSource.ADMIN, sourceTransactionId: transaction.id, originalTokens: balance, availableTokens: balance },
+      });
+    }
 
     return { userId: user.id, walletId: wallet.id };
   }
@@ -136,7 +147,9 @@ describe('Token Reservation Service', () => {
   }
 
   async function cleanupUser(userId: string): Promise<void> {
+    await prisma.tokenReservationFundingAllocation.deleteMany({ where: { reservation: { userId } } });
     await prisma.tokenReservation.deleteMany({ where: { userId } });
+    await prisma.tokenFundingLot.deleteMany({ where: { userId } });
     await prisma.tokenTransaction.deleteMany({ where: { userId } });
     await prisma.tokenWallet.deleteMany({ where: { userId } });
     await prisma.user.deleteMany({ where: { id: userId } });
@@ -1745,7 +1758,8 @@ describe('Token Reservation Service', () => {
           'Token reservation integrity conflict',
         );
 
-        await prisma.tokenTransaction.deleteMany({ where: { userId } });
+        await prisma.tokenTransaction.deleteMany({ where: { userId, type: TokenTransactionType.CONSUME } });
+        await prisma.tokenReservationFundingAllocation.deleteMany({ where: { reservation: { userId } } });
         await prisma.tokenReservation.deleteMany({ where: { userId } });
       }
     } finally {
@@ -2746,7 +2760,7 @@ describe('Token Reservation Service', () => {
       const wallet = await getWallet(userId);
       assert.equal(wallet.tokenBalance, 8);
       assert.equal(wallet.reservedBalance, 2);
-      assert.equal(await prisma.tokenTransaction.count({ where: { userId } }), 0);
+      assert.equal(await prisma.tokenTransaction.count({ where: { userId, type: TokenTransactionType.CONSUME } }), 0);
     } finally {
       await cleanupUser(userId);
     }

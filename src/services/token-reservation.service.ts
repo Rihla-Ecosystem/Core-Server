@@ -15,6 +15,7 @@ import {
 import type { BusinessTokenFeature } from '../config/business-token-features.js';
 import { isBusinessConsumptionSource } from './business-token-consumption.service.js';
 import type { BusinessConsumptionSource } from './business-token-consumption.service.js';
+import { allocateFundingLotsForReservation, releaseFundingLotAllocations, settleFundingLotAllocations } from './token-funding-lot.service.js';
 
 const RESERVATION_TTL_MS = 15 * 60 * 1000;
 
@@ -457,6 +458,7 @@ async function reserveReservationCore(
           metadata: metadata ?? Prisma.DbNull,
         },
       });
+      await allocateFundingLotsForReservation(tx, { walletId: wallet.id, reservationId: reservation.id, tokens });
 
       return {
         ...toReservationSummary(reservation),
@@ -592,6 +594,7 @@ async function settleReservationCore(
       }
 
       const unusedTokens = reservedTokens - requestedTokens;
+      await settleFundingLotAllocations(tx, { reservationId, actualTokens: requestedTokens });
 
       // Settling works regardless of a later wallet status change, but the
       // wallet must still hold the reserved tokens it committed to. The
@@ -748,6 +751,8 @@ export async function releaseBusinessTokenReservation(
       if (walletUpdated.count !== 1) {
         throw new AppError(409, 'Token reservation integrity conflict');
       }
+
+      await releaseFundingLotAllocations(tx, reservationId);
 
       const released = await tx.tokenReservation.findUnique({
         where: { id: reservationId },

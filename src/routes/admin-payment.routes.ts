@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
 import * as adminPaymentController from '../controllers/admin-payment.controller.js';
-import { adminPaymentListQuerySchema, adminPaymentIdParamsSchema } from '../schemas/admin-payment.schema.js';
+import { adminPaymentListQuerySchema, adminPaymentIdParamsSchema, adminPaymentRefundResolveBodySchema, adminPaymentRefundResolveParamsSchema } from '../schemas/admin-payment.schema.js';
 
 const router = Router();
 
@@ -102,5 +102,9 @@ router.get('/', validate(adminPaymentListQuerySchema, 'query'), adminPaymentCont
  *         description: Payment not found
  */
 router.get('/:id', validate(adminPaymentIdParamsSchema, 'params'), adminPaymentController.getById);
+
+/** Full package refund only; all monetary/provider identifiers are derived server-side. */
+router.post('/:id/refund', validate(adminPaymentIdParamsSchema, 'params'), adminPaymentController.refund);
+router.post('/refunds/:refundId/resolve', validate(adminPaymentRefundResolveParamsSchema, 'params'), validate(adminPaymentRefundResolveBodySchema), adminPaymentController.resolveRefundReview);
 
 export default router;

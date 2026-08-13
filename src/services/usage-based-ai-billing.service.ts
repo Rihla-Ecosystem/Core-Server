@@ -20,6 +20,9 @@ import {
 import { parseAIExecutionOutcome } from '../utils/ai-execution-contract.js';
 import { aggregateProviderCalls } from '../utils/provider-pricing/aggregate.js';
 import { computeWalletCharge } from '../utils/wallet-conversion.js';
+import { calculateDynamicAIReservationQuote } from '../utils/dynamic-ai-reservation-quote.js';
+import { deriveAffordableAIExecutionBudget } from '../utils/affordable-ai-execution-budget.js';
+import { summarizeProviderAttemptExposure } from '../utils/provider-attempt-exposure.js';
 import type { AIExecutionOutcome } from '../types/ai-execution.js';
 import type { AIUsagePricingResult } from '../types/ai-pricing.js';
 import type {
@@ -51,6 +54,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function defaultProviderCallsOf(data: unknown): unknown {
   if (!isRecord(data)) return undefined;
   return data.providerCalls;
+}
+
+function defaultProviderAttemptsOf(data: unknown): unknown {
+  if (!isRecord(data)) return undefined;
+  return data.providerAttempts;
 }
 
 function isExplicitCacheHit(data: unknown, providerCalls: unknown): boolean {
@@ -190,10 +198,6 @@ function buildReservationMetadata<T>(
   };
 }
 
-function reservationCap<T>(input: UsageBasedBillingInput<T>): number {
-  return input.walletPolicy.maxReservationTokensByFeature[input.feature];
-}
-
 function mapReservationDenied<T>(err: unknown): UsageBasedBillingResult<T> | null {
   if (err instanceof AppError) {
     if (err.statusCode === 402) {
@@ -230,17 +234,27 @@ async function resolveOperationByOperationId(input: {
 async function recordReservationExposure(
   exposure: UsageBasedBillingExposure,
 ): Promise<void> {
+  const reservation = await prisma.tokenReservation.findUnique({
+    where: { id: exposure.reservationId }, select: { metadata: true },
+  });
+  const existing = isRecord(reservation?.metadata) ? reservation.metadata : {};
   await prisma.tokenReservation.update({
     where: { id: exposure.reservationId },
     data: {
       metadata: {
-        unresolvedCostExposure: {
-          pricedCallCount: exposure.pricedCallCount,
-          unpricedCallCount: exposure.unpricedCallCount,
-          pricedCostNanoUsd: exposure.pricedCostNanoUsd,
-          markedUpNanoUsd: exposure.markedUpNanoUsd,
-          walletTokens: exposure.walletTokens,
-        },
+        ...existing,
+        ...(exposure.pricedCallCount === undefined ? {} : {
+          unresolvedCostExposure: {
+            pricedCallCount: exposure.pricedCallCount,
+            unpricedCallCount: exposure.unpricedCallCount,
+            pricedCostNanoUsd: exposure.pricedCostNanoUsd,
+            markedUpNanoUsd: exposure.markedUpNanoUsd,
+            walletTokens: exposure.walletTokens,
+          },
+        }),
+        ...(exposure.providerAttemptExposure === undefined ? {} : {
+          providerAttemptExposure: exposure.providerAttemptExposure,
+        }),
       },
     },
   });
@@ -317,9 +331,11 @@ export async function runUsageBasedAIBilling<T>(
   }
 
   const providerCallsOf = input.providerCallsOf ?? defaultProviderCallsOf;
+  const providerAttemptsOf = input.providerAttemptsOf ?? defaultProviderAttemptsOf;
   const executeContext = {
     operationId,
     reservationId: '',
+    executionBudget: input.executionBudget,
   };
 
   // Admin-exempt users execute normally but never reserve or consume tokens.
@@ -340,7 +356,28 @@ export async function runUsageBasedAIBilling<T>(
     });
   }
 
-  const reservationTokens = reservationCap(input);
+  let reservationTokens: number;
+  try {
+    if (input.pricingSource !== 'DATABASE_PRIMARY') {
+      return recovery<T>(operationId, 'QUOTE', 'QUOTE_FAILED');
+    }
+    const wallet = await prisma.tokenWallet.findUnique({ where: { userId }, select: { tokenBalance: true } });
+    if (!wallet) return reservationDenied<T>('WALLET_NOT_FOUND', 402);
+    const affordable = deriveAffordableAIExecutionBudget({
+      feature: input.feature,
+      budget: input.executionBudget,
+      estimatedInputTokens: input.estimatedInputTokens,
+      optionalHistoryInputTokens: input.optionalHistoryInputTokens,
+      rateCard: input.rateCard,
+      walletPolicy: input.walletPolicy,
+      availableBalance: wallet.tokenBalance,
+    });
+    if (!affordable) return reservationDenied<T>('INSUFFICIENT_BALANCE', 402);
+    reservationTokens = affordable.reservationTokens;
+    executeContext.executionBudget = affordable.budget;
+  } catch {
+    return recovery<T>(operationId, 'QUOTE', 'QUOTE_FAILED');
+  }
 
   let reservation: ReserveBusinessTokensResult;
   try {
@@ -455,9 +492,23 @@ export async function runUsageBasedAIBilling<T>(
     });
   }
 
+  const attemptExposure = summarizeProviderAttemptExposure(providerAttemptsOf(outcome.data));
+  if (attemptExposure !== undefined) {
+    try {
+      await dependencies.recordUnresolvedExposure({ reservationId, providerAttemptExposure: attemptExposure });
+      console.info('[usage-billing] provider_attempt_exposure', {
+        operationId, feature: input.feature, fundingPolicy: 'USER_FUNDED', ...attemptExposure,
+      });
+    } catch {
+      return recovery<T>(operationId, 'EXECUTION_EVIDENCE', 'EXECUTION_EVIDENCE_FAILED', {
+        reservationId, operationStatus: 'EXECUTION_SUCCEEDED',
+      });
+    }
+  }
+
   if (
     outcome.usage.inputTokens > input.chatLimits.maxInputTokens ||
-    outcome.usage.outputTokens > input.chatLimits.maxOutputTokens
+    outcome.usage.outputTokens > executeContext.executionBudget.maxOutputTokens
   ) {
     return recovery<T>(operationId, 'USAGE_VALIDATION', 'USAGE_LIMITS_EXCEEDED', {
       reservationId,

@@ -11,6 +11,8 @@ import {
   resolveBillingRateCard,
 } from './billing-rate-card.service.js';
 import { parseChatLimitsConfig } from '../config/chat-limits.js';
+import { getAIExecutionBudget } from '../config/ai-execution-budget.js';
+import type { AIExecutionBudget } from '../config/ai-execution-budget.js';
 import type { TokenExemptUser } from '../utils/token-exempt.js';
 
 export interface VoiceResponse {
@@ -33,6 +35,7 @@ interface VoiceOptions {
   context?: Record<string, unknown>;
   title?: string;
   transcript?: string;
+  executionBudget?: AIExecutionBudget;
 }
 
 async function callAiVoice(
@@ -55,6 +58,7 @@ async function callAiVoice(
     formData.append('history', JSON.stringify(options.history));
   }
   if (options?.transcript) formData.append('transcript', options.transcript);
+  formData.append('executionBudget', JSON.stringify(options.executionBudget ?? getAIExecutionBudget('REAL_TIME_TRANSLATION')));
 
   const headers: Record<string, string> = {
     'X-Internal-Api-Key': env.INTERNAL_API_KEY,
@@ -179,7 +183,7 @@ export interface ProcessVoiceWithTokensInput {
 
 const CHAT_LIMITS = parseChatLimitsConfig(process.env);
 
-function voiceCore(input: ProcessVoiceWithTokensInput) {
+function voiceCore(input: ProcessVoiceWithTokensInput, executionBudget?: AIExecutionBudget) {
   return processVoice(input.audioBuffer, input.audioMimeType, {
     userId: input.userId,
     lat: input.lat,
@@ -190,6 +194,7 @@ function voiceCore(input: ProcessVoiceWithTokensInput) {
     context: input.context,
     title: input.title,
     transcript: input.transcript,
+    executionBudget,
   });
 }
 
@@ -215,12 +220,16 @@ export async function processVoiceWithTokens(
     idempotencyKey: input.businessRequestId,
     adminExempt: isTokenExemptUser(input.user),
     chatLimits: CHAT_LIMITS,
+    executionBudget: getAIExecutionBudget('REAL_TIME_TRANSLATION'),
+    // Uploaded bytes are not provider tokens. The quote utility applies the
+    // validated 60-second audio token bound and the bounded TTS call exposure.
+    estimatedInputTokens: 0,
     rateCard: resolved.card,
     pricingSource: resolved.source,
     walletPolicy: walletPolicyConfig,
-    execute: async () => {
+    execute: async ({ executionBudget }) => {
       try {
-        const voice = await voiceCore(input);
+        const voice = await voiceCore(input, executionBudget);
         return buildSuccessOutcome(voice, voice.usage);
       } catch (err) {
         if (err instanceof AppError && err.statusCode === 502) {

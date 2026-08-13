@@ -16,6 +16,8 @@ import {
   resolveBillingRateCard,
 } from './billing-rate-card.service.js';
 import { parseChatLimitsConfig } from '../config/chat-limits.js';
+import { getAIExecutionBudget } from '../config/ai-execution-budget.js';
+import type { AIExecutionBudget } from '../config/ai-execution-budget.js';
 import { detectPromptInjection } from '../utils/prompt-injection.js';
 
 const CHAT_LIMITS = parseChatLimitsConfig(process.env);
@@ -45,6 +47,7 @@ interface ChatOptions {
   persona?: ChatPersona;
   context?: Record<string, unknown>;
   title?: string;
+  executionBudget?: AIExecutionBudget;
 }
 
 type ChatCoreResult =
@@ -143,6 +146,7 @@ async function performChatCore(
       preferences: prefs,
     },
     history: conversation.messages.reverse().map((item) => ({ role: item.role, content: item.content })),
+    executionBudget: options.executionBudget ?? getAIExecutionBudget('AI_CHAT_QUERY'),
   };
   if (options?.lat !== undefined) aiPayload.lat = options.lat;
   if (options?.lon !== undefined) aiPayload.lon = options.lon;
@@ -271,11 +275,16 @@ export async function chat(
     idempotencyKey: options.businessRequestId,
     adminExempt: isTokenExemptUser(user),
     chatLimits: CHAT_LIMITS,
+    executionBudget: getAIExecutionBudget('AI_CHAT_QUERY'),
+    // Current text plus the configured space for history, summaries and
+    // provider-visible system/context headroom is a safe pre-dispatch bound.
+    estimatedInputTokens: Math.min(CHAT_LIMITS.maxInputTokens, Math.ceil(message.length / 4) + CHAT_LIMITS.historyTokenBudget + CHAT_LIMITS.summaryTokenBudget + CHAT_LIMITS.inputHeadroomTokens),
+    optionalHistoryInputTokens: CHAT_LIMITS.historyTokenBudget,
     rateCard: resolved.card,
     pricingSource: resolved.source,
     walletPolicy: walletPolicyConfig,
-    execute: async () => {
-      const core = await performChatCore(userId, message, options, user);
+    execute: async ({ executionBudget }) => {
+      const core = await performChatCore(userId, message, { ...options, executionBudget }, user);
       if (!core.ok) return aiUnavailableOutcome('AI service unavailable');
       return buildSuccessOutcome(
         {

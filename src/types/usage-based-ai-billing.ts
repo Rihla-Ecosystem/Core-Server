@@ -29,6 +29,7 @@ import type {
 } from '../services/token-reservation.service.js';
 import type { ProviderRateCard, ShadowPricingInput, ShadowPricingResult } from './provider-pricing.js';
 import type { WalletChargeComputation, WalletConversionConfig } from '../utils/wallet-conversion.js';
+import type { AIExecutionBudget } from '../config/ai-execution-budget.js';
 
 /**
  * Phase 2G-A usage-based AI Wallet billing coordinator contracts.
@@ -87,6 +88,7 @@ export type UsageBasedBillingReasonCode =
 export interface UsageBasedBillingExecutionContext {
   operationId: string;
   reservationId: string;
+  executionBudget: AIExecutionBudget;
 }
 
 export interface UsageBasedBillingInput<T = unknown> {
@@ -104,6 +106,10 @@ export interface UsageBasedBillingInput<T = unknown> {
   model?: string;
 
   chatLimits: ChatLimitsConfig;
+  executionBudget: AIExecutionBudget;
+  estimatedInputTokens: number;
+  /** Optional Chat history included in the estimate and reducible for affordability. */
+  optionalHistoryInputTokens?: number;
   /** Authoritative provider rate card used to price providerCalls[]. */
   rateCard: ProviderRateCard;
   walletPolicy: WalletPolicyConfig;
@@ -120,6 +126,9 @@ export interface UsageBasedBillingInput<T = unknown> {
    * Defaults to reading `data.providerCalls`.
    */
   providerCallsOf?: (data: T) => unknown;
+
+  /** Extract diagnostic physical provider attempts; never used for Wallet pricing. */
+  providerAttemptsOf?: (data: T) => unknown;
 
   execute: (context: UsageBasedBillingExecutionContext) => Promise<unknown>;
 }
@@ -192,11 +201,12 @@ export type UsageBasedBillingResult<T = unknown> =
 
 export interface UsageBasedBillingExposure {
   reservationId: string;
-  pricedCallCount: number;
-  unpricedCallCount: number;
-  pricedCostNanoUsd: string;
-  markedUpNanoUsd: string;
-  walletTokens: string;
+  pricedCallCount?: number;
+  unpricedCallCount?: number;
+  pricedCostNanoUsd?: string;
+  markedUpNanoUsd?: string;
+  walletTokens?: string;
+  providerAttemptExposure?: unknown;
 }
 
 export interface UsageBasedBillingDependencies {
@@ -236,6 +246,6 @@ export interface UsageBasedBillingDependencies {
   releaseReservation: (
     input: ReleaseBusinessTokenReservationInput,
   ) => Promise<ReleaseBusinessTokenReservationResult>;
-  /** Persist PARTIALLY_PRICED unresolved cost exposure (reservation metadata). */
+  /** Persist unpriced-call and physical-attempt exposure (reservation metadata). */
   recordUnresolvedExposure: (exposure: UsageBasedBillingExposure) => Promise<void>;
 }

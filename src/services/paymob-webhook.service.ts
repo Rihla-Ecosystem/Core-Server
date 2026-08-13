@@ -4,6 +4,8 @@ import { env } from '../config/env.js';
 import { prisma } from '../config/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { MAX_TOKEN_BALANCE } from '../config/business-token-features.js';
+import { createFundingLot } from './token-funding-lot.service.js';
+import { reconcileRefundWebhook } from './payment-refund.service.js';
 
 export interface ValidatedPaymobWebhookData {
   transactionId: string;
@@ -347,8 +349,14 @@ export async function processPaymobWebhook(payload: unknown, hmacParam: unknown)
   }
 
   // 5. Handle Refund / Void flags
-  if (data.isRefunded || data.isVoided) {
-    // Safely acknowledge; refund/void handling is out of scope for this phase
+  if (data.isRefunded) {
+    await reconcileRefundWebhook({ paymentId: payment.id, transactionId: data.transactionId, amountCents: data.amountCents, currency: data.currency });
+    return;
+  }
+  if (data.isVoided) {
+    // A void before a completed/credited payment may be safely cancelled; a
+    // completed purchase is retained for manual financial reconciliation.
+    if (payment.status === 'PENDING') await prisma.payment.updateMany({ where: { id: payment.id, status: 'PENDING' }, data: { status: 'CANCELLED', providerTransactionId: data.transactionId } });
     return;
   }
 
@@ -448,7 +456,7 @@ export async function processPaymobWebhook(payload: unknown, hmacParam: unknown)
     }
 
     // Create TokenTransaction
-    await tx.tokenTransaction.create({
+    const transaction = await tx.tokenTransaction.create({
       data: {
         walletId: wallet!.id,
         userId: payment.userId,
@@ -463,6 +471,10 @@ export async function processPaymobWebhook(payload: unknown, hmacParam: unknown)
           packageNameSnapshot: payment.packageNameSnapshot,
         },
       },
+    });
+    await createFundingLot(tx, {
+      walletId: wallet!.id, userId: payment.userId, source: 'PURCHASE',
+      sourceTransactionId: transaction.id, paymentId: payment.id, tokens: payment.tokensSnapshot,
     });
   });
 }

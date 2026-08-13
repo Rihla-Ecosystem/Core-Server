@@ -1,5 +1,32 @@
 import { env } from '../config/env.js';
-import { post, HttpClientError } from '../utils/http-client.js';
+import { get, post, HttpClientError } from '../utils/http-client.js';
+
+export interface PaymobRefundResponse {
+  id: string | number;
+  success: boolean;
+  pending: boolean;
+  is_refunded: boolean;
+  is_voided: boolean;
+  amount_cents: number;
+  currency: string;
+  order: { merchant_order_id?: string };
+}
+
+export async function refundPaymobTransaction(input: { transactionId: string; amountCents: number }): Promise<PaymobRefundResponse> {
+  return post<PaymobRefundResponse>(
+    `${env.PAYMOB_API_BASE_URL}/api/acceptance/void_refund/refund`,
+    { transaction_id: input.transactionId, amount_cents: input.amountCents },
+    { Authorization: `Token ${env.PAYMOB_SECRET_KEY}` },
+  );
+}
+
+export async function getPaymobTransaction(transactionId: string): Promise<PaymobRefundResponse> {
+  return get<PaymobRefundResponse>(
+    `${env.PAYMOB_API_BASE_URL}/api/acceptance/transactions/${encodeURIComponent(transactionId)}`,
+    undefined,
+    { Authorization: `Token ${env.PAYMOB_SECRET_KEY}` },
+  );
+}
 
 export interface PaymobBillingData {
   first_name: string;

@@ -11,6 +11,7 @@ export const adminPaymentListQuerySchema = z.object({
   dateTo: z.string().datetime({ offset: true }).transform((val) => new Date(val)).optional(),
   sortBy: z.enum(['createdAt', 'updatedAt', 'amount', 'paidAt']).default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
+  refundReview: z.enum(['active', 'resolved']).optional(),
 }).strict().refine(
   (data) => {
     if (data.dateFrom !== undefined && data.dateTo !== undefined) {
@@ -31,3 +32,7 @@ export const adminPaymentIdParamsSchema = z.object({
 }).strict();
 
 export type AdminPaymentIdParams = z.infer<typeof adminPaymentIdParamsSchema>;
+
+export const adminPaymentRefundResolveParamsSchema = z.object({ refundId: z.string().trim().uuid() }).strict();
+export const adminPaymentRefundResolveBodySchema = z.object({ resolutionNote: z.string().trim().min(1).max(2000) }).strict();
+export type AdminPaymentRefundResolveBody = z.infer<typeof adminPaymentRefundResolveBodySchema>;
