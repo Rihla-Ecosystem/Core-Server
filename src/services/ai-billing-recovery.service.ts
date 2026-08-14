@@ -91,7 +91,7 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-type ParsedAIBillingMetadata =
+export type ParsedAIBillingMetadata =
   | {
       status: 'VALID';
       summary: {
@@ -380,7 +380,7 @@ function assertRecoveryAction(value: unknown): AIBillingRecoveryAction {
 
 
 
-function parseAIBillingMetadata(metadata: unknown): ParsedAIBillingMetadata {
+export function parseAIBillingMetadata(metadata: unknown): ParsedAIBillingMetadata {
   const issues: MetadataIssue[] = [];
 
   if (metadata === null || metadata === undefined) {

@@ -26,7 +26,11 @@ import {
   adminBillingRecoveryReservationParamsSchema,
   adminBillingRecoveryWalletParamsSchema,
 } from '../schemas/admin-billing-recovery.schema.js';
-
+import * as adminTokenReservationController from '../controllers/admin-token-reservation.controller.js';
+import {
+  adminTokenReservationListQuerySchema,
+  adminTokenReservationParamsSchema,
+} from '../schemas/admin-token-reservation.schema.js';
 
 const router = Router();
 
@@ -286,6 +290,18 @@ router.post(
   adminBillingRecoveryController.recoverReservation,
 );
 
+router.get(
+  '/token-reservations',
+  requireRole('admin'),
+  validate(adminTokenReservationListQuerySchema, 'query'),
+  adminTokenReservationController.listTokenReservations,
+);
 
+router.get(
+  '/token-reservations/:reservationId',
+  requireRole('admin'),
+  validate(adminTokenReservationParamsSchema, 'params'),
+  adminTokenReservationController.inspectTokenReservation,
+);
 
 export default router;
