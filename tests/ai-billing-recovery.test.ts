@@ -169,6 +169,34 @@ function reviewAction(reason = 'needs a human look'): AIBillingRecoveryAction {
   return { type: 'REVIEW', reason };
 }
 
+function manualReleaseAction(
+  overrides: Partial<{
+    reason: string;
+    evidenceReference?: string;
+  }> = {},
+): AIBillingRecoveryAction {
+  return {
+    type: 'MANUAL_RELEASE',
+    reason: 'manual release override',
+    ...overrides,
+  };
+}
+
+function manualSettleAction(
+  actualTokens: number,
+  overrides: Partial<{
+    reason: string;
+    evidenceReference?: string;
+  }> = {},
+): AIBillingRecoveryAction {
+  return {
+    type: 'MANUAL_SETTLE',
+    actualTokens,
+    reason: 'manual settle override',
+    ...overrides,
+  };
+}
+
 function asAction(value: unknown): AIBillingRecoveryAction {
   return value as AIBillingRecoveryAction;
 }
@@ -177,6 +205,7 @@ class FakeRecoveryStore {
   reservations = new Map<string, AIBillingRecoveryReservationRow>();
   wallets = new Map<string, AIBillingRecoveryWalletRow>();
   consumes = new Map<string, AIBillingRecoveryConsumeRow[]>();
+  auditLogs: AIBillingRecoveryAuditLogRecord[] = [];
   reads: string[] = [];
   writes: string[] = [];
 }
@@ -220,6 +249,43 @@ function fakeRepository(store: FakeRecoveryStore): AIBillingRecoveryRepository {
       }
       return { wallet, pending: { count, totalTokens } };
     },
+    async listReservationsForRecovery(filter) {
+      store.reads.push('listReservationsForRecovery');
+      const items = Array.from(store.reservations.values());
+      return {
+        items,
+        total: items.length,
+        aggregate: { count: items.length, totalTokens: items.reduce((acc, curr) => acc + curr.tokens, 0) },
+      };
+    },
+    async recordAuditLog(data) {
+      const record: AIBillingRecoveryAuditLogRecord = {
+        id: `audit-${crypto.randomUUID()}`,
+        actorId: data.actorId ?? null,
+        action: data.action,
+        targetUserId: data.targetUserId ?? null,
+        metadata: data.metadata,
+        createdAt: new Date(),
+      };
+      store.auditLogs.push(record);
+      return record;
+    },
+    async findLatestRecoveryAuditLog(reservationId) {
+      store.reads.push('findLatestRecoveryAuditLog');
+      const matches = store.auditLogs.filter((log) => {
+        const meta = log.metadata as Record<string, unknown>;
+        return meta && meta.reservationId === reservationId;
+      });
+      return matches.length > 0 ? matches[matches.length - 1] : null;
+    },
+    async findLatestRecoveryReviewAuditLog(reservationId) {
+      store.reads.push('findLatestRecoveryReviewAuditLog');
+      const matches = store.auditLogs.filter((log) => {
+        const meta = log.metadata as Record<string, unknown>;
+        return log.action === 'AI_BILLING_RECOVERY_REVIEW' && meta && meta.reservationId === reservationId;
+      });
+      return matches.length > 0 ? matches[matches.length - 1] : null;
+    },
   };
 }
 
@@ -239,6 +305,18 @@ function failingRepository(): AIBillingRecoveryRepository {
     },
     async readReconciliationSnapshot() {
       throw new Error('Prisma P2025 raw internal message');
+    },
+    async listReservationsForRecovery() {
+      throw new Error('Prisma P2025 raw internal message');
+    },
+    async recordAuditLog() {
+      throw new Error('Prisma P2025 raw internal message');
+    },
+    async findLatestRecoveryAuditLog() {
+      return null;
+    },
+    async findLatestRecoveryReviewAuditLog() {
+      return null;
     },
   };
 }
@@ -369,6 +447,10 @@ function seedReservation(store: FakeRecoveryStore, reservation: AIBillingRecover
     reservedBalance: reservation.tokens,
     status: WalletStatus.ACTIVE,
   });
+}
+
+function seedWallet(store: FakeRecoveryStore, wallet: AIBillingRecoveryWalletRow = buildWallet()) {
+  store.wallets.set(wallet.id, wallet);
 }
 
 async function expectRecoveryError(
@@ -1418,7 +1500,7 @@ describe('AI Billing Recovery Service', () => {
     );
   });
 
-  test('66. REVIEW never calls the settle dependency even for completed reservations', async () => {
+  test('66. REVIEW rejects completed reservations with INTEGRITY_CONFLICT', async () => {
     const store = new FakeRecoveryStore();
     seedReservation(
       store,
@@ -1428,15 +1510,16 @@ describe('AI Billing Recovery Service', () => {
       }),
     );
     store.consumes.set('reservation-1', [buildConsume()]);
-    const result = await recoverAIBillingReservation(
-      { reservationId: 'reservation-1', action: reviewAction() },
-      buildDeps(store),
+    await expectRecoveryError(
+      recoverAIBillingReservation(
+        { reservationId: 'reservation-1', action: reviewAction() },
+        buildDeps(store),
+      ),
+      'INTEGRITY_CONFLICT',
     );
-    assert.equal(result.outcome, 'REVIEW_REQUIRED');
-    assert.equal(store.writes.length, 0);
   });
 
-  test('67. REVIEW on a released reservation is REVIEW_REQUIRED', async () => {
+  test('67. REVIEW rejects released reservations with INTEGRITY_CONFLICT', async () => {
     const store = new FakeRecoveryStore();
     seedReservation(
       store,
@@ -1446,11 +1529,13 @@ describe('AI Billing Recovery Service', () => {
         releaseReason: 'not billable',
       }),
     );
-    const result = await recoverAIBillingReservation(
-      { reservationId: 'reservation-1', action: reviewAction() },
-      buildDeps(store),
+    await expectRecoveryError(
+      recoverAIBillingReservation(
+        { reservationId: 'reservation-1', action: reviewAction() },
+        buildDeps(store),
+      ),
+      'INTEGRITY_CONFLICT',
     );
-    assert.equal(result.outcome, 'REVIEW_REQUIRED');
   });
 
   test('68. REVIEW result is sanitized and never exposes raw metadata', async () => {
@@ -2138,23 +2223,22 @@ describe('AI Billing Recovery Service', () => {
     );
   });
 
-  test('114. REVIEW rejects a runtime evidenceReference field', async () => {
+  test('114. REVIEW accepts a runtime evidenceReference field', async () => {
     const store = new FakeRecoveryStore();
     seedReservation(store, buildReservation());
-    await expectRecoveryError(
-      recoverAIBillingReservation(
-        {
-          reservationId: 'reservation-1',
-          action: asAction({
-            type: 'REVIEW',
-            evidenceReference: 'evidence-1',
-            reason: 'must not carry an evidence reference',
-          }),
-        },
-        buildDeps(store),
-      ),
-      'INVALID_INPUT',
+    const result = await recoverAIBillingReservation(
+      {
+        reservationId: 'reservation-1',
+        action: asAction({
+          type: 'REVIEW',
+          evidenceReference: 'evidence-1',
+          reason: 'review with evidence reference',
+        }),
+      },
+      buildDeps(store),
     );
+    assert.equal(result.outcome, 'REVIEW_REQUIRED');
+    assert.equal(result.evidenceReference, 'evidence-1');
   });
 
   test('115. SETTLE with matching Wallet ownership succeeds', async () => {
@@ -2399,6 +2483,338 @@ describe('AI Billing Recovery service source', () => {
   });
 });
 
+describe('New Manual Billing Recovery Operations', () => {
+  // --- MANUAL_RELEASE ---
+  test('MANUAL_RELEASE: PENDING + INVALID metadata can be manually released', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ metadata: { broken: 'invalid' } }));
+    seedWallet(store, buildWallet());
+    const result = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: manualReleaseAction(), actorId: 'admin-1' },
+      buildDeps(store),
+    );
+    assert.equal(result.outcome, 'RELEASED');
+    assert.equal(result.financialMutationPerformed, true);
+  });
+
+  test('MANUAL_RELEASE: PENDING + MISSING metadata can be manually released', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ metadata: null }));
+    seedWallet(store, buildWallet());
+    const result = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: manualReleaseAction(), actorId: 'admin-1' },
+      buildDeps(store),
+    );
+    assert.equal(result.outcome, 'RELEASED');
+    assert.equal(result.financialMutationPerformed, true);
+  });
+
+  test('MANUAL_RELEASE: ownership mismatch blocks mutation', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ userId: 'user-1' }));
+    seedWallet(store, buildWallet({ userId: 'user-2' }));
+    await expectRecoveryError(
+      recoverAIBillingReservation(
+        { reservationId: 'reservation-1', action: manualReleaseAction(), actorId: 'admin-1' },
+        buildDeps(store),
+      ),
+      'INTEGRITY_CONFLICT',
+    );
+    assert.equal(store.writes.length, 0);
+  });
+
+  test('MANUAL_RELEASE: existing consume transaction blocks mutation', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation());
+    seedWallet(store, buildWallet());
+    store.consumes.set('reservation-1', [buildConsume()]);
+    await expectRecoveryError(
+      recoverAIBillingReservation(
+        { reservationId: 'reservation-1', action: manualReleaseAction(), actorId: 'admin-1' },
+        buildDeps(store),
+      ),
+      'INTEGRITY_CONFLICT',
+    );
+  });
+
+  test('MANUAL_RELEASE: financial dependency failure does not produce a successful audit', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation());
+    seedWallet(store, buildWallet());
+    const deps = buildDeps(store);
+    deps.releaseReservation = async () => {
+      throw new Error('Database connection failed during release');
+    };
+    await expectRecoveryError(
+      recoverAIBillingReservation(
+        { reservationId: 'reservation-1', action: manualReleaseAction(), actorId: 'admin-1' },
+        deps,
+      ),
+      'RELEASE_FAILED',
+    );
+    const actions = store.auditLogs.map((l) => l.action);
+    assert.equal(actions.includes('AI_BILLING_RECOVERY_MANUAL_RELEASE'), false);
+    assert.equal(actions.includes('AI_BILLING_RECOVERY_MANUAL_RELEASE_FAILED'), true);
+  });
+
+  test('MANUAL_RELEASE: successful action records actorId/reason/evidence', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation());
+    seedWallet(store, buildWallet());
+    await recoverAIBillingReservation(
+      {
+        reservationId: 'reservation-1',
+        action: manualReleaseAction({ reason: 'Admin verified log', evidenceReference: 'INC-99' }),
+        actorId: 'admin-42',
+      },
+      buildDeps(store),
+    );
+    const releaseAudit = store.auditLogs.find((l) => l.action === 'AI_BILLING_RECOVERY_MANUAL_RELEASE');
+    assert.ok(releaseAudit);
+    assert.equal(releaseAudit?.actorId, 'admin-42');
+    const meta = releaseAudit?.metadata as Record<string, unknown>;
+    assert.equal(meta.reason, 'Admin verified log');
+    assert.equal(meta.evidenceReference, 'INC-99');
+  });
+
+  test('MANUAL_RELEASE: replay behavior is safe and deterministic', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation());
+    seedWallet(store, buildWallet());
+    const deps = buildDeps(store);
+    const first = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: manualReleaseAction(), actorId: 'admin-1' },
+      deps,
+    );
+    assert.equal(first.outcome, 'RELEASED');
+    assert.equal(first.financialMutationPerformed, true);
+
+    const second = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: manualReleaseAction(), actorId: 'admin-1' },
+      deps,
+    );
+    assert.equal(second.outcome, 'ALREADY_RELEASED');
+    assert.equal(second.financialMutationPerformed, false);
+  });
+
+  // --- MANUAL_SETTLE ---
+  test('MANUAL_SETTLE: PENDING + INVALID metadata can settle confirmed actualTokens', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ metadata: { broken: true } }));
+    seedWallet(store, buildWallet());
+    const result = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: manualSettleAction(2), actorId: 'admin-1' },
+      buildDeps(store),
+    );
+    assert.equal(result.outcome, 'SETTLED');
+    assert.equal(result.financialMutationPerformed, true);
+    assert.equal(result.actualTokens, 2);
+  });
+
+  test('MANUAL_SETTLE: PENDING + MISSING metadata can settle', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ metadata: null }));
+    seedWallet(store, buildWallet());
+    const result = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: manualSettleAction(2), actorId: 'admin-1' },
+      buildDeps(store),
+    );
+    assert.equal(result.outcome, 'SETTLED');
+    assert.equal(result.financialMutationPerformed, true);
+    assert.equal(result.actualTokens, 2);
+  });
+
+  test('MANUAL_SETTLE: actualTokens > reservation.tokens is rejected', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ tokens: 2 }));
+    seedWallet(store, buildWallet());
+    await expectRecoveryError(
+      recoverAIBillingReservation(
+        { reservationId: 'reservation-1', action: manualSettleAction(5), actorId: 'admin-1' },
+        buildDeps(store),
+      ),
+      'INVALID_INPUT',
+    );
+  });
+
+  test('MANUAL_SETTLE: actualTokens = 0 is supported if schema allows it', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ tokens: 2 }));
+    seedWallet(store, buildWallet());
+    const result = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: manualSettleAction(0), actorId: 'admin-1' },
+      buildDeps(store),
+    );
+    assert.equal(result.outcome, 'SETTLED');
+    assert.equal(result.actualTokens, 0);
+  });
+
+  test('MANUAL_SETTLE: existing consume transaction blocks unsafe mutation', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ tokens: 5 }));
+    seedWallet(store, buildWallet());
+    store.consumes.set('reservation-1', [buildConsume({ tokens: 5 })]);
+    await expectRecoveryError(
+      recoverAIBillingReservation(
+        { reservationId: 'reservation-1', action: manualSettleAction(3), actorId: 'admin-1' },
+        buildDeps(store),
+      ),
+      'INTEGRITY_CONFLICT',
+    );
+  });
+
+  test('MANUAL_SETTLE: ownership mismatch blocks mutation', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ userId: 'user-1' }));
+    seedWallet(store, buildWallet({ userId: 'user-2' }));
+    await expectRecoveryError(
+      recoverAIBillingReservation(
+        { reservationId: 'reservation-1', action: manualSettleAction(2), actorId: 'admin-1' },
+        buildDeps(store),
+      ),
+      'INTEGRITY_CONFLICT',
+    );
+  });
+
+  test('MANUAL_SETTLE: successful action records actualTokens + actorId + reason', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation());
+    seedWallet(store, buildWallet());
+    await recoverAIBillingReservation(
+      {
+        reservationId: 'reservation-1',
+        action: manualSettleAction(2, { reason: 'Verified manually', evidenceReference: 'INC-100' }),
+        actorId: 'admin-77',
+      },
+      buildDeps(store),
+    );
+    const settleAudit = store.auditLogs.find((l) => l.action === 'AI_BILLING_RECOVERY_MANUAL_SETTLE');
+    assert.ok(settleAudit);
+    assert.equal(settleAudit?.actorId, 'admin-77');
+    const meta = settleAudit?.metadata as Record<string, unknown>;
+    assert.equal(meta.actualTokens, 2);
+    assert.equal(meta.reason, 'Verified manually');
+    assert.equal(meta.evidenceReference, 'INC-100');
+  });
+
+  test('MANUAL_SETTLE: replay behavior is safe and deterministic', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ tokens: 5 }));
+    seedWallet(store, buildWallet());
+    const deps = buildDeps(store);
+    const first = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: manualSettleAction(2), actorId: 'admin-1' },
+      deps,
+    );
+    assert.equal(first.outcome, 'SETTLED');
+    assert.equal(first.financialMutationPerformed, true);
+
+    const second = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: manualSettleAction(2), actorId: 'admin-1' },
+      deps,
+    );
+    assert.equal(second.outcome, 'ALREADY_SETTLED');
+    assert.equal(second.financialMutationPerformed, false);
+  });
+
+  // --- REVIEW ---
+  test('REVIEW: performs ZERO financial mutation', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation());
+    seedWallet(store, buildWallet());
+    const result = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: reviewAction(), actorId: 'admin-1' },
+      buildDeps(store),
+    );
+    assert.equal(result.outcome, 'REVIEW_REQUIRED');
+    assert.equal(result.financialMutationPerformed, false);
+    assert.equal(store.writes.length, 0);
+  });
+
+  test('REVIEW: persists actorId, reason, evidenceReference and timestamp', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation());
+    seedWallet(store, buildWallet());
+    await recoverAIBillingReservation(
+      {
+        reservationId: 'reservation-1',
+        action: { type: 'REVIEW', reason: 'Checking logs', evidenceReference: 'REF-55' },
+        actorId: 'admin-99',
+      },
+      buildDeps(store),
+    );
+    const reviewAudit = store.auditLogs.find((l) => l.action === 'AI_BILLING_RECOVERY_REVIEW');
+    assert.ok(reviewAudit);
+    assert.equal(reviewAudit?.actorId, 'admin-99');
+    const meta = reviewAudit?.metadata as Record<string, unknown>;
+    assert.equal(meta.reason, 'Checking logs');
+    assert.equal(meta.evidenceReference, 'REF-55');
+  });
+
+  test('REVIEW: only unresolved PENDING reservation can enter UNDER_REVIEW', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ status: TokenReservationStatus.PENDING }));
+    seedWallet(store, buildWallet());
+    const result = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: reviewAction(), actorId: 'admin-1' },
+      buildDeps(store),
+    );
+    assert.equal(result.outcome, 'REVIEW_REQUIRED');
+  });
+
+  test('REVIEW: completed/released reservations must not become UNDER_REVIEW', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ status: TokenReservationStatus.COMPLETED }));
+    seedWallet(store, buildWallet());
+    await expectRecoveryError(
+      recoverAIBillingReservation(
+        { reservationId: 'reservation-1', action: reviewAction(), actorId: 'admin-1' },
+        buildDeps(store),
+      ),
+      'INTEGRITY_CONFLICT',
+    );
+  });
+
+  test('REVIEW: audit persistence failure must NOT be reported as successful persistence', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation());
+    seedWallet(store, buildWallet());
+    const deps = buildDeps(store);
+    deps.repository.recordAuditLog = async () => {
+      throw new Error('Audit database down');
+    };
+    await expectRecoveryError(
+      recoverAIBillingReservation(
+        { reservationId: 'reservation-1', action: reviewAction(), actorId: 'admin-1' },
+        deps,
+      ),
+      'INTEGRITY_CONFLICT',
+    );
+  });
+
+  test('REVIEW: inspection returns persisted UNDER_REVIEW state', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation());
+    seedWallet(store, buildWallet());
+    const deps = buildDeps(store);
+    await recoverAIBillingReservation(
+      {
+        reservationId: 'reservation-1',
+        action: { type: 'REVIEW', reason: 'Under investigation', evidenceReference: 'EVID-1' },
+        actorId: 'admin-12',
+      },
+      deps,
+    );
+
+    const inspection = await inspectAIBillingRecovery({ reservationId: 'reservation-1' }, deps);
+    assert.ok(inspection.review);
+    assert.equal(inspection.review?.status, 'UNDER_REVIEW');
+    assert.equal(inspection.review?.reviewedBy, 'admin-12');
+    assert.equal(inspection.review?.reason, 'Under investigation');
+    assert.equal(inspection.review?.evidenceReference, 'EVID-1');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Database integration tests
 // ---------------------------------------------------------------------------
@@ -2419,6 +2835,10 @@ describe('AI Billing Recovery DB Integration', () => {
 
   async function cleanupSuiteData(): Promise<void> {
     const emailFilter = { email: { startsWith: 'test_recovery_' } };
+    await prisma.tokenReservationFundingAllocation.deleteMany({
+      where: { reservation: { user: emailFilter } },
+    });
+    await prisma.tokenFundingLot.deleteMany({ where: { user: emailFilter } });
     await prisma.tokenReservation.deleteMany({ where: { user: emailFilter } });
     await prisma.tokenTransaction.deleteMany({ where: { user: emailFilter } });
     await prisma.tokenWallet.deleteMany({ where: { user: emailFilter } });
@@ -2426,6 +2846,10 @@ describe('AI Billing Recovery DB Integration', () => {
   }
 
   async function cleanupUser(userId: string): Promise<void> {
+    await prisma.tokenReservationFundingAllocation.deleteMany({
+      where: { reservation: { userId } },
+    });
+    await prisma.tokenFundingLot.deleteMany({ where: { userId } });
     await prisma.tokenReservation.deleteMany({ where: { userId } });
     await prisma.tokenTransaction.deleteMany({ where: { userId } });
     await prisma.tokenWallet.deleteMany({ where: { userId } });
@@ -2453,6 +2877,30 @@ describe('AI Billing Recovery DB Integration', () => {
         status: WalletStatus.ACTIVE,
       },
     });
+    if (balance > 0) {
+      const grant = await prisma.tokenTransaction.create({
+        data: {
+          walletId: wallet.id,
+          userId: user.id,
+          type: 'GRANT',
+          tokens: balance,
+          source: TokenTransactionSource.PURCHASE,
+          referenceId: `test-grant-${crypto.randomUUID()}`,
+        },
+      });
+      await prisma.tokenFundingLot.create({
+        data: {
+          walletId: wallet.id,
+          userId: user.id,
+          source: TokenTransactionSource.PURCHASE,
+          sourceTransactionId: grant.id,
+          originalTokens: balance,
+          availableTokens: balance,
+          reservedTokens: 0,
+          consumedTokens: 0,
+        },
+      });
+    }
     return { userId: user.id, walletId: wallet.id };
   }
 

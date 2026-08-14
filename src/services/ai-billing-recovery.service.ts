@@ -10,6 +10,7 @@ import type {
   AIBillingRecoveryRecommendation,
   InspectAIBillingRecoveryInput,
   InspectAIBillingRecoveryResult,
+  MetadataIssue,
   ReconcileWalletReservationsInput,
   ReconcileWalletReservationsResult,
   RecoverAIBillingReservationInput,
@@ -34,12 +35,14 @@ import {
 } from './token-reservation.service.js';
 import { AppError } from '../middleware/errorHandler.js';
 
-const AI_USAGE_PRICING_MODES = new Set<string>(['PROVIDER_USAGE', 'FIXED_FALLBACK']);
+// ---------------------------------------------------------------------------
+// Error Class & Helpers
+// ---------------------------------------------------------------------------
 
 export class AIBillingRecoveryError extends Error {
   readonly code: AIBillingRecoveryErrorCode;
-  readonly recoveryRequired: boolean;
   readonly reservationId?: string;
+  readonly recoveryRequired: boolean;
 
   constructor(
     code: AIBillingRecoveryErrorCode,
@@ -49,10 +52,72 @@ export class AIBillingRecoveryError extends Error {
     super(message);
     this.name = 'AIBillingRecoveryError';
     this.code = code;
-    this.recoveryRequired = options.recoveryRequired ?? false;
     this.reservationId = options.reservationId;
+    this.recoveryRequired = options.recoveryRequired ?? true;
   }
 }
+
+function recoveryError(
+  code: AIBillingRecoveryErrorCode,
+  message: string,
+  options: AIBillingRecoveryErrorOptions = {},
+): AIBillingRecoveryError {
+  return new AIBillingRecoveryError(code, message, options);
+}
+
+// ---------------------------------------------------------------------------
+// Pure Validation & Metadata Parsing
+// ---------------------------------------------------------------------------
+
+const AI_USAGE_PRICING_MODES = new Set<string>([
+  'FIXED_FALLBACK',
+  'PROVIDER_USAGE',
+]);
+
+function isSafeNonNegativeInteger(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    Number.isSafeInteger(value)
+  ) || typeof value === 'bigint';
+}
+
+function isValidPricingMode(value: unknown): value is AIUsagePricingMode {
+  return typeof value === 'string' && AI_USAGE_PRICING_MODES.has(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+type ParsedAIBillingMetadata =
+  | {
+      status: 'VALID';
+      summary: {
+        quotedTokens: number;
+        requestedMode: AIUsagePricingMode;
+        quoteAppliedMode: AIUsagePricingMode;
+        maximumUsageWalletTokens?: number;
+        provider?: string;
+        model?: string;
+        billingCurrency?: string;
+        rateCardVersion?: string;
+        walletPolicyVersion?: string;
+      };
+      metadataIssues: MetadataIssue[];
+      observed: Record<string, unknown>;
+    }
+  | {
+      status: 'MISSING';
+      metadataIssues: MetadataIssue[];
+      observed?: Record<string, unknown>;
+    }
+  | {
+      status: 'INVALID';
+      metadataIssues: MetadataIssue[];
+      observed?: Record<string, unknown>;
+    };
 
 export interface AIBillingRecoveryDependencies {
   repository: AIBillingRecoveryRepository;
@@ -72,13 +137,7 @@ export function createDefaultAIBillingRecoveryDependencies(): AIBillingRecoveryD
   };
 }
 
-function recoveryError(
-  code: AIBillingRecoveryErrorCode,
-  message: string,
-  options: AIBillingRecoveryErrorOptions = {},
-): AIBillingRecoveryError {
-  return new AIBillingRecoveryError(code, message, options);
-}
+
 
 function wrapRepositoryRead(
   code: AIBillingRecoveryErrorCode,
@@ -249,8 +308,57 @@ function assertRecoveryAction(value: unknown): AIBillingRecoveryAction {
     };
   }
 
+  if (action.type === 'MANUAL_RELEASE') {
+    const reason = assertRecoveryReason(action.reason);
+    const evidenceReference = assertOptionalEvidenceReference(action.evidenceReference);
+    if (
+      action.confirmation !== undefined &&
+      action.confirmation !== 'ADMIN_CONFIRMED_NON_BILLABLE'
+    ) {
+      throw recoveryError(
+        'INVALID_INPUT',
+        'Manual release requires ADMIN_CONFIRMED_NON_BILLABLE confirmation when confirmation is provided',
+      );
+    }
+    if (action.actualTokens !== undefined) {
+      throw recoveryError(
+        'INVALID_INPUT',
+        'Manual release must not include a confirmed actual token amount',
+      );
+    }
+    return {
+      type: 'MANUAL_RELEASE',
+      confirmation: 'ADMIN_CONFIRMED_NON_BILLABLE',
+      reason,
+      ...(evidenceReference === undefined ? {} : { evidenceReference }),
+    };
+  }
+
+  if (action.type === 'MANUAL_SETTLE') {
+    const reason = assertRecoveryReason(action.reason);
+    const evidenceReference = assertOptionalEvidenceReference(action.evidenceReference);
+    if (
+      action.confirmation !== undefined &&
+      action.confirmation !== 'ADMIN_CONFIRMED_ACTUAL_TOKENS'
+    ) {
+      throw recoveryError(
+        'INVALID_INPUT',
+        'Manual settle requires ADMIN_CONFIRMED_ACTUAL_TOKENS confirmation when confirmation is provided',
+      );
+    }
+    const actualTokens = assertConfirmedActualTokens(action.actualTokens);
+    return {
+      type: 'MANUAL_SETTLE',
+      confirmation: 'ADMIN_CONFIRMED_ACTUAL_TOKENS',
+      actualTokens,
+      reason,
+      ...(evidenceReference === undefined ? {} : { evidenceReference }),
+    };
+  }
+
   if (action.type === 'REVIEW') {
     const reason = assertRecoveryReason(action.reason);
+    const evidenceReference = assertOptionalEvidenceReference(action.evidenceReference);
     if (action.confirmation !== undefined) {
       throw recoveryError('INVALID_INPUT', 'Review must not include a confirmation');
     }
@@ -260,119 +368,178 @@ function assertRecoveryAction(value: unknown): AIBillingRecoveryAction {
         'Review must not include a confirmed actual token amount',
       );
     }
-    if (action.evidenceReference !== undefined) {
-      throw recoveryError('INVALID_INPUT', 'Review must not include an evidence reference');
-    }
-    return { type: 'REVIEW', reason };
+    return {
+      type: 'REVIEW',
+      reason,
+      ...(evidenceReference === undefined ? {} : { evidenceReference }),
+    };
   }
 
   throw recoveryError('INVALID_INPUT', 'action type is not a recognized recovery action');
 }
 
-function isSafeNonNegativeInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-}
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
-}
-
-function isValidPricingMode(value: unknown): value is AIUsagePricingMode {
-  return typeof value === 'string' && AI_USAGE_PRICING_MODES.has(value);
-}
-
-type ParsedAIBillingMetadata =
-  | {
-      status: 'VALID';
-      summary: {
-        quotedTokens: number;
-        requestedMode: AIUsagePricingMode;
-        quoteAppliedMode: AIUsagePricingMode;
-        maximumUsageWalletTokens?: number;
-        provider?: string;
-        model?: string;
-        billingCurrency?: string;
-        rateCardVersion?: string;
-        walletPolicyVersion?: string;
-      };
-    }
-  | { status: 'MISSING' }
-  | { status: 'INVALID' };
 
 function parseAIBillingMetadata(metadata: unknown): ParsedAIBillingMetadata {
+  const issues: MetadataIssue[] = [];
+
   if (metadata === null || metadata === undefined) {
-    return { status: 'MISSING' };
+    return {
+      status: 'MISSING',
+      metadataIssues: [{ field: 'metadata', code: 'METADATA_MISSING', message: 'Metadata is missing' }],
+    };
   }
   if (typeof metadata !== 'object' || Array.isArray(metadata)) {
-    return { status: 'INVALID' };
+    return {
+      status: 'INVALID',
+      metadataIssues: [{ field: 'metadata', code: 'METADATA_NOT_OBJECT', message: 'Metadata must be an object' }],
+    };
   }
   const root = metadata as Record<string, unknown>;
   const aiBilling = root.aiBilling;
   if (aiBilling === null || aiBilling === undefined) {
-    return { status: 'MISSING' };
+    return {
+      status: 'MISSING',
+      metadataIssues: [{ field: 'aiBilling', code: 'AI_BILLING_MISSING', message: 'aiBilling section is missing' }],
+    };
   }
   if (typeof aiBilling !== 'object' || Array.isArray(aiBilling)) {
-    return { status: 'INVALID' };
+    return {
+      status: 'INVALID',
+      metadataIssues: [{ field: 'aiBilling', code: 'AI_BILLING_NOT_OBJECT', message: 'aiBilling must be an object' }],
+    };
   }
   const section = aiBilling as Record<string, unknown>;
+  const observed: Record<string, unknown> = {};
 
-  if (section.schemaVersion !== 1) {
-    return { status: 'INVALID' };
+  if (section.schemaVersion !== undefined) {
+    observed.schemaVersion = section.schemaVersion;
+    if (section.schemaVersion !== 1) {
+      issues.push({ field: 'aiBilling.schemaVersion', code: 'SCHEMA_VERSION_INVALID', message: 'schemaVersion must equal 1' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.schemaVersion', code: 'SCHEMA_VERSION_MISSING', message: 'schemaVersion is missing' });
   }
-  if (!isSafeNonNegativeInteger(section.quotedTokens)) {
-    return { status: 'INVALID' };
+
+  if (section.quotedTokens !== undefined) {
+    observed.quotedTokens = section.quotedTokens;
+    if (!isSafeNonNegativeInteger(section.quotedTokens)) {
+      issues.push({ field: 'aiBilling.quotedTokens', code: 'QUOTED_TOKENS_INVALID', message: 'quotedTokens must be a non-negative integer' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.quotedTokens', code: 'QUOTED_TOKENS_MISSING', message: 'quotedTokens is missing' });
   }
-  if (!isSafeNonNegativeInteger(section.fixedFallbackTokens)) {
-    return { status: 'INVALID' };
+
+  if (section.fixedFallbackTokens !== undefined) {
+    observed.fixedFallbackTokens = section.fixedFallbackTokens;
+    if (!isSafeNonNegativeInteger(section.fixedFallbackTokens)) {
+      issues.push({ field: 'aiBilling.fixedFallbackTokens', code: 'FIXED_FALLBACK_TOKENS_INVALID', message: 'fixedFallbackTokens must be a non-negative integer' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.fixedFallbackTokens', code: 'FIXED_FALLBACK_TOKENS_MISSING', message: 'fixedFallbackTokens is missing' });
   }
-  if (!isSafeNonNegativeInteger(section.maxInputTokens)) {
-    return { status: 'INVALID' };
+
+  if (section.maxInputTokens !== undefined) {
+    observed.maxInputTokens = section.maxInputTokens;
+    if (!isSafeNonNegativeInteger(section.maxInputTokens)) {
+      issues.push({ field: 'aiBilling.maxInputTokens', code: 'MAX_INPUT_TOKENS_INVALID', message: 'maxInputTokens must be a non-negative integer' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.maxInputTokens', code: 'MAX_INPUT_TOKENS_MISSING', message: 'maxInputTokens is missing' });
   }
-  if (!isSafeNonNegativeInteger(section.maxOutputTokens)) {
-    return { status: 'INVALID' };
+
+  if (section.maxOutputTokens !== undefined) {
+    observed.maxOutputTokens = section.maxOutputTokens;
+    if (!isSafeNonNegativeInteger(section.maxOutputTokens)) {
+      issues.push({ field: 'aiBilling.maxOutputTokens', code: 'MAX_OUTPUT_TOKENS_INVALID', message: 'maxOutputTokens must be a non-negative integer' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.maxOutputTokens', code: 'MAX_OUTPUT_TOKENS_MISSING', message: 'maxOutputTokens is missing' });
   }
-  if (!isValidPricingMode(section.requestedMode)) {
-    return { status: 'INVALID' };
+
+  if (section.requestedMode !== undefined) {
+    observed.requestedMode = section.requestedMode;
+    if (!isValidPricingMode(section.requestedMode)) {
+      issues.push({ field: 'aiBilling.requestedMode', code: 'REQUESTED_MODE_INVALID', message: 'requestedMode is invalid' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.requestedMode', code: 'REQUESTED_MODE_MISSING', message: 'requestedMode is missing' });
   }
-  if (!isValidPricingMode(section.quoteAppliedMode)) {
-    return { status: 'INVALID' };
+
+  if (section.quoteAppliedMode !== undefined) {
+    observed.quoteAppliedMode = section.quoteAppliedMode;
+    if (!isValidPricingMode(section.quoteAppliedMode)) {
+      issues.push({ field: 'aiBilling.quoteAppliedMode', code: 'QUOTE_APPLIED_MODE_INVALID', message: 'quoteAppliedMode is invalid' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.quoteAppliedMode', code: 'QUOTE_APPLIED_MODE_MISSING', message: 'quoteAppliedMode is missing' });
   }
-  if (section.maximumUsageWalletTokens !== undefined && !isSafeNonNegativeInteger(section.maximumUsageWalletTokens)) {
-    return { status: 'INVALID' };
+
+  if (section.maximumUsageWalletTokens !== undefined) {
+    observed.maximumUsageWalletTokens = section.maximumUsageWalletTokens;
+    if (!isSafeNonNegativeInteger(section.maximumUsageWalletTokens)) {
+      issues.push({ field: 'aiBilling.maximumUsageWalletTokens', code: 'MAXIMUM_USAGE_WALLET_TOKENS_INVALID', message: 'maximumUsageWalletTokens must be a non-negative integer' });
+    }
   }
-  if (section.provider !== undefined && !isNonEmptyString(section.provider)) {
-    return { status: 'INVALID' };
+
+  if (section.provider !== undefined) {
+    observed.provider = section.provider;
+    if (!isNonEmptyString(section.provider)) {
+      issues.push({ field: 'aiBilling.provider', code: 'PROVIDER_INVALID', message: 'provider must be a non-empty string' });
+    }
   }
-  if (section.model !== undefined && !isNonEmptyString(section.model)) {
-    return { status: 'INVALID' };
+
+  if (section.model !== undefined) {
+    observed.model = section.model;
+    if (!isNonEmptyString(section.model)) {
+      issues.push({ field: 'aiBilling.model', code: 'MODEL_INVALID', message: 'model must be a non-empty string' });
+    }
   }
-  if (section.billingCurrency !== undefined && !isNonEmptyString(section.billingCurrency)) {
-    return { status: 'INVALID' };
+
+  if (section.billingCurrency !== undefined) {
+    observed.billingCurrency = section.billingCurrency;
+    if (!isNonEmptyString(section.billingCurrency)) {
+      issues.push({ field: 'aiBilling.billingCurrency', code: 'BILLING_CURRENCY_INVALID', message: 'billingCurrency must be a non-empty string' });
+    }
   }
-  if (section.rateCardVersion !== undefined && !isNonEmptyString(section.rateCardVersion)) {
-    return { status: 'INVALID' };
+
+  if (section.rateCardVersion !== undefined) {
+    observed.rateCardVersion = section.rateCardVersion;
+    if (!isNonEmptyString(section.rateCardVersion)) {
+      issues.push({ field: 'aiBilling.rateCardVersion', code: 'RATE_CARD_VERSION_INVALID', message: 'rateCardVersion must be a non-empty string' });
+    }
   }
-  if (section.walletPolicyVersion !== undefined && !isNonEmptyString(section.walletPolicyVersion)) {
-    return { status: 'INVALID' };
+
+  if (section.walletPolicyVersion !== undefined) {
+    observed.walletPolicyVersion = section.walletPolicyVersion;
+    if (!isNonEmptyString(section.walletPolicyVersion)) {
+      issues.push({ field: 'aiBilling.walletPolicyVersion', code: 'WALLET_POLICY_VERSION_INVALID', message: 'walletPolicyVersion must be a non-empty string' });
+    }
+  }
+
+  if (issues.length === 0) {
+    return {
+      status: 'VALID',
+      metadataIssues: issues,
+      observed,
+      summary: {
+        quotedTokens: section.quotedTokens as number,
+        requestedMode: section.requestedMode as AIUsagePricingMode,
+        quoteAppliedMode: section.quoteAppliedMode as AIUsagePricingMode,
+        ...(section.maximumUsageWalletTokens === undefined ? {} : { maximumUsageWalletTokens: section.maximumUsageWalletTokens as number }),
+        ...(section.provider === undefined ? {} : { provider: section.provider as string }),
+        ...(section.model === undefined ? {} : { model: section.model as string }),
+        ...(section.billingCurrency === undefined ? {} : { billingCurrency: section.billingCurrency as string }),
+        ...(section.rateCardVersion === undefined ? {} : { rateCardVersion: section.rateCardVersion as string }),
+        ...(section.walletPolicyVersion === undefined ? {} : { walletPolicyVersion: section.walletPolicyVersion as string }),
+      },
+    };
   }
 
   return {
-    status: 'VALID',
-    summary: {
-      quotedTokens: section.quotedTokens,
-      requestedMode: section.requestedMode,
-      quoteAppliedMode: section.quoteAppliedMode,
-      ...(section.maximumUsageWalletTokens === undefined
-        ? {}
-        : { maximumUsageWalletTokens: section.maximumUsageWalletTokens }),
-      ...(section.provider === undefined ? {} : { provider: section.provider }),
-      ...(section.model === undefined ? {} : { model: section.model }),
-      ...(section.billingCurrency === undefined ? {} : { billingCurrency: section.billingCurrency }),
-      ...(section.rateCardVersion === undefined ? {} : { rateCardVersion: section.rateCardVersion }),
-      ...(section.walletPolicyVersion === undefined
-        ? {}
-        : { walletPolicyVersion: section.walletPolicyVersion }),
-    },
+    status: 'INVALID',
+    metadataIssues: issues,
+    observed,
   };
 }
 
@@ -416,14 +583,25 @@ export async function inspectAIBillingRecovery(
   }
 
   const parsed = parseAIBillingMetadata(reservation.metadata);
+  const metadataIssues = [...parsed.metadataIssues];
+
+  if (parsed.status === 'VALID' && parsed.summary && parsed.summary.quotedTokens !== reservation.tokens) {
+    metadataIssues.push({
+      field: 'aiBilling.quotedTokens',
+      code: 'RESERVATION_MISMATCH',
+      message: 'quotedTokens does not match reservation.tokens',
+    });
+  }
+
   let metadataStatus: AIBillingMetadataStatus;
   if (parsed.status === 'MISSING') {
     metadataStatus = 'MISSING';
-  } else if (parsed.status === 'INVALID') {
+  } else if (metadataIssues.length > 0) {
     metadataStatus = 'INVALID';
   } else {
-    metadataStatus = parsed.summary.quotedTokens === reservation.tokens ? 'VALID' : 'INVALID';
+    metadataStatus = 'VALID';
   }
+
   const metadataSummary =
     parsed.status === 'VALID' && metadataStatus === 'VALID' ? parsed.summary : undefined;
 
@@ -491,6 +669,23 @@ export async function inspectAIBillingRecovery(
     reasonCode = 'RESOLVED';
   }
 
+  let review: InspectAIBillingRecoveryResult['review'] | undefined;
+  if (reservation.status === 'PENDING') {
+    try {
+      const reviewAudit = await dependencies.repository.findLatestRecoveryReviewAuditLog(reservationId);
+      if (reviewAudit) {
+        const meta = (reviewAudit.metadata as Record<string, unknown>) ?? {};
+        review = {
+          reviewedBy: reviewAudit.actorId ?? undefined,
+          reviewedAt: reviewAudit.createdAt.toISOString(),
+          reason: (meta.reason as string) ?? '',
+          ...(meta.evidenceReference ? { evidenceReference: meta.evidenceReference as string } : {}),
+          status: 'UNDER_REVIEW',
+        };
+      }
+    } catch (_) {}
+  }
+
   return {
     reservationId,
     referenceId: reservation.referenceId,
@@ -504,6 +699,8 @@ export async function inspectAIBillingRecovery(
     expiresAt: reservation.expiresAt,
     isExpired: reservation.expiresAt.getTime() <= inspectedAt.getTime(),
     metadataStatus,
+    metadataIssues,
+    observed: parsed.observed,
     ...(metadataSummary === undefined
       ? {}
       : {
@@ -534,6 +731,7 @@ export async function inspectAIBillingRecovery(
     reasonCode,
     integrityConflict,
     inspectedAt,
+    ...(review === undefined ? {} : { review }),
   };
 }
 
@@ -563,14 +761,13 @@ export async function recoverAIBillingReservation(
   }
 
   const parsed = parseAIBillingMetadata(reservation.metadata);
+  const isQuotedMatch = parsed.status === 'VALID' && parsed.summary && parsed.summary.quotedTokens === reservation.tokens;
   const metadataStatus: AIBillingMetadataStatus =
     parsed.status === 'MISSING'
       ? 'MISSING'
-      : parsed.status === 'INVALID'
+      : parsed.status === 'INVALID' || !isQuotedMatch
         ? 'INVALID'
-        : parsed.summary.quotedTokens === reservation.tokens
-          ? 'VALID'
-          : 'INVALID';
+        : 'VALID';
 
   switch (action.type) {
     case 'SETTLE': {
@@ -689,7 +886,367 @@ export async function recoverAIBillingReservation(
       };
     }
 
+    case 'MANUAL_RELEASE': {
+      await assertReservationWalletOwnership(reservation, dependencies);
+      if (reservation.status === 'RELEASED') {
+        if (reservation.releasedAt !== null && reservation.settledAt === null) {
+          return {
+            reservationId,
+            outcome: 'ALREADY_RELEASED',
+            status: 'RELEASED',
+            financialMutationPerformed: false,
+            recoveryRequired: false,
+            idempotentReplay: true,
+            reason: action.reason,
+            ...(action.evidenceReference === undefined
+              ? {}
+              : { evidenceReference: action.evidenceReference }),
+          };
+        }
+      }
+
+      if (reservation.status !== 'PENDING') {
+        throw recoveryError(
+          'INTEGRITY_CONFLICT',
+          'Only PENDING reservations can be manually released',
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
+      let consumes;
+      try {
+        consumes = await dependencies.repository.findConsumeForReservation(reservation);
+      } catch (err) {
+        wrapRepositoryRead(
+          'INTEGRITY_CONFLICT',
+          'AI billing reservation data could not be read reliably',
+          reservationId,
+          err,
+        );
+      }
+      if (consumes.length > 0) {
+        throw recoveryError(
+          'INTEGRITY_CONFLICT',
+          'Reservation has associated consume transactions and cannot be manually released',
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
+      try {
+        await dependencies.repository.recordAuditLog({
+          actorId: input.actorId,
+          action: 'AI_BILLING_RECOVERY_MANUAL_RELEASE_ATTEMPT',
+          targetUserId: reservation.userId,
+          metadata: {
+            reservationId,
+            action: 'MANUAL_RELEASE',
+            actorId: input.actorId,
+            reason: action.reason,
+            evidenceReference: action.evidenceReference,
+            status: 'ATTEMPT',
+          },
+        });
+      } catch (err) {
+        if (err instanceof AIBillingRecoveryError) throw err;
+        throw recoveryError(
+          'INTEGRITY_CONFLICT',
+          'Manual release attempt audit logging failed',
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
+      let released: ReleaseBusinessTokenReservationResult;
+      try {
+        released = await dependencies.releaseReservation({
+          reservationId,
+          reason: action.reason,
+        });
+      } catch (err) {
+        const errorType = err instanceof AIBillingRecoveryError ? err.name : err instanceof AppError ? 'AppError' : 'Error';
+        const errorCode = err instanceof AIBillingRecoveryError ? err.code : 'RELEASE_FAILED';
+        const statusCode = err instanceof AppError ? err.statusCode : undefined;
+        try {
+          await dependencies.repository.recordAuditLog({
+            actorId: input.actorId,
+            action: 'AI_BILLING_RECOVERY_MANUAL_RELEASE_FAILED',
+            targetUserId: reservation.userId,
+            metadata: {
+              reservationId,
+              action: 'MANUAL_RELEASE',
+              errorType,
+              errorCode,
+              ...(statusCode !== undefined ? { statusCode } : {}),
+              reason: action.reason,
+              evidenceReference: action.evidenceReference,
+              status: 'FAILED',
+            },
+          });
+        } catch (_) {}
+
+        if (err instanceof AppError) {
+          if (err.statusCode === 404) {
+            throw recoveryError(
+              'RESERVATION_NOT_FOUND',
+              'AI billing reservation not found during manual release',
+              { reservationId, recoveryRequired: true },
+            );
+          }
+          if (err.statusCode === 409) {
+            throw recoveryError('INTEGRITY_CONFLICT', 'AI billing reservation cannot be manually released', {
+              reservationId,
+              recoveryRequired: true,
+            });
+          }
+        }
+        throw recoveryError('RELEASE_FAILED', 'AI billing reservation manual release failed', {
+          reservationId,
+          recoveryRequired: true,
+        });
+      }
+
+      const idempotentReplay = released.idempotentReplay;
+      try {
+        await dependencies.repository.recordAuditLog({
+          actorId: input.actorId,
+          action: 'AI_BILLING_RECOVERY_MANUAL_RELEASE',
+          targetUserId: reservation.userId,
+          metadata: {
+            reservationId,
+            action: 'MANUAL_RELEASE',
+            reason: action.reason,
+            evidenceReference: action.evidenceReference,
+            status: 'RELEASED',
+          },
+        });
+      } catch (_) {}
+
+      return {
+        reservationId,
+        outcome: idempotentReplay ? 'ALREADY_RELEASED' : 'RELEASED',
+        status: released.status,
+        financialMutationPerformed: !idempotentReplay,
+        recoveryRequired: false,
+        idempotentReplay,
+        reason: action.reason,
+        ...(action.evidenceReference === undefined
+          ? {}
+          : { evidenceReference: action.evidenceReference }),
+      };
+    }
+
+    case 'MANUAL_SETTLE': {
+      await assertReservationWalletOwnership(reservation, dependencies);
+      if (reservation.status === 'COMPLETED') {
+        let consumes;
+        try {
+          consumes = await dependencies.repository.findConsumeForReservation(reservation);
+        } catch (err) {
+          wrapRepositoryRead(
+            'INTEGRITY_CONFLICT',
+            'AI billing reservation data could not be read reliably',
+            reservationId,
+            err,
+          );
+        }
+        if (consumes.length === 1 && consumes[0].tokens === action.actualTokens) {
+          return {
+            reservationId,
+            outcome: 'ALREADY_SETTLED',
+            status: 'COMPLETED',
+            financialMutationPerformed: false,
+            recoveryRequired: false,
+            actualTokens: action.actualTokens,
+            releasedTokens: reservation.tokens - action.actualTokens,
+            consumeTransactionId: consumes[0].id,
+            idempotentReplay: true,
+            reason: action.reason,
+            ...(action.evidenceReference === undefined
+              ? {}
+              : { evidenceReference: action.evidenceReference }),
+          };
+        }
+        throw recoveryError(
+          'INTEGRITY_CONFLICT',
+          'Token reservation integrity conflict',
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
+      if (reservation.status !== 'PENDING') {
+        throw recoveryError(
+          'INTEGRITY_CONFLICT',
+          'Only PENDING reservations can be manually settled',
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
+      if (action.actualTokens > reservation.tokens) {
+        throw recoveryError(
+          'INVALID_INPUT',
+          'Confirmed actual tokens must not exceed the reserved amount',
+          { reservationId },
+        );
+      }
+
+      let consumes;
+      try {
+        consumes = await dependencies.repository.findConsumeForReservation(reservation);
+      } catch (err) {
+        wrapRepositoryRead(
+          'INTEGRITY_CONFLICT',
+          'AI billing reservation data could not be read reliably',
+          reservationId,
+          err,
+        );
+      }
+      if (consumes.length > 0) {
+        throw recoveryError(
+          'INTEGRITY_CONFLICT',
+          'Reservation has associated consume transactions and cannot be manually settled',
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
+      try {
+        await dependencies.repository.recordAuditLog({
+          actorId: input.actorId,
+          action: 'AI_BILLING_RECOVERY_MANUAL_SETTLE_ATTEMPT',
+          targetUserId: reservation.userId,
+          metadata: {
+            reservationId,
+            action: 'MANUAL_SETTLE',
+            actorId: input.actorId,
+            actualTokens: action.actualTokens,
+            reason: action.reason,
+            evidenceReference: action.evidenceReference,
+            status: 'ATTEMPT',
+          },
+        });
+      } catch (err) {
+        if (err instanceof AIBillingRecoveryError) throw err;
+        throw recoveryError(
+          'INTEGRITY_CONFLICT',
+          'Manual settle attempt audit logging failed',
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
+      let settlement: SettleBusinessTokenReservationResult;
+      try {
+        settlement = await dependencies.settleForAmount({
+          reservationId,
+          actualTokens: action.actualTokens,
+        });
+      } catch (err) {
+        const errorType = err instanceof AIBillingRecoveryError ? err.name : err instanceof AppError ? 'AppError' : 'Error';
+        const errorCode = err instanceof AIBillingRecoveryError ? err.code : 'SETTLEMENT_FAILED';
+        const statusCode = err instanceof AppError ? err.statusCode : undefined;
+        try {
+          await dependencies.repository.recordAuditLog({
+            actorId: input.actorId,
+            action: 'AI_BILLING_RECOVERY_MANUAL_SETTLE_FAILED',
+            targetUserId: reservation.userId,
+            metadata: {
+              reservationId,
+              action: 'MANUAL_SETTLE',
+              actualTokens: action.actualTokens,
+              errorType,
+              errorCode,
+              ...(statusCode !== undefined ? { statusCode } : {}),
+              reason: action.reason,
+              evidenceReference: action.evidenceReference,
+              status: 'FAILED',
+            },
+          });
+        } catch (_) {}
+
+        if (err instanceof AppError) {
+          if (err.statusCode === 404) {
+            throw recoveryError(
+              'RESERVATION_NOT_FOUND',
+              'AI billing reservation not found during manual settlement',
+              { reservationId, recoveryRequired: true },
+            );
+          }
+          if (err.statusCode === 409) {
+            throw recoveryError('INTEGRITY_CONFLICT', 'AI billing reservation cannot be manually settled', {
+              reservationId,
+              recoveryRequired: true,
+            });
+          }
+        }
+        throw recoveryError('SETTLEMENT_FAILED', 'AI billing reservation manual settlement failed', {
+          reservationId,
+          recoveryRequired: true,
+        });
+      }
+
+      const idempotentReplay = settlement.idempotentReplay;
+      try {
+        await dependencies.repository.recordAuditLog({
+          actorId: input.actorId,
+          action: 'AI_BILLING_RECOVERY_MANUAL_SETTLE',
+          targetUserId: reservation.userId,
+          metadata: {
+            reservationId,
+            action: 'MANUAL_SETTLE',
+            actualTokens: action.actualTokens,
+            reason: action.reason,
+            evidenceReference: action.evidenceReference,
+            status: 'COMPLETED',
+          },
+        });
+      } catch (_) {}
+
+      return {
+        reservationId,
+        outcome: idempotentReplay ? 'ALREADY_SETTLED' : 'SETTLED',
+        status: settlement.status,
+        financialMutationPerformed: !idempotentReplay,
+        recoveryRequired: false,
+        actualTokens: settlement.actualTokens,
+        releasedTokens: settlement.releasedTokens,
+        consumeTransactionId: settlement.consumeTransactionId,
+        idempotentReplay,
+        reason: action.reason,
+        ...(action.evidenceReference === undefined
+          ? {}
+          : { evidenceReference: action.evidenceReference }),
+      };
+    }
+
     case 'REVIEW': {
+      await assertReservationWalletOwnership(reservation, dependencies);
+      if (reservation.status !== 'PENDING') {
+        throw recoveryError(
+          'INTEGRITY_CONFLICT',
+          'Only PENDING reservations can be marked under review',
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
+      try {
+        await dependencies.repository.recordAuditLog({
+          actorId: input.actorId,
+          action: 'AI_BILLING_RECOVERY_REVIEW',
+          targetUserId: reservation.userId,
+          metadata: {
+            reservationId,
+            action: 'REVIEW',
+            reason: action.reason,
+            evidenceReference: action.evidenceReference,
+            status: 'UNDER_REVIEW',
+          },
+        });
+      } catch (err) {
+        if (err instanceof AIBillingRecoveryError) throw err;
+        throw recoveryError(
+          'INTEGRITY_CONFLICT',
+          'AI billing recovery audit log persistence failed',
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
       return {
         reservationId,
         outcome: 'REVIEW_REQUIRED',
@@ -697,6 +1254,9 @@ export async function recoverAIBillingReservation(
         financialMutationPerformed: false,
         recoveryRequired: true,
         reason: action.reason,
+        ...(action.evidenceReference === undefined
+          ? {}
+          : { evidenceReference: action.evidenceReference }),
       };
     }
   }

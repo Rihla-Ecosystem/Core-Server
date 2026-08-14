@@ -63,6 +63,15 @@ export interface AIBillingRecoveryQueuePage {
   aggregate: AIBillingRecoveryPendingAggregate;
 }
 
+export interface AIBillingRecoveryAuditLogRecord {
+  id: string;
+  actorId: string | null;
+  action: string;
+  targetUserId: string | null;
+  metadata: unknown;
+  createdAt: Date;
+}
+
 export interface AIBillingRecoveryRepository {
   findReservationById(reservationId: string): Promise<AIBillingRecoveryReservationRow | null>;
   findWalletById(walletId: string): Promise<AIBillingRecoveryWalletRow | null>;
@@ -74,6 +83,14 @@ export interface AIBillingRecoveryRepository {
     walletId: string,
   ): Promise<AIBillingRecoveryReconciliationSnapshot>;
   listReservationsForRecovery(filter: AIBillingRecoveryQueueFilter): Promise<AIBillingRecoveryQueuePage>;
+  recordAuditLog(data: {
+    actorId?: string;
+    action: string;
+    targetUserId?: string;
+    metadata: Record<string, unknown>;
+  }): Promise<AIBillingRecoveryAuditLogRecord>;
+  findLatestRecoveryAuditLog(reservationId: string): Promise<AIBillingRecoveryAuditLogRecord | null>;
+  findLatestRecoveryReviewAuditLog(reservationId: string): Promise<AIBillingRecoveryAuditLogRecord | null>;
 }
 
 function toReservationRow(reservation: TokenReservation): AIBillingRecoveryReservationRow {
@@ -204,6 +221,73 @@ export function createPrismaAIBillingRecoveryRepository(): AIBillingRecoveryRepo
           totalTokens: aggregate._sum.tokens ?? 0,
         },
       };
+    },
+
+    async recordAuditLog(data) {
+      const created = await prisma.auditLog.create({
+        data: {
+          actorId: data.actorId ?? null,
+          action: data.action,
+          targetUserId: data.targetUserId ?? null,
+          metadata: data.metadata as Prisma.InputJsonValue,
+        },
+      });
+      return {
+        id: created.id,
+        actorId: created.actorId,
+        action: created.action,
+        targetUserId: created.targetUserId,
+        metadata: created.metadata,
+        createdAt: created.createdAt,
+      };
+    },
+
+    async findLatestRecoveryAuditLog(reservationId) {
+      const matched = await prisma.auditLog.findFirst({
+        where: {
+          action: { startsWith: 'AI_BILLING_RECOVERY_' },
+          metadata: {
+            path: ['reservationId'],
+            equals: reservationId,
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      return matched
+        ? {
+            id: matched.id,
+            actorId: matched.actorId,
+            action: matched.action,
+            targetUserId: matched.targetUserId,
+            metadata: matched.metadata,
+            createdAt: matched.createdAt,
+          }
+        : null;
+    },
+
+    async findLatestRecoveryReviewAuditLog(reservationId) {
+      const matched = await prisma.auditLog.findFirst({
+        where: {
+          action: 'AI_BILLING_RECOVERY_REVIEW',
+          metadata: {
+            path: ['reservationId'],
+            equals: reservationId,
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      return matched
+        ? {
+            id: matched.id,
+            actorId: matched.actorId,
+            action: matched.action,
+            targetUserId: matched.targetUserId,
+            metadata: matched.metadata,
+            createdAt: matched.createdAt,
+          }
+        : null;
     },
   };
 }

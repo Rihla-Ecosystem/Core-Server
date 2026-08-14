@@ -40,8 +40,22 @@ export const adminBillingRecoveryActionBodySchema = z.discriminatedUnion('type',
     evidenceReference: evidenceReferenceSchema,
   }).strict(),
   z.object({
+    type: z.literal('MANUAL_RELEASE'),
+    confirmation: z.literal('ADMIN_CONFIRMED_NON_BILLABLE'),
+    reason: recoveryReasonSchema,
+    evidenceReference: evidenceReferenceSchema,
+  }).strict(),
+  z.object({
+    type: z.literal('MANUAL_SETTLE'),
+    confirmation: z.literal('ADMIN_CONFIRMED_ACTUAL_TOKENS'),
+    actualTokens: z.number().int().min(0),
+    reason: recoveryReasonSchema,
+    evidenceReference: evidenceReferenceSchema,
+  }).strict(),
+  z.object({
     type: z.literal('REVIEW'),
     reason: recoveryReasonSchema,
+    evidenceReference: evidenceReferenceSchema,
   }).strict(),
 ]);
 

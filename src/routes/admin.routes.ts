@@ -204,20 +204,6 @@ router.get(
   adminBillingRecoveryController.reconcileWallet,
 );
 
-router.get(
-  '/billing-recovery/:reservationId',
-  requireRole('admin'),
-  validate(adminBillingRecoveryReservationParamsSchema, 'params'),
-  adminBillingRecoveryController.inspectRecoveryReservation,
-);
-
-router.post(
-  '/billing-recovery/:reservationId/action',
-  requireRole('admin'),
-  validate(adminBillingRecoveryReservationParamsSchema, 'params'),
-  validate(adminBillingRecoveryActionBodySchema),
-  adminBillingRecoveryController.recoverReservation,
-);
 
 router.get(
   '/ai-shadow-pricing/observations',
@@ -277,5 +263,29 @@ router.get(
   validate(adminBillingRecoveryQueueQuerySchema, 'query'),
   adminBillingRecoveryController.getRecoveryQueue,
 );
+
+router.get(
+  '/billing-recovery/wallets/:walletId/reconcile',
+  requireRole('admin'),
+  validate(adminBillingRecoveryWalletParamsSchema, 'params'),
+  adminBillingRecoveryController.reconcileWallet,
+);
+
+router.get(
+  '/billing-recovery/:reservationId',
+  requireRole('admin'),
+  validate(adminBillingRecoveryReservationParamsSchema, 'params'),
+  adminBillingRecoveryController.inspectRecoveryReservation,
+);
+
+router.post(
+  '/billing-recovery/:reservationId/action',
+  requireRole('admin'),
+  validate(adminBillingRecoveryReservationParamsSchema, 'params'),
+  validate(adminBillingRecoveryActionBodySchema),
+  adminBillingRecoveryController.recoverReservation,
+);
+
+
 
 export default router;

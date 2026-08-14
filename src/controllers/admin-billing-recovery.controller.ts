@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
+import { AppError } from '../middleware/errorHandler.js';
 import {
   inspectAIBillingRecovery,
   listAIBillingRecoveryQueue,
@@ -49,10 +50,14 @@ export async function recoverReservation(
   next: NextFunction,
 ): Promise<void> {
   try {
+    if (!req.user) {
+      throw new AppError(401, 'Authentication required');
+    }
     const reservationId = Array.isArray(req.params.reservationId) ? req.params.reservationId[0] : req.params.reservationId;
     const result = await recoverAIBillingReservation({
       reservationId,
       action: req.body as AdminBillingRecoveryActionBody,
+      actorId: req.user.userId,
     });
     res.status(200).json({ success: true, data: result });
   } catch (err) {

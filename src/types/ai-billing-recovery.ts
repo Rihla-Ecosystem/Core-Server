@@ -14,7 +14,15 @@ export type AIBillingRecoveryReasonCode =
 
 export type AIBillingRecoveryConfirmation =
   | 'ACTUAL_TOKENS_CONFIRMED'
-  | 'CONFIRMED_NON_BILLABLE';
+  | 'CONFIRMED_NON_BILLABLE'
+  | 'ADMIN_CONFIRMED_NON_BILLABLE'
+  | 'ADMIN_CONFIRMED_ACTUAL_TOKENS';
+
+export interface MetadataIssue {
+  field: string;
+  code: string;
+  message: string;
+}
 
 export type AIBillingRecoveryAction =
   | {
@@ -31,8 +39,22 @@ export type AIBillingRecoveryAction =
       evidenceReference?: string;
     }
   | {
+      type: 'MANUAL_RELEASE';
+      confirmation: 'ADMIN_CONFIRMED_NON_BILLABLE';
+      reason: string;
+      evidenceReference?: string;
+    }
+  | {
+      type: 'MANUAL_SETTLE';
+      confirmation: 'ADMIN_CONFIRMED_ACTUAL_TOKENS';
+      actualTokens: number;
+      reason: string;
+      evidenceReference?: string;
+    }
+  | {
       type: 'REVIEW';
       reason: string;
+      evidenceReference?: string;
     };
 
 export type AIBillingRecoveryOutcome =
@@ -68,6 +90,8 @@ export interface InspectAIBillingRecoveryResult {
   expiresAt: Date;
   isExpired: boolean;
   metadataStatus: AIBillingMetadataStatus;
+  metadataIssues?: MetadataIssue[];
+  observed?: Record<string, unknown>;
   quotedTokens?: number;
   requestedMode?: AIUsagePricingMode;
   quoteAppliedMode?: AIUsagePricingMode;
@@ -86,11 +110,19 @@ export interface InspectAIBillingRecoveryResult {
   reasonCode: AIBillingRecoveryReasonCode;
   integrityConflict: boolean;
   inspectedAt: Date;
+  review?: {
+    reviewedBy?: string;
+    reviewedAt: string;
+    reason: string;
+    evidenceReference?: string;
+    status: string;
+  };
 }
 
 export interface RecoverAIBillingReservationInput {
   reservationId: string;
   action: AIBillingRecoveryAction;
+  actorId?: string;
 }
 
 export interface RecoverAIBillingReservationResult {
