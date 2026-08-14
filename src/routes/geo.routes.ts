@@ -2,7 +2,18 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { validate } from '../middleware/validate.js';
 import { authenticate } from '../middleware/auth.js';
-import { fetchPois, searchPlaces, fetchSitesByGovernorate, fetchGovernorates, fetchCountryBoundary, fetchSiteById, fetchAreaNotice } from '../services/geo.service.js';
+import {
+  fetchPois,
+  searchPlaces,
+  fetchSitesByGovernorate,
+  fetchGovernorates,
+  fetchCountryBoundary,
+  fetchSiteById,
+  fetchAreaNotice,
+  fetchZonePolygons,
+  fetchLegalGuide,
+  type AreaNotice,
+} from '../services/geo.service.js';
 
 const router = Router();
 
@@ -159,6 +170,85 @@ router.get('/notice', authenticate, validate(noticeSchema, 'query'), async (req,
   try {
     const { lat, lon, radius } = req.query as unknown as { lat: number; lon: number; radius?: number };
     const result = await fetchAreaNotice(lat, lon, radius, req.headers.authorization);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const zonesSchema = z.object({
+  lat: z.coerce.number().min(-90).max(90),
+  lon: z.coerce.number().min(-180).max(180),
+  radius: z.coerce.number().positive().optional(),
+});
+
+/**
+ * @openapi
+ * /geo/zones:
+ *   get:
+ *     tags: [Geo]
+ *     summary: Anonymous sensitive-zone polygons for map rendering
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: lat
+ *         required: true
+ *         schema: { type: number }
+ *       - in: query
+ *         name: lon
+ *         required: true
+ *         schema: { type: number }
+ *       - in: query
+ *         name: radius
+ *         schema: { type: number }
+ *     responses:
+ *       200:
+ *         description: Anonymous polygons (class + severity + geometry only)
+ */
+router.get('/zones', authenticate, validate(zonesSchema, 'query'), async (req, res, next) => {
+  try {
+    const { lat, lon, radius } = req.query as unknown as { lat: number; lon: number; radius?: number };
+    const result = await fetchZonePolygons(lat, lon, radius, req.headers.authorization);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const lawSchema = z.object({
+  class: z.enum(['restricted', 'caution', 'protected']),
+  synthesize: z
+    .string()
+    .optional()
+    .transform((v) => v === '1' || v === 'true'),
+});
+
+/**
+ * @openapi
+ * /geo/law:
+ *   get:
+ *     tags: [Geo]
+ *     summary: Egyptian laws/guides for a zone class (RAG + optional AI advice)
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: class
+ *         required: true
+ *         schema: { type: string, enum: [restricted, caution, protected] }
+ *     responses:
+ *       200:
+ *         description: Legal guidance for the zone class
+ */
+router.get('/law', authenticate, validate(lawSchema, 'query'), async (req, res, next) => {
+  try {
+    const { class: zoneClass, synthesize } = req.query as unknown as { class: AreaNotice['class']; synthesize: boolean };
+    const result = await fetchLegalGuide(zoneClass!, synthesize);
+    if (!result) {
+      res.status(502).json({ error: 'Legal guide unavailable' });
+      return;
+    }
     res.json(result);
   } catch (err) {
     next(err);
