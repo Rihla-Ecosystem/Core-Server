@@ -11,7 +11,7 @@ import { toInputJsonValue } from '../utils/json.js';
 import { buildContextObject } from './context-aggregator.service.js';
 import { analyzeContext } from '../clients/ai-context.client.js';
 import { evaluateRules, prioritizeEvaluations, RULE_COOLDOWN_MS } from './notification-rules.service.js';
-import { publishToUser, isUserOnline } from './notification-realtime.service.js';
+import { publishToUser, isUserOnline, publishContextEvent } from './notification-realtime.service.js';
 import { EGYPT_EMERGENCY_CONTACTS } from '../types/context-notification.js';
 import { getNotificationSettings } from './notification-admin.service.js';
 import { resolveBillingRateCard, BillingRateCardUnavailableError } from './billing-rate-card.service.js';
@@ -31,6 +31,63 @@ import type {
 } from '../types/context-notification.js';
 
 const UNKNOWN_SERVER_ERROR = 'Failed to process location update';
+
+// Zone-class severity mapping for anonymous SSE zone events (identity never exposed).
+const ZONE_EVENT_SEVERITY: Record<string, 'critical' | 'warning' | 'info'> = {
+  restricted: 'critical',
+  caution: 'warning',
+  protected: 'info',
+};
+
+/**
+ * Server-side zone state machine. Tracks which zone CLASSES the user is
+ * currently inside (`activeGeofences` on UserNotificationStatus) and publishes
+ * anonymous `zone` enter/exit events over SSE on transitions. Only the CLASS is
+ * exposed — never the name/description/reason of the area.
+ */
+async function trackZoneState(
+  userId: string,
+  context: ContextObject,
+): Promise<void> {
+  const zones = (context.geoContext?.restrictedAreas ?? []) as Array<{ type?: string }>;
+  const activeClasses = new Set<string>();
+  for (const z of zones) {
+    const cls = String(z.type || '').toLowerCase();
+    if (cls === 'restricted' || cls === 'caution' || cls === 'protected') activeClasses.add(cls);
+  }
+
+  const prev = await prisma.userNotificationStatus.findUnique({
+    where: { userId },
+    select: { activeGeofences: true },
+  });
+  const prevClasses = new Set<string>(
+    Array.isArray(prev?.activeGeofences) ? prev.activeGeofences.map(String) : [],
+  );
+
+  const entered = [...activeClasses].filter((c) => !prevClasses.has(c));
+  const exited = [...prevClasses].filter((c) => !activeClasses.has(c));
+
+  if (entered.length === 0 && exited.length === 0) return;
+
+  for (const cls of entered) {
+    publishContextEvent(userId, {
+      kind: 'zone',
+      data: { event: 'enter', class: cls, severity: ZONE_EVENT_SEVERITY[cls] ?? 'warning', distance_meters: 0 },
+    });
+  }
+  for (const cls of exited) {
+    publishContextEvent(userId, {
+      kind: 'zone',
+      data: { event: 'exit', class: cls, severity: ZONE_EVENT_SEVERITY[cls] ?? 'warning' },
+    });
+  }
+
+  await prisma.userNotificationStatus.upsert({
+    where: { userId },
+    update: { activeGeofences: [...activeClasses] },
+    create: { userId, activeGeofences: [...activeClasses] },
+  });
+}
 
 // Only a movement of at least this distance from the last reported point
 // re-triggers the full context pipeline. Keeps repeated GPS pings from
@@ -134,12 +191,21 @@ export async function processLocationUpdate(
   // the freshest position is kept so the next real movement is detected.
   const process = await shouldProcessLocationUpdate(userId, location);
   await upsertUserStatus(userId, location);
+
+  // Zone enter/exit transitions must be detected even when the AI pipeline is
+  // throttled for slow movement, so a boundary crossing at walking speed is
+  // never missed. This is a lightweight GeoContext call, not the AI analyze.
+  const zoneContext = await buildContextObject(userId, location).catch(() => null);
+  if (zoneContext) {
+    await trackZoneState(userId, zoneContext).catch(() => undefined);
+  }
+
   if (!process) {
     return { notifications: [], contextReport: null, skipped: true };
   }
 
   // 1. Aggregate the full Context Object.
-  const context = await buildContextObject(userId, location);
+  const context = zoneContext ?? (await buildContextObject(userId, location));
 
   // 2. Ask the AI Service to analyze the aggregated context.
   let aiReport: ContextAnalysisResult;

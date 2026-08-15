@@ -13,6 +13,8 @@ export interface AreaNotice {
   severity?: 'critical' | 'warning' | 'info';
   distance_meters?: number;
   guide_key: string;
+  /** Legal-guide reference keys the client can resolve via GET /geo/law. */
+  legal_keys?: Array<'drone' | 'photography' | 'entry' | 'safety'>;
 }
 
 const blockedTypes = new Set(['infrastructure', 'restricted', 'military']);
@@ -58,8 +60,6 @@ export async function fetchFullGeoContext(lat: number, lon: number, radius?: num
 interface GisContextZone {
   advisory_type?: string | null;
   zone_type?: string | null;
-  name?: string | null;
-  subtype?: string | null;
   distance_meters?: number | null;
 }
 
@@ -75,16 +75,18 @@ const ZONE_SEVERITY: Record<string, AreaNotice['severity']> = {
   protected: 'info',
 };
 
+/** Legal topics per zone class — resolved client-side via GET /geo/law. */
+const ZONE_LEGAL: Record<NonNullable<AreaNotice['class']>, AreaNotice['legal_keys']> = {
+  restricted: ['drone', 'photography', 'entry'],
+  caution: ['drone', 'photography', 'safety'],
+  protected: ['photography', 'entry', 'safety'],
+};
+
 function normalizeZoneClass(value: unknown): NonNullable<AreaNotice['class']> {
   const raw = String(value || '').toLowerCase();
   if (raw === 'caution') return 'caution';
   if (raw === 'protected') return 'protected';
   return 'restricted';
-}
-
-function zoneGuideKey(zone: GisContextZone, zoneClass: NonNullable<AreaNotice['class']>): string {
-  const name = String(zone.name || zone.subtype || '').trim();
-  return name ? `${zoneClass}:${name}` : zoneClass;
 }
 
 function mapAreaNotice(context: GisContextResponse): AreaNotice {
@@ -97,7 +99,8 @@ function mapAreaNotice(context: GisContextResponse): AreaNotice {
       class: zoneClass,
       severity: ZONE_SEVERITY[zoneClass] ?? 'warning',
       distance_meters: 0,
-      guide_key: zoneGuideKey(zone, zoneClass),
+      guide_key: zoneClass,
+      legal_keys: ZONE_LEGAL[zoneClass],
     };
   }
   const guidance = context?.nearby_zone_guidance ?? [];
@@ -111,7 +114,8 @@ function mapAreaNotice(context: GisContextResponse): AreaNotice {
       class: zoneClass,
       severity: ZONE_SEVERITY[zoneClass] ?? 'warning',
       distance_meters: nearest.distance_meters ?? 0,
-      guide_key: zoneGuideKey(nearest, zoneClass),
+      guide_key: zoneClass,
+      legal_keys: ZONE_LEGAL[zoneClass],
     };
   }
   return { active: false, guide_key: '' };
@@ -125,6 +129,58 @@ export async function fetchAreaNotice(lat: number, lon: number, radius?: number,
   if (radius !== undefined) params.radius = radius;
   const context = await get<GisContextResponse>(`${base}/api/v1/context`, params, headers).catch(() => null);
   return mapAreaNotice(context ?? {});
+}
+
+export interface ZonePolygon {
+  zone_type: 'restricted' | 'caution' | 'protected';
+  severity: 'critical' | 'warning' | 'info';
+  geometry: { type: string; coordinates: unknown };
+}
+
+export interface ZonesResult {
+  lat: number;
+  lon: number;
+  radius_meters: number;
+  zones: ZonePolygon[];
+}
+
+/** Anonymous polygons for the map overlay. Never exposes zone identity. */
+export async function fetchZonePolygons(lat: number, lon: number, radius?: number, authorization?: string): Promise<ZonesResult> {
+  const base = env.GIS_SERVICE_URL;
+  const headers: Record<string, string> = { 'X-Internal-Api-Key': env.INTERNAL_API_KEY };
+  if (authorization) headers['Authorization'] = authorization;
+  const params: Record<string, string | number> = { lat, lon };
+  if (radius !== undefined) params.radius = radius;
+  const zones = await get<ZonesResult>(`${base}/api/v1/context/zones`, params, headers).catch(() => ({ zones: [] }));
+  return { lat, lon, radius_meters: radius ?? 0, zones: zones?.zones ?? [] };
+}
+
+export interface LegalRule {
+  heading: string;
+  points: string[];
+}
+
+export interface LegalGuide {
+  source: 'rag' | 'ai';
+  class_name: 'restricted' | 'caution' | 'protected';
+  title: string;
+  summary: string;
+  rules: LegalRule[];
+  citations: string[];
+  advice?: string | null;
+}
+
+/** Egyptian laws/guides for a zone class from ai-service RAG (+ optional AI advice). */
+export async function fetchLegalGuide(class_name: NonNullable<AreaNotice['class']>, synthesize = true): Promise<LegalGuide | null> {
+  const base = env.AI_SERVICE_URL;
+  const headers: Record<string, string> = { 'X-Internal-Api-Key': env.INTERNAL_API_KEY };
+  const guide = await get<LegalGuide>(
+    `${base}/legal`,
+    { class_name, synthesize: synthesize ? '1' : '0' },
+    headers,
+    15000,
+  ).catch(() => null);
+  return guide;
 }
 
 export async function searchPlaces(
