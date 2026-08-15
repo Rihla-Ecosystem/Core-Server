@@ -28,6 +28,7 @@ import type { ProviderRateCard } from '../types/provider-pricing.js';
 import type { AIExecutionBudget } from '../config/ai-execution-budget.js';
 import { deriveAffordableAIExecutionBudget } from '../utils/affordable-ai-execution-budget.js';
 import { summarizeProviderAttemptExposure } from '../utils/provider-attempt-exposure.js';
+import { normalizeProviderAttempts } from '../utils/ai-usage.js';
 
 /**
  * Phase 2G-A streaming chat usage-based billing lifecycle.
@@ -217,6 +218,7 @@ export interface SettleChatStreamUsageBasedBillingInput {
   reservedTokens: number;
   executionBudget: AIExecutionBudget;
   usage?: unknown;
+  outcome?: unknown;
   providerCalls?: unknown;
   providerAttempts?: unknown;
   chatLimits: ChatLimitsConfig;
@@ -227,6 +229,47 @@ export interface SettleChatStreamUsageBasedBillingInput {
 
 export type ChatStreamSettleOutcome = 'SETTLED' | 'RECOVERY_REQUIRED' | 'SKIPPED';
 
+interface StreamProviderExecutionMetadata {
+  schemaVersion: 1;
+  executionSource: 'PROVIDER' | 'CACHE' | 'NONE';
+  providerCalls: Prisma.InputJsonValue[];
+  providerAttempts: Prisma.InputJsonValue[];
+}
+
+async function updateStreamReservationMetadata(input: {
+  reservationId: string;
+  providerExecution?: StreamProviderExecutionMetadata;
+  unresolvedCostExposure?: Record<string, Prisma.InputJsonValue>;
+  providerAttemptExposure?: unknown;
+}): Promise<void> {
+  const reservation = await prisma.tokenReservation.findUnique({
+    where: { id: input.reservationId }, select: { metadata: true },
+  });
+  const existing = reservation?.metadata !== null && typeof reservation?.metadata === 'object' && !Array.isArray(reservation.metadata)
+    ? (reservation.metadata as Record<string, unknown>) : {};
+
+  const updatedMetadata: Record<string, unknown> = {
+    ...existing,
+  };
+
+  if (input.providerExecution !== undefined) {
+    updatedMetadata.providerExecution = input.providerExecution as unknown as Prisma.InputJsonObject;
+  }
+  if (input.unresolvedCostExposure !== undefined) {
+    updatedMetadata.unresolvedCostExposure = input.unresolvedCostExposure as unknown as Prisma.InputJsonObject;
+  }
+  if (input.providerAttemptExposure !== undefined) {
+    updatedMetadata.providerAttemptExposure = input.providerAttemptExposure;
+  }
+
+  await prisma.tokenReservation.update({
+    where: { id: input.reservationId },
+    data: {
+      metadata: updatedMetadata as Prisma.InputJsonValue,
+    },
+  });
+}
+
 async function recordStreamExposure(input: {
   reservationId: string;
   pricedCallCount?: number;
@@ -236,23 +279,95 @@ async function recordStreamExposure(input: {
   walletTokens?: string;
   providerAttemptExposure?: unknown;
 }): Promise<void> {
-  const reservation = await prisma.tokenReservation.findUnique({
-    where: { id: input.reservationId }, select: { metadata: true },
+  const exposureMeta: Record<string, Prisma.InputJsonValue> = {};
+  if (input.pricedCallCount !== undefined) exposureMeta.pricedCallCount = input.pricedCallCount;
+  if (input.unpricedCallCount !== undefined) exposureMeta.unpricedCallCount = input.unpricedCallCount;
+  if (input.pricedCostNanoUsd !== undefined) exposureMeta.pricedCostNanoUsd = input.pricedCostNanoUsd;
+  if (input.markedUpNanoUsd !== undefined) exposureMeta.markedUpNanoUsd = input.markedUpNanoUsd;
+  if (input.walletTokens !== undefined) exposureMeta.walletTokens = input.walletTokens;
+
+  await updateStreamReservationMetadata({
+    reservationId: input.reservationId,
+    ...(input.pricedCallCount === undefined ? {} : { unresolvedCostExposure: exposureMeta }),
+    ...(input.providerAttemptExposure === undefined ? {} : { providerAttemptExposure: input.providerAttemptExposure }),
   });
-  const existing = reservation?.metadata !== null && typeof reservation?.metadata === 'object' && !Array.isArray(reservation.metadata)
-    ? reservation.metadata : {};
-  await prisma.tokenReservation.update({
-    where: { id: input.reservationId },
-    data: {
-      metadata: {
-        ...existing,
-        ...(input.pricedCallCount === undefined ? {} : { unresolvedCostExposure: {
-          pricedCallCount: input.pricedCallCount, unpricedCallCount: input.unpricedCallCount,
-          pricedCostNanoUsd: input.pricedCostNanoUsd, markedUpNanoUsd: input.markedUpNanoUsd, walletTokens: input.walletTokens,
-        } }),
-        ...(input.providerAttemptExposure === undefined ? {} : { providerAttemptExposure: input.providerAttemptExposure }),
-      },
-    },
+}
+
+const SAFE_STREAM_USAGE_FIELDS = [
+  'inputTokens',
+  'outputTokens',
+  'totalTokens',
+  'cachedInputTokens',
+  'cachedOutputTokens',
+  'reasoningTokens',
+  'imageInputTokens',
+  'imageOutputTokens',
+  'audioInputTokens',
+  'audioOutputTokens',
+  'audioSeconds',
+  'audioInputSeconds',
+  'audioOutputSeconds',
+  'transcriptionSeconds',
+  'inputCharacters',
+  'outputCharacters',
+  'generatedImageCount',
+] as const;
+
+/**
+ * Whitelist safe billing-only fields from ShadowPricedCall[] for durable
+ * evidence, preserving raw token/modality usage for UNPRICED calls from the
+ * original providerCall payload when present.
+ *
+ * Never serializes prompts, responses, media, or secrets.
+ * Converts bigint costNanoUsd to string for JSON storage.
+ */
+function serializeStreamPricingCallEvidence(
+  calls: Array<Record<string, unknown>>,
+  rawProviderCalls?: unknown,
+): Prisma.InputJsonValue[] {
+  const rawArray = Array.isArray(rawProviderCalls) ? rawProviderCalls : [];
+  const realCalls = rawArray.filter(
+    (c) => c !== null && typeof c === 'object' && (c as Record<string, unknown>).providerCallMade !== false,
+  ) as Array<Record<string, unknown>>;
+
+  const callMap = new Map<string, Record<string, unknown>>();
+  for (const rawCall of realCalls) {
+    if (typeof rawCall.providerCallId === 'string' && rawCall.providerCallId.trim().length > 0) {
+      callMap.set(rawCall.providerCallId, rawCall);
+    }
+  }
+
+  return calls.map((call, index) => {
+    const callId = typeof call.providerCallId === 'string' ? call.providerCallId : undefined;
+    const rawMatch = (callId ? callMap.get(callId) : undefined) ?? realCalls[index];
+
+    const base: Record<string, Prisma.InputJsonValue> = {
+      kind: String(call.kind ?? 'UNPRICED'),
+      ...(call.providerCallId !== undefined ? { providerCallId: String(call.providerCallId) } : {}),
+      ...(call.provider !== undefined ? { provider: String(call.provider) } : {}),
+      ...(call.operation !== undefined ? { operation: String(call.operation) } : {}),
+      ...(call.requestedModel !== undefined ? { requestedModel: String(call.requestedModel) } : {}),
+      ...(call.actualModel !== undefined ? { actualModel: String(call.actualModel) } : {}),
+      ...(call.pricedAt !== undefined ? { pricedAt: String(call.pricedAt) } : {}),
+    };
+
+    if (call.kind === 'PRICED') {
+      base.reason = String(call.reason);
+      base.costNanoUsd = String(call.costNanoUsd);
+      if (call.rateCard !== undefined) base.rateCard = call.rateCard as unknown as Prisma.InputJsonObject;
+      if (call.usageApplied !== undefined) base.usageApplied = call.usageApplied as unknown as Prisma.InputJsonObject;
+    } else {
+      base.reason = String(call.reason);
+      if (rawMatch) {
+        for (const field of SAFE_STREAM_USAGE_FIELDS) {
+          const val = rawMatch[field];
+          if (typeof val === 'number' && Number.isFinite(val)) {
+            base[field] = val;
+          }
+        }
+      }
+    }
+    return base as Prisma.InputJsonObject;
   });
 }
 
@@ -289,13 +404,15 @@ export async function settleChatStreamUsageBasedBilling(
     return 'SKIPPED';
   }
 
-  const raw: unknown = buildSuccessOutcome(
-    {
-      providerCalls: input.providerCalls,
-      providerAttempts: input.providerAttempts,
-    },
-    input.usage,
-  );
+  const raw: unknown =
+    input.outcome ??
+    buildSuccessOutcome(
+      {
+        providerCalls: input.providerCalls,
+        providerAttempts: input.providerAttempts,
+      },
+      input.usage,
+    );
 
   let outcome: AIExecutionOutcome<unknown>;
   try {
@@ -305,6 +422,26 @@ export async function settleChatStreamUsageBasedBilling(
   }
 
   if (outcome.kind !== 'SUCCESS') {
+    try {
+      const normalizedAttempts = normalizeProviderAttempts(input.providerAttempts) ?? [];
+      const callsEvidence = serializeStreamPricingCallEvidence([], input.providerCalls);
+      const attemptExposure = summarizeProviderAttemptExposure(input.providerAttempts);
+
+      await updateStreamReservationMetadata({
+        reservationId: input.reservationId,
+        providerExecution: {
+          schemaVersion: 1,
+          executionSource: outcome.kind === 'NON_BILLABLE_FAILURE' && outcome.providerRequestSent === false ? 'NONE' : 'PROVIDER',
+          providerCalls: callsEvidence,
+          providerAttempts: normalizedAttempts as unknown as Prisma.InputJsonValue[],
+        },
+        ...(attemptExposure === undefined ? {} : { providerAttemptExposure: attemptExposure }),
+      });
+    } catch (evidenceErr) {
+      console.error('[chat-stream-billing] outcome_failure_evidence_failed', {
+        operationId: input.operationId, reservationId: input.reservationId,
+      });
+    }
     return recoveryRequired(
       input,
       outcome.kind === 'INDETERMINATE_FAILURE' ? 'INDETERMINATE_EXECUTION' : 'NON_BILLABLE_FAILURE',
@@ -356,7 +493,34 @@ export async function settleChatStreamUsageBasedBilling(
     return recoveryRequired(input, 'PRICING_FAILED');
   }
 
+  const normalizedAttempts = normalizeProviderAttempts(input.providerAttempts) ?? [];
+  const callsEvidence = serializeStreamPricingCallEvidence(pricing.calls as unknown as Array<Record<string, unknown>>, input.providerCalls);
+
   if (pricing.summaryStatus === 'UNPRICED') {
+    try {
+      await updateStreamReservationMetadata({
+        reservationId: input.reservationId,
+        providerExecution: {
+          schemaVersion: 1,
+          executionSource: 'PROVIDER',
+          providerCalls: callsEvidence,
+          providerAttempts: normalizedAttempts as unknown as Prisma.InputJsonValue[],
+        },
+        unresolvedCostExposure: {
+          pricedCallCount: 0,
+          unpricedCallCount: pricing.totals.unpricedCallCount,
+          pricedCostNanoUsd: '0',
+          markedUpNanoUsd: '0',
+          walletTokens: '0',
+          rateCardVersion: input.rateCard.version,
+          providerCallEvidence: callsEvidence,
+        },
+      });
+    } catch (evidenceErr) {
+      console.error('[chat-stream-billing] unpriced_evidence_failed', {
+        operationId: input.operationId, reservationId: input.reservationId,
+      });
+    }
     return recoveryRequired(input, 'UNPRICED_PROVIDER_CALLS');
   }
 
@@ -369,6 +533,40 @@ export async function settleChatStreamUsageBasedBilling(
     });
   } catch {
     return recoveryRequired(input, 'PRICING_FAILED');
+  }
+
+  // Phase 4B: PARTIALLY_PRICED fail-closed. Unknown provider cost must never
+  // be treated as zero. Persist durable per-call billing evidence, then route
+  // to recovery. Reservation remains PENDING; no wallet deduction or release.
+  if (pricing.summaryStatus === 'PARTIALLY_PRICED') {
+    try {
+      await updateStreamReservationMetadata({
+        reservationId: input.reservationId,
+        providerExecution: {
+          schemaVersion: 1,
+          executionSource: 'PROVIDER',
+          providerCalls: callsEvidence,
+          providerAttempts: normalizedAttempts as unknown as Prisma.InputJsonValue[],
+        },
+        unresolvedCostExposure: {
+          pricedCallCount: pricing.totals.pricedCallCount,
+          unpricedCallCount: pricing.totals.unpricedCallCount,
+          pricedCostNanoUsd: pricing.totals.pricedCostNanoUsd.toString(),
+          markedUpNanoUsd: charge.markedUpNanoUsd.toString(),
+          walletTokens: charge.tokens.toString(),
+          rateCardVersion: input.rateCard.version,
+          providerCallEvidence: callsEvidence,
+        },
+      });
+    } catch (evidenceErr) {
+      // Evidence persistence failure must NOT fall back to partial settlement.
+      // Route to recovery anyway — the reservation remains held.
+      console.error('[chat-stream-billing] partial_pricing_evidence_failed', {
+        operationId: input.operationId, reservationId: input.reservationId,
+        error: evidenceErr instanceof Error ? evidenceErr.message : String(evidenceErr),
+      });
+    }
+    return recoveryRequired(input, 'UNPRICED_PROVIDER_CALLS');
   }
 
   const actualWalletTokens = Number(charge.tokens);
@@ -392,6 +590,25 @@ export async function settleChatStreamUsageBasedBilling(
     return recoveryRequired(input, 'PRICING_EVIDENCE_FAILED');
   }
 
+  // Phase 5B.1: Best-effort canonical providerExecution write for FULLY_PRICED.
+  // Observability errors must NOT block settlement or cause recovery.
+  try {
+    await updateStreamReservationMetadata({
+      reservationId: input.reservationId,
+      providerExecution: {
+        schemaVersion: 1,
+        executionSource: 'PROVIDER',
+        providerCalls: callsEvidence,
+        providerAttempts: normalizedAttempts as unknown as Prisma.InputJsonValue[],
+      },
+    });
+  } catch (evidenceErr) {
+    console.error('[chat-stream-billing] fully_priced_evidence_failed', {
+      operationId: input.operationId, reservationId: input.reservationId,
+      error: evidenceErr instanceof Error ? evidenceErr.message : String(evidenceErr),
+    });
+  }
+
   let settlement;
   try {
     settlement = await settleBusinessTokenReservationForAmount({
@@ -411,20 +628,8 @@ export async function settleChatStreamUsageBasedBilling(
     return recoveryRequired(input, 'SETTLED_EVIDENCE_FAILED');
   }
 
-  if (pricing.summaryStatus === 'PARTIALLY_PRICED') {
-    try {
-      await recordStreamExposure({
-        reservationId: input.reservationId,
-        pricedCallCount: pricing.totals.pricedCallCount,
-        unpricedCallCount: pricing.totals.unpricedCallCount,
-        pricedCostNanoUsd: pricing.totals.pricedCostNanoUsd.toString(),
-        markedUpNanoUsd: charge.markedUpNanoUsd.toString(),
-        walletTokens: charge.tokens.toString(),
-      });
-    } catch {
-      // Exposure recording must never fail the already-settled operation.
-    }
-  }
+  // Phase 4B: PARTIALLY_PRICED is now fail-closed above and never reaches
+  // settlement. Only FULLY_PRICED operations reach this point.
 
   return 'SETTLED';
 }
@@ -433,6 +638,21 @@ async function settleStreamZero(
   input: SettleChatStreamUsageBasedBillingInput,
   outcome: Extract<AIExecutionOutcome<unknown>, { kind: 'SUCCESS' }>,
 ): Promise<ChatStreamSettleOutcome> {
+  try {
+    const executionSource = outcome.usage.cached === true ? 'CACHE' : 'PROVIDER';
+    await updateStreamReservationMetadata({
+      reservationId: input.reservationId,
+      providerExecution: {
+        schemaVersion: 1,
+        executionSource,
+        providerCalls: [],
+        providerAttempts: [],
+      },
+    });
+  } catch (evidenceErr) {
+    console.error('[chat-stream-billing] zero_settle_evidence_failed', { operationId: input.operationId });
+  }
+
   try {
     await recordAIBillingOperationPricing({
       operationId: input.operationId,

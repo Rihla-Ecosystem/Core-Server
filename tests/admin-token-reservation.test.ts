@@ -42,7 +42,7 @@ describe('Admin Token Reservation Unit Tests & Contract Checks', () => {
       assert.ok(res.issues.length > 0);
     });
 
-    test('identifies VALID metadata when metadata matches schema and quotedTokens', () => {
+    test('identifies LEGACY VALID metadata when metadata matches schema and quotedTokens', () => {
       const metadata = {
         aiBilling: {
           schemaVersion: 1,
@@ -59,7 +59,7 @@ describe('Admin Token Reservation Unit Tests & Contract Checks', () => {
       assert.equal(res.issues.length, 0);
     });
 
-    test('identifies INVALID metadata when quotedTokens mismatch reservation tokens', () => {
+    test('identifies LEGACY INVALID metadata when quotedTokens mismatch reservation tokens (field: aiBilling.quotedTokens)', () => {
       const metadata = {
         aiBilling: {
           schemaVersion: 1,
@@ -73,9 +73,51 @@ describe('Admin Token Reservation Unit Tests & Contract Checks', () => {
       };
       const res = evaluateAIBillingMetadataStatus(metadata, 10);
       assert.equal(res.status, 'INVALID');
-      assert.ok(
-        res.issues.some((issue) => issue.code === 'RESERVATION_MISMATCH'),
-      );
+      const issue = res.issues.find((i) => i.code === 'RESERVATION_MISMATCH');
+      assert.ok(issue);
+      assert.equal(issue?.field, 'aiBilling.quotedTokens');
+    });
+
+    test('identifies USAGE_BASED VALID metadata when reservationTokens match reservation tokens', () => {
+      const metadata = {
+        aiBilling: {
+          schemaVersion: 1,
+          requestedMode: 'USAGE_BASED',
+          feature: 'AI_CHAT_QUERY',
+          reservationTokens: 50,
+          maxInputTokens: 12000,
+          maxOutputTokens: 1200,
+          rateCardVersion: 'rate-v1',
+          walletPolicyVersion: 'policy-v1',
+          provider: 'fake-provider',
+          model: 'fake-model',
+        },
+      };
+      const res = evaluateAIBillingMetadataStatus(metadata, 50);
+      assert.equal(res.status, 'VALID');
+      assert.equal(res.issues.length, 0);
+    });
+
+    test('identifies USAGE_BASED INVALID metadata when reservationTokens mismatch reservation tokens (field: aiBilling.reservationTokens)', () => {
+      const metadata = {
+        aiBilling: {
+          schemaVersion: 1,
+          requestedMode: 'USAGE_BASED',
+          feature: 'AI_CHAT_QUERY',
+          reservationTokens: 30,
+          maxInputTokens: 12000,
+          maxOutputTokens: 1200,
+          rateCardVersion: 'rate-v1',
+          walletPolicyVersion: 'policy-v1',
+          provider: 'fake-provider',
+          model: 'fake-model',
+        },
+      };
+      const res = evaluateAIBillingMetadataStatus(metadata, 50);
+      assert.equal(res.status, 'INVALID');
+      const issue = res.issues.find((i) => i.code === 'RESERVATION_MISMATCH');
+      assert.ok(issue);
+      assert.equal(issue?.field, 'aiBilling.reservationTokens');
     });
   });
 

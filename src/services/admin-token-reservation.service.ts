@@ -39,13 +39,18 @@ export function evaluateAIBillingMetadataStatus(
 
   if (
     parsed.status === 'VALID' &&
-    parsed.summary &&
-    parsed.summary.quotedTokens !== reservedTokens
+    parsed.reservationAmountFromMetadata !== reservedTokens
   ) {
     issues.push({
-      field: 'aiBilling.quotedTokens',
+      field:
+        parsed.metadataContract === 'USAGE_BASED'
+          ? 'aiBilling.reservationTokens'
+          : 'aiBilling.quotedTokens',
       code: 'RESERVATION_MISMATCH',
-      message: 'quotedTokens does not match reservation.tokens',
+      message:
+        parsed.metadataContract === 'USAGE_BASED'
+          ? 'reservationTokens does not match reservation.tokens'
+          : 'quotedTokens does not match reservation.tokens',
     });
   }
 

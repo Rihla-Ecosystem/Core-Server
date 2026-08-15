@@ -86,6 +86,24 @@ function fullMetadata(tokens: number): unknown {
   };
 }
 
+// Current live metadata written by usage-based-ai-billing.service.ts
+function usageBasedMetadata(tokens: number): unknown {
+  return {
+    aiBilling: {
+      schemaVersion: 1,
+      requestedMode: 'USAGE_BASED',
+      feature: 'AI_CHAT_QUERY',
+      reservationTokens: tokens,
+      maxInputTokens: 12000,
+      maxOutputTokens: 1200,
+      rateCardVersion: 'rate-v1',
+      walletPolicyVersion: 'policy-v1',
+      provider: 'fake-provider',
+      model: 'fake-model',
+    },
+  };
+}
+
 function buildReservation(
   overrides: Partial<AIBillingRecoveryReservationRow> = {},
 ): AIBillingRecoveryReservationRow {
@@ -2456,6 +2474,161 @@ describe('AI Billing Recovery Service', () => {
     assert.ok(!err.message.includes('tokenBalance'));
     assert.ok(!err.message.includes('reservedBalance'));
     assert.ok(!err.message.includes('ACTIVE'));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Current Usage-Based Metadata Contract Tests
+  // ---------------------------------------------------------------------------
+
+  test('UB-1. Current live usage-based metadata is classified VALID', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ tokens: 100, metadata: usageBasedMetadata(100) }));
+    const result = await inspectAIBillingRecovery({ reservationId: 'reservation-1' }, buildDeps(store));
+    assert.equal(result.metadataStatus, 'VALID');
+    assert.equal(result.reasonCode, 'PENDING_REVIEW');
+    assert.equal(result.automaticFinancialActionAllowed, false);
+    assert.ok(!(result as Record<string, unknown>).quotedTokens, 'quotedTokens must not be present for usage-based metadata');
+    assert.equal((result.observed as Record<string, unknown>)?.reservationTokens, 100);
+    assert.equal((result.observed as Record<string, unknown>)?.requestedMode, 'USAGE_BASED');
+  });
+
+  test('UB-2. PENDING reservation with current live metadata can pass validation for confirmed SETTLE', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ tokens: 50, metadata: usageBasedMetadata(50) }));
+    const result = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: settleAction(30) },
+      buildDeps(store),
+    );
+    assert.equal(result.outcome, 'SETTLED');
+    assert.equal(result.financialMutationPerformed, true);
+    assert.equal(result.actualTokens, 30);
+    assert.equal(result.releasedTokens, 20);
+    assert.equal(result.recoveryRequired, false);
+  });
+
+  test('UB-3. PENDING reservation with current live metadata can pass validation for confirmed RELEASE', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ tokens: 50, metadata: usageBasedMetadata(50) }));
+    const result = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: releaseAction() },
+      buildDeps(store),
+    );
+    assert.equal(result.outcome, 'RELEASED');
+    assert.equal(result.financialMutationPerformed, true);
+    assert.equal(result.recoveryRequired, false);
+  });
+
+  test('UB-4. Current metadata where reservationTokens != reservation.tokens is INVALID and SETTLE is rejected', async () => {
+    const store = new FakeRecoveryStore();
+    // reservation.tokens = 50, but metadata says reservationTokens = 99 (mismatch)
+    seedReservation(store, buildReservation({ tokens: 50, metadata: usageBasedMetadata(99) }));
+    const inspectResult = await inspectAIBillingRecovery({ reservationId: 'reservation-1' }, buildDeps(store));
+    assert.equal(inspectResult.metadataStatus, 'INVALID');
+    assert.equal(inspectResult.reasonCode, 'METADATA_INVALID');
+    await expectRecoveryError(
+      recoverAIBillingReservation(
+        { reservationId: 'reservation-1', action: settleAction(40) },
+        buildDeps(store),
+      ),
+      'METADATA_INVALID',
+    );
+  });
+
+  test('UB-5. Usage-based metadata missing reservationTokens is INVALID', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({
+      tokens: 50,
+      metadata: {
+        aiBilling: {
+          schemaVersion: 1,
+          requestedMode: 'USAGE_BASED',
+          // reservationTokens intentionally omitted
+          maxInputTokens: 12000,
+          maxOutputTokens: 1200,
+          rateCardVersion: 'rate-v1',
+          walletPolicyVersion: 'policy-v1',
+        },
+      },
+    }));
+    const result = await inspectAIBillingRecovery({ reservationId: 'reservation-1' }, buildDeps(store));
+    assert.equal(result.metadataStatus, 'INVALID');
+    assert.equal(result.reasonCode, 'METADATA_INVALID');
+    const issueFields = result.metadataIssues.map((i) => i.field);
+    assert.ok(issueFields.includes('aiBilling.reservationTokens'), 'must report reservationTokens missing');
+  });
+
+  test('UB-6. Existing legacy metadata (quotedTokens) remains VALID after fix', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ tokens: 2, metadata: validMetadata(2) }));
+    const result = await inspectAIBillingRecovery({ reservationId: 'reservation-1' }, buildDeps(store));
+    assert.equal(result.metadataStatus, 'VALID');
+    assert.equal((result as Record<string, unknown>).quotedTokens, 2);
+    assert.equal((result as Record<string, unknown>).requestedMode, 'PROVIDER_USAGE');
+    assert.equal((result as Record<string, unknown>).quoteAppliedMode, 'PROVIDER_USAGE');
+  });
+
+  test('UB-7. Malformed legacy metadata (missing quotedTokens) remains INVALID after fix', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({
+      tokens: 2,
+      metadata: {
+        aiBilling: {
+          schemaVersion: 1,
+          requestedMode: 'PROVIDER_USAGE',
+          quoteAppliedMode: 'PROVIDER_USAGE',
+          // quotedTokens intentionally omitted
+          fixedFallbackTokens: 2,
+          maxInputTokens: 12000,
+          maxOutputTokens: 1200,
+        },
+      },
+    }));
+    const result = await inspectAIBillingRecovery({ reservationId: 'reservation-1' }, buildDeps(store));
+    assert.equal(result.metadataStatus, 'INVALID');
+    assert.equal(result.reasonCode, 'METADATA_INVALID');
+    const issueFields = result.metadataIssues.map((i) => i.field);
+    assert.ok(issueFields.includes('aiBilling.quotedTokens'), 'must report quotedTokens missing');
+  });
+
+  test('UB-8. Repeating a valid usage-based SETTLE is idempotent', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ tokens: 50, metadata: usageBasedMetadata(50) }));
+    const first = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: settleAction(30) },
+      buildDeps(store),
+    );
+    assert.equal(first.outcome, 'SETTLED');
+    assert.equal(first.financialMutationPerformed, true);
+    const second = await recoverAIBillingReservation(
+      { reservationId: 'reservation-1', action: settleAction(30) },
+      buildDeps(store),
+    );
+    assert.equal(second.outcome, 'ALREADY_SETTLED');
+    assert.equal(second.financialMutationPerformed, false);
+    assert.equal(second.idempotentReplay, true);
+    // Exactly one wallet write performed across both calls
+    assert.equal(store.writes.filter((w) => w === 'settle').length, 2);
+  });
+
+  test('UB-9. automaticFinancialActionAllowed remains false for usage-based PENDING reservation', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ tokens: 50, metadata: usageBasedMetadata(50) }));
+    const result = await inspectAIBillingRecovery({ reservationId: 'reservation-1' }, buildDeps(store));
+    assert.equal(result.automaticFinancialActionAllowed, false);
+  });
+
+  test('UB-10. SETTLE with actualTokens > reservedTokens is rejected even with valid usage-based metadata', async () => {
+    const store = new FakeRecoveryStore();
+    seedReservation(store, buildReservation({ tokens: 50, metadata: usageBasedMetadata(50) }));
+    await expectRecoveryError(
+      recoverAIBillingReservation(
+        { reservationId: 'reservation-1', action: settleAction(51) },
+        buildDeps(store),
+      ),
+      'INVALID_INPUT',
+    );
+    // No financial mutation must have occurred
+    assert.equal(store.writes.length, 0);
   });
 });
 

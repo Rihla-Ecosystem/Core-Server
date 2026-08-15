@@ -91,9 +91,18 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+/**
+ * The `reservationAmountFromMetadata` field provides a contract-normalized token
+ * amount that callers MUST validate against `TokenReservation.tokens` before
+ * any financial recovery action. For legacy metadata this equals `quotedTokens`;
+ * for current usage-based metadata this equals `reservationTokens`.
+ */
 export type ParsedAIBillingMetadata =
   | {
       status: 'VALID';
+      metadataContract: 'LEGACY';
+      /** Normalized reservation amount from metadata — validate against reservation.tokens. */
+      reservationAmountFromMetadata: number;
       summary: {
         quotedTokens: number;
         requestedMode: AIUsagePricingMode;
@@ -104,6 +113,23 @@ export type ParsedAIBillingMetadata =
         billingCurrency?: string;
         rateCardVersion?: string;
         walletPolicyVersion?: string;
+      };
+      metadataIssues: MetadataIssue[];
+      observed: Record<string, unknown>;
+    }
+  | {
+      status: 'VALID';
+      metadataContract: 'USAGE_BASED';
+      /** Normalized reservation amount from metadata — validate against reservation.tokens. */
+      reservationAmountFromMetadata: number;
+      summary: {
+        reservationTokens: number;
+        maxInputTokens: number;
+        maxOutputTokens: number;
+        rateCardVersion: string;
+        walletPolicyVersion: string;
+        provider?: string;
+        model?: string;
       };
       metadataIssues: MetadataIssue[];
       observed: Record<string, unknown>;
@@ -380,9 +406,274 @@ function assertRecoveryAction(value: unknown): AIBillingRecoveryAction {
 
 
 
-export function parseAIBillingMetadata(metadata: unknown): ParsedAIBillingMetadata {
-  const issues: MetadataIssue[] = [];
+// ---------------------------------------------------------------------------
+// Metadata parser: supports two contracts
+//
+//  A. CURRENT (USAGE_BASED) — written by usage-based-ai-billing.service.ts
+//     Required fields: schemaVersion=1, requestedMode='USAGE_BASED',
+//                      reservationTokens, maxInputTokens, maxOutputTokens,
+//                      rateCardVersion, walletPolicyVersion
+//
+//  B. LEGACY — written by the dormant legacy orchestrator path
+//     Required fields: schemaVersion=1, requestedMode, quoteAppliedMode,
+//                      quotedTokens, fixedFallbackTokens,
+//                      maxInputTokens, maxOutputTokens
+//
+// Metadata is INVALID only when it does not fully satisfy either contract.
+// ---------------------------------------------------------------------------
 
+function parseUsageBasedMetadata(
+  section: Record<string, unknown>,
+): ParsedAIBillingMetadata {
+  const issues: MetadataIssue[] = [];
+  const observed: Record<string, unknown> = {};
+
+  // schemaVersion — required, must be 1
+  if (section.schemaVersion !== undefined) {
+    observed.schemaVersion = section.schemaVersion;
+    if (section.schemaVersion !== 1) {
+      issues.push({ field: 'aiBilling.schemaVersion', code: 'SCHEMA_VERSION_INVALID', message: 'schemaVersion must equal 1' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.schemaVersion', code: 'SCHEMA_VERSION_MISSING', message: 'schemaVersion is missing' });
+  }
+
+  // requestedMode — must be 'USAGE_BASED' (already known, just record)
+  observed.requestedMode = section.requestedMode;
+
+  // reservationTokens — required non-negative integer
+  if (section.reservationTokens !== undefined) {
+    observed.reservationTokens = section.reservationTokens;
+    if (!isSafeNonNegativeInteger(section.reservationTokens)) {
+      issues.push({ field: 'aiBilling.reservationTokens', code: 'RESERVATION_TOKENS_INVALID', message: 'reservationTokens must be a non-negative integer' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.reservationTokens', code: 'RESERVATION_TOKENS_MISSING', message: 'reservationTokens is missing' });
+  }
+
+  // maxInputTokens — required non-negative integer
+  if (section.maxInputTokens !== undefined) {
+    observed.maxInputTokens = section.maxInputTokens;
+    if (!isSafeNonNegativeInteger(section.maxInputTokens)) {
+      issues.push({ field: 'aiBilling.maxInputTokens', code: 'MAX_INPUT_TOKENS_INVALID', message: 'maxInputTokens must be a non-negative integer' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.maxInputTokens', code: 'MAX_INPUT_TOKENS_MISSING', message: 'maxInputTokens is missing' });
+  }
+
+  // maxOutputTokens — required non-negative integer
+  if (section.maxOutputTokens !== undefined) {
+    observed.maxOutputTokens = section.maxOutputTokens;
+    if (!isSafeNonNegativeInteger(section.maxOutputTokens)) {
+      issues.push({ field: 'aiBilling.maxOutputTokens', code: 'MAX_OUTPUT_TOKENS_INVALID', message: 'maxOutputTokens must be a non-negative integer' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.maxOutputTokens', code: 'MAX_OUTPUT_TOKENS_MISSING', message: 'maxOutputTokens is missing' });
+  }
+
+  // rateCardVersion — required non-empty string
+  if (section.rateCardVersion !== undefined) {
+    observed.rateCardVersion = section.rateCardVersion;
+    if (!isNonEmptyString(section.rateCardVersion)) {
+      issues.push({ field: 'aiBilling.rateCardVersion', code: 'RATE_CARD_VERSION_INVALID', message: 'rateCardVersion must be a non-empty string' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.rateCardVersion', code: 'RATE_CARD_VERSION_MISSING', message: 'rateCardVersion is missing' });
+  }
+
+  // walletPolicyVersion — required non-empty string
+  if (section.walletPolicyVersion !== undefined) {
+    observed.walletPolicyVersion = section.walletPolicyVersion;
+    if (!isNonEmptyString(section.walletPolicyVersion)) {
+      issues.push({ field: 'aiBilling.walletPolicyVersion', code: 'WALLET_POLICY_VERSION_INVALID', message: 'walletPolicyVersion must be a non-empty string' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.walletPolicyVersion', code: 'WALLET_POLICY_VERSION_MISSING', message: 'walletPolicyVersion is missing' });
+  }
+
+  // Optional common fields
+  if (section.provider !== undefined) {
+    observed.provider = section.provider;
+    if (!isNonEmptyString(section.provider)) {
+      issues.push({ field: 'aiBilling.provider', code: 'PROVIDER_INVALID', message: 'provider must be a non-empty string' });
+    }
+  }
+  if (section.model !== undefined) {
+    observed.model = section.model;
+    if (!isNonEmptyString(section.model)) {
+      issues.push({ field: 'aiBilling.model', code: 'MODEL_INVALID', message: 'model must be a non-empty string' });
+    }
+  }
+  if (section.pricingSource !== undefined) {
+    observed.pricingSource = section.pricingSource;
+  }
+  if (section.feature !== undefined) {
+    observed.feature = section.feature;
+  }
+
+  if (issues.length > 0) {
+    return { status: 'INVALID', metadataIssues: issues, observed };
+  }
+
+  return {
+    status: 'VALID',
+    metadataContract: 'USAGE_BASED',
+    reservationAmountFromMetadata: section.reservationTokens as number,
+    metadataIssues: [],
+    observed,
+    summary: {
+      reservationTokens: section.reservationTokens as number,
+      maxInputTokens: section.maxInputTokens as number,
+      maxOutputTokens: section.maxOutputTokens as number,
+      rateCardVersion: section.rateCardVersion as string,
+      walletPolicyVersion: section.walletPolicyVersion as string,
+      ...(section.provider === undefined ? {} : { provider: section.provider as string }),
+      ...(section.model === undefined ? {} : { model: section.model as string }),
+    },
+  };
+}
+
+function parseLegacyMetadata(
+  section: Record<string, unknown>,
+): ParsedAIBillingMetadata {
+  const issues: MetadataIssue[] = [];
+  const observed: Record<string, unknown> = {};
+
+  // schemaVersion — required, must be 1
+  if (section.schemaVersion !== undefined) {
+    observed.schemaVersion = section.schemaVersion;
+    if (section.schemaVersion !== 1) {
+      issues.push({ field: 'aiBilling.schemaVersion', code: 'SCHEMA_VERSION_INVALID', message: 'schemaVersion must equal 1' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.schemaVersion', code: 'SCHEMA_VERSION_MISSING', message: 'schemaVersion is missing' });
+  }
+
+  // quotedTokens — required non-negative integer
+  if (section.quotedTokens !== undefined) {
+    observed.quotedTokens = section.quotedTokens;
+    if (!isSafeNonNegativeInteger(section.quotedTokens)) {
+      issues.push({ field: 'aiBilling.quotedTokens', code: 'QUOTED_TOKENS_INVALID', message: 'quotedTokens must be a non-negative integer' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.quotedTokens', code: 'QUOTED_TOKENS_MISSING', message: 'quotedTokens is missing' });
+  }
+
+  // fixedFallbackTokens — required non-negative integer
+  if (section.fixedFallbackTokens !== undefined) {
+    observed.fixedFallbackTokens = section.fixedFallbackTokens;
+    if (!isSafeNonNegativeInteger(section.fixedFallbackTokens)) {
+      issues.push({ field: 'aiBilling.fixedFallbackTokens', code: 'FIXED_FALLBACK_TOKENS_INVALID', message: 'fixedFallbackTokens must be a non-negative integer' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.fixedFallbackTokens', code: 'FIXED_FALLBACK_TOKENS_MISSING', message: 'fixedFallbackTokens is missing' });
+  }
+
+  // maxInputTokens — required non-negative integer
+  if (section.maxInputTokens !== undefined) {
+    observed.maxInputTokens = section.maxInputTokens;
+    if (!isSafeNonNegativeInteger(section.maxInputTokens)) {
+      issues.push({ field: 'aiBilling.maxInputTokens', code: 'MAX_INPUT_TOKENS_INVALID', message: 'maxInputTokens must be a non-negative integer' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.maxInputTokens', code: 'MAX_INPUT_TOKENS_MISSING', message: 'maxInputTokens is missing' });
+  }
+
+  // maxOutputTokens — required non-negative integer
+  if (section.maxOutputTokens !== undefined) {
+    observed.maxOutputTokens = section.maxOutputTokens;
+    if (!isSafeNonNegativeInteger(section.maxOutputTokens)) {
+      issues.push({ field: 'aiBilling.maxOutputTokens', code: 'MAX_OUTPUT_TOKENS_INVALID', message: 'maxOutputTokens must be a non-negative integer' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.maxOutputTokens', code: 'MAX_OUTPUT_TOKENS_MISSING', message: 'maxOutputTokens is missing' });
+  }
+
+  // requestedMode — required, must be a valid legacy pricing mode
+  if (section.requestedMode !== undefined) {
+    observed.requestedMode = section.requestedMode;
+    if (typeof section.requestedMode !== 'string' ||
+        !['FIXED_FALLBACK', 'PROVIDER_USAGE'].includes(section.requestedMode)) {
+      issues.push({ field: 'aiBilling.requestedMode', code: 'REQUESTED_MODE_INVALID', message: 'requestedMode is invalid' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.requestedMode', code: 'REQUESTED_MODE_MISSING', message: 'requestedMode is missing' });
+  }
+
+  // quoteAppliedMode — required, must be a valid legacy pricing mode
+  if (section.quoteAppliedMode !== undefined) {
+    observed.quoteAppliedMode = section.quoteAppliedMode;
+    if (typeof section.quoteAppliedMode !== 'string' ||
+        !['FIXED_FALLBACK', 'PROVIDER_USAGE'].includes(section.quoteAppliedMode)) {
+      issues.push({ field: 'aiBilling.quoteAppliedMode', code: 'QUOTE_APPLIED_MODE_INVALID', message: 'quoteAppliedMode is invalid' });
+    }
+  } else {
+    issues.push({ field: 'aiBilling.quoteAppliedMode', code: 'QUOTE_APPLIED_MODE_MISSING', message: 'quoteAppliedMode is missing' });
+  }
+
+  // Optional common fields
+  if (section.maximumUsageWalletTokens !== undefined) {
+    observed.maximumUsageWalletTokens = section.maximumUsageWalletTokens;
+    if (!isSafeNonNegativeInteger(section.maximumUsageWalletTokens)) {
+      issues.push({ field: 'aiBilling.maximumUsageWalletTokens', code: 'MAXIMUM_USAGE_WALLET_TOKENS_INVALID', message: 'maximumUsageWalletTokens must be a non-negative integer' });
+    }
+  }
+  if (section.provider !== undefined) {
+    observed.provider = section.provider;
+    if (!isNonEmptyString(section.provider)) {
+      issues.push({ field: 'aiBilling.provider', code: 'PROVIDER_INVALID', message: 'provider must be a non-empty string' });
+    }
+  }
+  if (section.model !== undefined) {
+    observed.model = section.model;
+    if (!isNonEmptyString(section.model)) {
+      issues.push({ field: 'aiBilling.model', code: 'MODEL_INVALID', message: 'model must be a non-empty string' });
+    }
+  }
+  if (section.billingCurrency !== undefined) {
+    observed.billingCurrency = section.billingCurrency;
+    if (!isNonEmptyString(section.billingCurrency)) {
+      issues.push({ field: 'aiBilling.billingCurrency', code: 'BILLING_CURRENCY_INVALID', message: 'billingCurrency must be a non-empty string' });
+    }
+  }
+  if (section.rateCardVersion !== undefined) {
+    observed.rateCardVersion = section.rateCardVersion;
+    if (!isNonEmptyString(section.rateCardVersion)) {
+      issues.push({ field: 'aiBilling.rateCardVersion', code: 'RATE_CARD_VERSION_INVALID', message: 'rateCardVersion must be a non-empty string' });
+    }
+  }
+  if (section.walletPolicyVersion !== undefined) {
+    observed.walletPolicyVersion = section.walletPolicyVersion;
+    if (!isNonEmptyString(section.walletPolicyVersion)) {
+      issues.push({ field: 'aiBilling.walletPolicyVersion', code: 'WALLET_POLICY_VERSION_INVALID', message: 'walletPolicyVersion must be a non-empty string' });
+    }
+  }
+
+  if (issues.length > 0) {
+    return { status: 'INVALID', metadataIssues: issues, observed };
+  }
+
+  return {
+    status: 'VALID',
+    metadataContract: 'LEGACY',
+    reservationAmountFromMetadata: section.quotedTokens as number,
+    metadataIssues: [],
+    observed,
+    summary: {
+      quotedTokens: section.quotedTokens as number,
+      requestedMode: section.requestedMode as AIUsagePricingMode,
+      quoteAppliedMode: section.quoteAppliedMode as AIUsagePricingMode,
+      ...(section.maximumUsageWalletTokens === undefined ? {} : { maximumUsageWalletTokens: section.maximumUsageWalletTokens as number }),
+      ...(section.provider === undefined ? {} : { provider: section.provider as string }),
+      ...(section.model === undefined ? {} : { model: section.model as string }),
+      ...(section.billingCurrency === undefined ? {} : { billingCurrency: section.billingCurrency as string }),
+      ...(section.rateCardVersion === undefined ? {} : { rateCardVersion: section.rateCardVersion as string }),
+      ...(section.walletPolicyVersion === undefined ? {} : { walletPolicyVersion: section.walletPolicyVersion as string }),
+    },
+  };
+}
+
+export function parseAIBillingMetadata(metadata: unknown): ParsedAIBillingMetadata {
   if (metadata === null || metadata === undefined) {
     return {
       status: 'MISSING',
@@ -410,137 +701,13 @@ export function parseAIBillingMetadata(metadata: unknown): ParsedAIBillingMetada
     };
   }
   const section = aiBilling as Record<string, unknown>;
-  const observed: Record<string, unknown> = {};
 
-  if (section.schemaVersion !== undefined) {
-    observed.schemaVersion = section.schemaVersion;
-    if (section.schemaVersion !== 1) {
-      issues.push({ field: 'aiBilling.schemaVersion', code: 'SCHEMA_VERSION_INVALID', message: 'schemaVersion must equal 1' });
-    }
-  } else {
-    issues.push({ field: 'aiBilling.schemaVersion', code: 'SCHEMA_VERSION_MISSING', message: 'schemaVersion is missing' });
+  // Route to the appropriate contract parser based on requestedMode.
+  // USAGE_BASED is the current live contract; anything else is legacy.
+  if (section.requestedMode === 'USAGE_BASED') {
+    return parseUsageBasedMetadata(section);
   }
-
-  if (section.quotedTokens !== undefined) {
-    observed.quotedTokens = section.quotedTokens;
-    if (!isSafeNonNegativeInteger(section.quotedTokens)) {
-      issues.push({ field: 'aiBilling.quotedTokens', code: 'QUOTED_TOKENS_INVALID', message: 'quotedTokens must be a non-negative integer' });
-    }
-  } else {
-    issues.push({ field: 'aiBilling.quotedTokens', code: 'QUOTED_TOKENS_MISSING', message: 'quotedTokens is missing' });
-  }
-
-  if (section.fixedFallbackTokens !== undefined) {
-    observed.fixedFallbackTokens = section.fixedFallbackTokens;
-    if (!isSafeNonNegativeInteger(section.fixedFallbackTokens)) {
-      issues.push({ field: 'aiBilling.fixedFallbackTokens', code: 'FIXED_FALLBACK_TOKENS_INVALID', message: 'fixedFallbackTokens must be a non-negative integer' });
-    }
-  } else {
-    issues.push({ field: 'aiBilling.fixedFallbackTokens', code: 'FIXED_FALLBACK_TOKENS_MISSING', message: 'fixedFallbackTokens is missing' });
-  }
-
-  if (section.maxInputTokens !== undefined) {
-    observed.maxInputTokens = section.maxInputTokens;
-    if (!isSafeNonNegativeInteger(section.maxInputTokens)) {
-      issues.push({ field: 'aiBilling.maxInputTokens', code: 'MAX_INPUT_TOKENS_INVALID', message: 'maxInputTokens must be a non-negative integer' });
-    }
-  } else {
-    issues.push({ field: 'aiBilling.maxInputTokens', code: 'MAX_INPUT_TOKENS_MISSING', message: 'maxInputTokens is missing' });
-  }
-
-  if (section.maxOutputTokens !== undefined) {
-    observed.maxOutputTokens = section.maxOutputTokens;
-    if (!isSafeNonNegativeInteger(section.maxOutputTokens)) {
-      issues.push({ field: 'aiBilling.maxOutputTokens', code: 'MAX_OUTPUT_TOKENS_INVALID', message: 'maxOutputTokens must be a non-negative integer' });
-    }
-  } else {
-    issues.push({ field: 'aiBilling.maxOutputTokens', code: 'MAX_OUTPUT_TOKENS_MISSING', message: 'maxOutputTokens is missing' });
-  }
-
-  if (section.requestedMode !== undefined) {
-    observed.requestedMode = section.requestedMode;
-    if (!isValidPricingMode(section.requestedMode)) {
-      issues.push({ field: 'aiBilling.requestedMode', code: 'REQUESTED_MODE_INVALID', message: 'requestedMode is invalid' });
-    }
-  } else {
-    issues.push({ field: 'aiBilling.requestedMode', code: 'REQUESTED_MODE_MISSING', message: 'requestedMode is missing' });
-  }
-
-  if (section.quoteAppliedMode !== undefined) {
-    observed.quoteAppliedMode = section.quoteAppliedMode;
-    if (!isValidPricingMode(section.quoteAppliedMode)) {
-      issues.push({ field: 'aiBilling.quoteAppliedMode', code: 'QUOTE_APPLIED_MODE_INVALID', message: 'quoteAppliedMode is invalid' });
-    }
-  } else {
-    issues.push({ field: 'aiBilling.quoteAppliedMode', code: 'QUOTE_APPLIED_MODE_MISSING', message: 'quoteAppliedMode is missing' });
-  }
-
-  if (section.maximumUsageWalletTokens !== undefined) {
-    observed.maximumUsageWalletTokens = section.maximumUsageWalletTokens;
-    if (!isSafeNonNegativeInteger(section.maximumUsageWalletTokens)) {
-      issues.push({ field: 'aiBilling.maximumUsageWalletTokens', code: 'MAXIMUM_USAGE_WALLET_TOKENS_INVALID', message: 'maximumUsageWalletTokens must be a non-negative integer' });
-    }
-  }
-
-  if (section.provider !== undefined) {
-    observed.provider = section.provider;
-    if (!isNonEmptyString(section.provider)) {
-      issues.push({ field: 'aiBilling.provider', code: 'PROVIDER_INVALID', message: 'provider must be a non-empty string' });
-    }
-  }
-
-  if (section.model !== undefined) {
-    observed.model = section.model;
-    if (!isNonEmptyString(section.model)) {
-      issues.push({ field: 'aiBilling.model', code: 'MODEL_INVALID', message: 'model must be a non-empty string' });
-    }
-  }
-
-  if (section.billingCurrency !== undefined) {
-    observed.billingCurrency = section.billingCurrency;
-    if (!isNonEmptyString(section.billingCurrency)) {
-      issues.push({ field: 'aiBilling.billingCurrency', code: 'BILLING_CURRENCY_INVALID', message: 'billingCurrency must be a non-empty string' });
-    }
-  }
-
-  if (section.rateCardVersion !== undefined) {
-    observed.rateCardVersion = section.rateCardVersion;
-    if (!isNonEmptyString(section.rateCardVersion)) {
-      issues.push({ field: 'aiBilling.rateCardVersion', code: 'RATE_CARD_VERSION_INVALID', message: 'rateCardVersion must be a non-empty string' });
-    }
-  }
-
-  if (section.walletPolicyVersion !== undefined) {
-    observed.walletPolicyVersion = section.walletPolicyVersion;
-    if (!isNonEmptyString(section.walletPolicyVersion)) {
-      issues.push({ field: 'aiBilling.walletPolicyVersion', code: 'WALLET_POLICY_VERSION_INVALID', message: 'walletPolicyVersion must be a non-empty string' });
-    }
-  }
-
-  if (issues.length === 0) {
-    return {
-      status: 'VALID',
-      metadataIssues: issues,
-      observed,
-      summary: {
-        quotedTokens: section.quotedTokens as number,
-        requestedMode: section.requestedMode as AIUsagePricingMode,
-        quoteAppliedMode: section.quoteAppliedMode as AIUsagePricingMode,
-        ...(section.maximumUsageWalletTokens === undefined ? {} : { maximumUsageWalletTokens: section.maximumUsageWalletTokens as number }),
-        ...(section.provider === undefined ? {} : { provider: section.provider as string }),
-        ...(section.model === undefined ? {} : { model: section.model as string }),
-        ...(section.billingCurrency === undefined ? {} : { billingCurrency: section.billingCurrency as string }),
-        ...(section.rateCardVersion === undefined ? {} : { rateCardVersion: section.rateCardVersion as string }),
-        ...(section.walletPolicyVersion === undefined ? {} : { walletPolicyVersion: section.walletPolicyVersion as string }),
-      },
-    };
-  }
-
-  return {
-    status: 'INVALID',
-    metadataIssues: issues,
-    observed,
-  };
+  return parseLegacyMetadata(section);
 }
 
 export async function inspectAIBillingRecovery(
@@ -585,11 +752,11 @@ export async function inspectAIBillingRecovery(
   const parsed = parseAIBillingMetadata(reservation.metadata);
   const metadataIssues = [...parsed.metadataIssues];
 
-  if (parsed.status === 'VALID' && parsed.summary && parsed.summary.quotedTokens !== reservation.tokens) {
+  if (parsed.status === 'VALID' && parsed.reservationAmountFromMetadata !== reservation.tokens) {
     metadataIssues.push({
-      field: 'aiBilling.quotedTokens',
+      field: parsed.metadataContract === 'USAGE_BASED' ? 'aiBilling.reservationTokens' : 'aiBilling.quotedTokens',
       code: 'RESERVATION_MISMATCH',
-      message: 'quotedTokens does not match reservation.tokens',
+      message: 'Metadata reservation amount does not match reservation.tokens',
     });
   }
 
@@ -701,27 +868,38 @@ export async function inspectAIBillingRecovery(
     metadataStatus,
     metadataIssues,
     observed: parsed.observed,
-    ...(metadataSummary === undefined
-      ? {}
-      : {
-          quotedTokens: metadataSummary.quotedTokens,
-          requestedMode: metadataSummary.requestedMode,
-          quoteAppliedMode: metadataSummary.quoteAppliedMode,
-          ...(metadataSummary.maximumUsageWalletTokens === undefined
-            ? {}
-            : { maximumUsageWalletTokens: metadataSummary.maximumUsageWalletTokens }),
-          ...(metadataSummary.provider === undefined ? {} : { provider: metadataSummary.provider }),
-          ...(metadataSummary.model === undefined ? {} : { model: metadataSummary.model }),
-          ...(metadataSummary.billingCurrency === undefined
-            ? {}
-            : { billingCurrency: metadataSummary.billingCurrency }),
-          ...(metadataSummary.rateCardVersion === undefined
-            ? {}
-            : { rateCardVersion: metadataSummary.rateCardVersion }),
-          ...(metadataSummary.walletPolicyVersion === undefined
-            ? {}
-            : { walletPolicyVersion: metadataSummary.walletPolicyVersion }),
-        }),
+    ...(parsed.status === 'VALID' && metadataStatus === 'VALID'
+      ? parsed.metadataContract === 'LEGACY'
+        ? {
+            quotedTokens: parsed.summary.quotedTokens,
+            requestedMode: parsed.summary.requestedMode,
+            quoteAppliedMode: parsed.summary.quoteAppliedMode,
+            ...(parsed.summary.maximumUsageWalletTokens === undefined
+              ? {}
+              : { maximumUsageWalletTokens: parsed.summary.maximumUsageWalletTokens }),
+            ...(parsed.summary.provider === undefined ? {} : { provider: parsed.summary.provider }),
+            ...(parsed.summary.model === undefined ? {} : { model: parsed.summary.model }),
+            ...(parsed.summary.billingCurrency === undefined
+              ? {}
+              : { billingCurrency: parsed.summary.billingCurrency }),
+            ...(parsed.summary.rateCardVersion === undefined
+              ? {}
+              : { rateCardVersion: parsed.summary.rateCardVersion }),
+            ...(parsed.summary.walletPolicyVersion === undefined
+              ? {}
+              : { walletPolicyVersion: parsed.summary.walletPolicyVersion }),
+          }
+        : {
+            ...(parsed.summary.provider === undefined ? {} : { provider: parsed.summary.provider }),
+            ...(parsed.summary.model === undefined ? {} : { model: parsed.summary.model }),
+            ...(parsed.summary.rateCardVersion === undefined
+              ? {}
+              : { rateCardVersion: parsed.summary.rateCardVersion }),
+            ...(parsed.summary.walletPolicyVersion === undefined
+              ? {}
+              : { walletPolicyVersion: parsed.summary.walletPolicyVersion }),
+          }
+      : {}),
     ...(consumeTransactionId === undefined ? {} : { consumeTransactionId }),
     ...(consumedTokens === undefined ? {} : { consumedTokens }),
     ...(releasedTokens === undefined ? {} : { releasedTokens }),
@@ -761,11 +939,11 @@ export async function recoverAIBillingReservation(
   }
 
   const parsed = parseAIBillingMetadata(reservation.metadata);
-  const isQuotedMatch = parsed.status === 'VALID' && parsed.summary && parsed.summary.quotedTokens === reservation.tokens;
+  const isAmountMatch = parsed.status === 'VALID' && parsed.reservationAmountFromMetadata === reservation.tokens;
   const metadataStatus: AIBillingMetadataStatus =
     parsed.status === 'MISSING'
       ? 'MISSING'
-      : parsed.status === 'INVALID' || !isQuotedMatch
+      : parsed.status === 'INVALID' || !isAmountMatch
         ? 'INVALID'
         : 'VALID';
 
@@ -1348,7 +1526,7 @@ export async function listAIBillingRecoveryQueue(
         ? 'MISSING'
         : parsed.status === 'INVALID'
           ? 'INVALID'
-          : parsed.summary.quotedTokens === reservation.tokens
+          : parsed.reservationAmountFromMetadata === reservation.tokens
             ? 'VALID'
             : 'INVALID';
 
@@ -1380,23 +1558,34 @@ export async function listAIBillingRecoveryQueue(
       isExpired: reservation.expiresAt.getTime() <= inspectedAt.getTime(),
       metadataStatus,
       reasonCode,
-      ...(metadataSummary === undefined
-        ? {}
-        : {
-            requestedMode: metadataSummary.requestedMode,
-            quoteAppliedMode: metadataSummary.quoteAppliedMode,
-            ...(metadataSummary.provider === undefined ? {} : { provider: metadataSummary.provider }),
-            ...(metadataSummary.model === undefined ? {} : { model: metadataSummary.model }),
-            ...(metadataSummary.billingCurrency === undefined
-              ? {}
-              : { billingCurrency: metadataSummary.billingCurrency }),
-            ...(metadataSummary.rateCardVersion === undefined
-              ? {}
-              : { rateCardVersion: metadataSummary.rateCardVersion }),
-            ...(metadataSummary.walletPolicyVersion === undefined
-              ? {}
-              : { walletPolicyVersion: metadataSummary.walletPolicyVersion }),
-          }),
+      ...(parsed.status === 'VALID' && metadataStatus === 'VALID'
+        ? parsed.metadataContract === 'LEGACY'
+          ? {
+              requestedMode: parsed.summary.requestedMode,
+              quoteAppliedMode: parsed.summary.quoteAppliedMode,
+              ...(parsed.summary.provider === undefined ? {} : { provider: parsed.summary.provider }),
+              ...(parsed.summary.model === undefined ? {} : { model: parsed.summary.model }),
+              ...(parsed.summary.billingCurrency === undefined
+                ? {}
+                : { billingCurrency: parsed.summary.billingCurrency }),
+              ...(parsed.summary.rateCardVersion === undefined
+                ? {}
+                : { rateCardVersion: parsed.summary.rateCardVersion }),
+              ...(parsed.summary.walletPolicyVersion === undefined
+                ? {}
+                : { walletPolicyVersion: parsed.summary.walletPolicyVersion }),
+            }
+          : {
+              ...(parsed.summary.provider === undefined ? {} : { provider: parsed.summary.provider }),
+              ...(parsed.summary.model === undefined ? {} : { model: parsed.summary.model }),
+              ...(parsed.summary.rateCardVersion === undefined
+                ? {}
+                : { rateCardVersion: parsed.summary.rateCardVersion }),
+              ...(parsed.summary.walletPolicyVersion === undefined
+                ? {}
+                : { walletPolicyVersion: parsed.summary.walletPolicyVersion }),
+            }
+        : {}),
     };
   });
 

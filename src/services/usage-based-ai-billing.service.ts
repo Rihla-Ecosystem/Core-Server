@@ -23,6 +23,7 @@ import { computeWalletCharge } from '../utils/wallet-conversion.js';
 import { calculateDynamicAIReservationQuote } from '../utils/dynamic-ai-reservation-quote.js';
 import { deriveAffordableAIExecutionBudget } from '../utils/affordable-ai-execution-budget.js';
 import { summarizeProviderAttemptExposure } from '../utils/provider-attempt-exposure.js';
+import { normalizeProviderAttempts } from '../utils/ai-usage.js';
 import type { AIExecutionOutcome } from '../types/ai-execution.js';
 import type { AIUsagePricingResult } from '../types/ai-pricing.js';
 import type {
@@ -199,6 +200,84 @@ function buildReservationMetadata<T>(
   };
 }
 
+const SAFE_USAGE_FIELDS = [
+  'inputTokens',
+  'outputTokens',
+  'totalTokens',
+  'cachedInputTokens',
+  'cachedOutputTokens',
+  'reasoningTokens',
+  'imageInputTokens',
+  'imageOutputTokens',
+  'audioInputTokens',
+  'audioOutputTokens',
+  'audioSeconds',
+  'audioInputSeconds',
+  'audioOutputSeconds',
+  'transcriptionSeconds',
+  'inputCharacters',
+  'outputCharacters',
+  'generatedImageCount',
+] as const;
+
+/**
+ * Whitelist safe billing-only fields from ShadowPricedCall[] for durable
+ * evidence, preserving raw token/modality usage for UNPRICED calls from the
+ * original providerCall payload when present.
+ *
+ * Never serializes prompts, responses, media, or secrets.
+ * Converts bigint costNanoUsd to string for JSON storage.
+ */
+function serializePricingCallEvidence(
+  calls: Array<Record<string, unknown>>,
+  rawProviderCalls?: unknown,
+): Prisma.InputJsonValue[] {
+  const rawArray = Array.isArray(rawProviderCalls) ? rawProviderCalls : [];
+  const realCalls = rawArray.filter(
+    (c) => c !== null && typeof c === 'object' && (c as Record<string, unknown>).providerCallMade !== false,
+  ) as Array<Record<string, unknown>>;
+
+  const callMap = new Map<string, Record<string, unknown>>();
+  for (const rawCall of realCalls) {
+    if (typeof rawCall.providerCallId === 'string' && rawCall.providerCallId.trim().length > 0) {
+      callMap.set(rawCall.providerCallId, rawCall);
+    }
+  }
+
+  return calls.map((call, index) => {
+    const callId = typeof call.providerCallId === 'string' ? call.providerCallId : undefined;
+    const rawMatch = (callId ? callMap.get(callId) : undefined) ?? realCalls[index];
+
+    const base: Record<string, Prisma.InputJsonValue> = {
+      kind: String(call.kind ?? 'UNPRICED'),
+      ...(call.providerCallId !== undefined ? { providerCallId: String(call.providerCallId) } : {}),
+      ...(call.provider !== undefined ? { provider: String(call.provider) } : {}),
+      ...(call.operation !== undefined ? { operation: String(call.operation) } : {}),
+      ...(call.requestedModel !== undefined ? { requestedModel: String(call.requestedModel) } : {}),
+      ...(call.actualModel !== undefined ? { actualModel: String(call.actualModel) } : {}),
+      ...(call.pricedAt !== undefined ? { pricedAt: String(call.pricedAt) } : {}),
+    };
+
+    if (call.kind === 'PRICED') {
+      base.reason = String(call.reason);
+      base.costNanoUsd = String(call.costNanoUsd);
+      if (call.rateCard !== undefined) base.rateCard = call.rateCard as unknown as Prisma.InputJsonObject;
+      if (call.usageApplied !== undefined) base.usageApplied = call.usageApplied as unknown as Prisma.InputJsonObject;
+    } else {
+      base.reason = String(call.reason);
+      if (rawMatch) {
+        for (const field of SAFE_USAGE_FIELDS) {
+          const val = rawMatch[field];
+          if (typeof val === 'number' && Number.isFinite(val)) {
+            base[field] = val;
+          }
+        }
+      }
+    }
+    return base as Prisma.InputJsonObject;
+  });
+}
+
 function mapReservationDenied<T>(err: unknown): UsageBasedBillingResult<T> | null {
   if (err instanceof AppError) {
     if (err.statusCode === 402) {
@@ -232,32 +311,61 @@ async function resolveOperationByOperationId(input: {
   }
 }
 
+interface ProviderExecutionMetadata {
+  schemaVersion: 1;
+  executionSource: 'PROVIDER' | 'CACHE' | 'NONE';
+  providerCalls: Prisma.InputJsonValue[];
+  providerAttempts: Prisma.InputJsonValue[];
+}
+
+async function updateReservationMetadata(input: {
+  reservationId: string;
+  providerExecution?: ProviderExecutionMetadata;
+  unresolvedCostExposure?: Record<string, Prisma.InputJsonValue>;
+  providerAttemptExposure?: unknown;
+}): Promise<void> {
+  const reservation = await prisma.tokenReservation.findUnique({
+    where: { id: input.reservationId },
+    select: { metadata: true },
+  });
+  const existing = isRecord(reservation?.metadata) ? (reservation!.metadata as Record<string, unknown>) : {};
+
+  const updatedMetadata: Record<string, unknown> = {
+    ...existing,
+  };
+
+  if (input.providerExecution !== undefined) {
+    updatedMetadata.providerExecution = input.providerExecution as unknown as Prisma.InputJsonObject;
+  }
+  if (input.unresolvedCostExposure !== undefined) {
+    updatedMetadata.unresolvedCostExposure = input.unresolvedCostExposure as unknown as Prisma.InputJsonObject;
+  }
+  if (input.providerAttemptExposure !== undefined) {
+    updatedMetadata.providerAttemptExposure = input.providerAttemptExposure;
+  }
+
+  await prisma.tokenReservation.update({
+    where: { id: input.reservationId },
+    data: {
+      metadata: updatedMetadata as Prisma.InputJsonValue,
+    },
+  });
+}
+
 async function recordReservationExposure(
   exposure: UsageBasedBillingExposure,
 ): Promise<void> {
-  const reservation = await prisma.tokenReservation.findUnique({
-    where: { id: exposure.reservationId }, select: { metadata: true },
-  });
-  const existing = isRecord(reservation?.metadata) ? reservation.metadata : {};
-  await prisma.tokenReservation.update({
-    where: { id: exposure.reservationId },
-    data: {
-      metadata: {
-        ...existing,
-        ...(exposure.pricedCallCount === undefined ? {} : {
-          unresolvedCostExposure: {
-            pricedCallCount: exposure.pricedCallCount,
-            unpricedCallCount: exposure.unpricedCallCount,
-            pricedCostNanoUsd: exposure.pricedCostNanoUsd,
-            markedUpNanoUsd: exposure.markedUpNanoUsd,
-            walletTokens: exposure.walletTokens,
-          },
-        }),
-        ...(exposure.providerAttemptExposure === undefined ? {} : {
-          providerAttemptExposure: exposure.providerAttemptExposure,
-        }),
-      },
-    },
+  const exposureMeta: Record<string, Prisma.InputJsonValue> = {};
+  if (exposure.pricedCallCount !== undefined) exposureMeta.pricedCallCount = exposure.pricedCallCount;
+  if (exposure.unpricedCallCount !== undefined) exposureMeta.unpricedCallCount = exposure.unpricedCallCount;
+  if (exposure.pricedCostNanoUsd !== undefined) exposureMeta.pricedCostNanoUsd = exposure.pricedCostNanoUsd;
+  if (exposure.markedUpNanoUsd !== undefined) exposureMeta.markedUpNanoUsd = exposure.markedUpNanoUsd;
+  if (exposure.walletTokens !== undefined) exposureMeta.walletTokens = exposure.walletTokens;
+
+  await updateReservationMetadata({
+    reservationId: exposure.reservationId,
+    ...(exposure.pricedCallCount === undefined ? {} : { unresolvedCostExposure: exposureMeta }),
+    ...(exposure.providerAttemptExposure === undefined ? {} : { providerAttemptExposure: exposure.providerAttemptExposure }),
   });
 }
 
@@ -477,6 +585,7 @@ export async function runUsageBasedAIBilling<T>(
       'INDETERMINATE_EXECUTION',
       outcome.retryable,
       outcome.execution,
+      raw,
     );
   }
 
@@ -575,8 +684,74 @@ export async function runUsageBasedAIBilling<T>(
     });
   }
 
+  const rawAttempts = providerAttemptsOf(outcome.data);
+  const normalizedAttempts = normalizeProviderAttempts(rawAttempts) ?? [];
+  const callsEvidence = serializePricingCallEvidence(pricing.calls as unknown as Array<Record<string, unknown>>, providerCalls);
+
   if (pricing.summaryStatus === 'UNPRICED') {
+    try {
+      await updateReservationMetadata({
+        reservationId,
+        providerExecution: {
+          schemaVersion: 1,
+          executionSource: 'PROVIDER',
+          providerCalls: callsEvidence,
+          providerAttempts: normalizedAttempts as unknown as Prisma.InputJsonValue[],
+        },
+        unresolvedCostExposure: {
+          pricedCallCount: 0,
+          unpricedCallCount: pricing.totals.unpricedCallCount,
+          pricedCostNanoUsd: '0',
+          markedUpNanoUsd: '0',
+          walletTokens: '0',
+          rateCardVersion: input.rateCard.version,
+          providerCallEvidence: callsEvidence,
+        },
+      });
+    } catch (evidenceErr) {
+      console.error('[usage-billing] unpriced_evidence_failed', {
+        operationId, reservationId,
+        error: evidenceErr instanceof Error ? evidenceErr.message : String(evidenceErr),
+      });
+    }
     // SUCCESS + UNPRICED: never auto-deduct, never treat as free. Recovery.
+    return recovery<T>(operationId, 'PRICING', 'UNPRICED_PROVIDER_CALLS', {
+      reservationId,
+      operationStatus: 'EXECUTION_SUCCEEDED',
+    });
+  }
+
+  // Phase 4B: PARTIALLY_PRICED fail-closed. Unknown provider cost must never
+  // be treated as zero. Persist durable per-call billing evidence, then route
+  // to recovery. Reservation remains PENDING; no wallet deduction or release.
+  if (pricing.summaryStatus === 'PARTIALLY_PRICED') {
+    try {
+      await updateReservationMetadata({
+        reservationId,
+        providerExecution: {
+          schemaVersion: 1,
+          executionSource: 'PROVIDER',
+          providerCalls: callsEvidence,
+          providerAttempts: normalizedAttempts as unknown as Prisma.InputJsonValue[],
+        },
+        unresolvedCostExposure: {
+          pricedCallCount: pricing.totals.pricedCallCount,
+          unpricedCallCount: pricing.totals.unpricedCallCount,
+          pricedCostNanoUsd: pricing.totals.pricedCostNanoUsd.toString(),
+          markedUpNanoUsd: charge.markedUpNanoUsd.toString(),
+          walletTokens: charge.tokens.toString(),
+          rateCardVersion: input.rateCard.version,
+          providerCallEvidence: callsEvidence,
+        },
+      });
+    } catch (evidenceErr) {
+      // Evidence persistence failure must NOT fall back to partial settlement.
+      // Route to recovery anyway — the reservation remains held.
+      console.error('[usage-billing] partial_pricing_evidence_failed', {
+        operationId, reservationId,
+        error: evidenceErr instanceof Error ? evidenceErr.message : String(evidenceErr),
+      });
+    }
     return recovery<T>(operationId, 'PRICING', 'UNPRICED_PROVIDER_CALLS', {
       reservationId,
       operationStatus: 'EXECUTION_SUCCEEDED',
@@ -611,6 +786,25 @@ export async function runUsageBasedAIBilling<T>(
     });
   }
 
+  // Phase 5B.1: Best-effort canonical providerExecution write for FULLY_PRICED.
+  // Observability errors must NOT block settlement or cause recovery.
+  try {
+    await updateReservationMetadata({
+      reservationId,
+      providerExecution: {
+        schemaVersion: 1,
+        executionSource: 'PROVIDER',
+        providerCalls: callsEvidence,
+        providerAttempts: normalizedAttempts as unknown as Prisma.InputJsonValue[],
+      },
+    });
+  } catch (evidenceErr) {
+    console.error('[usage-billing] fully_priced_evidence_failed', {
+      operationId, reservationId,
+      error: evidenceErr instanceof Error ? evidenceErr.message : String(evidenceErr),
+    });
+  }
+
   let settlement: SettleBusinessTokenReservationResult;
   try {
     settlement = await dependencies.settleForAmount({
@@ -637,22 +831,8 @@ export async function runUsageBasedAIBilling<T>(
     });
   }
 
-  // PARTIALLY_PRICED: only confirmed priced calls are charged; unresolved cost
-  // exposure is recorded for recovery observability.
-  if (pricing.summaryStatus === 'PARTIALLY_PRICED') {
-    try {
-      await dependencies.recordUnresolvedExposure({
-        reservationId,
-        pricedCallCount: pricing.totals.pricedCallCount,
-        unpricedCallCount: pricing.totals.unpricedCallCount,
-        pricedCostNanoUsd: pricing.totals.pricedCostNanoUsd.toString(),
-        markedUpNanoUsd: charge.markedUpNanoUsd.toString(),
-        walletTokens: charge.tokens.toString(),
-      });
-    } catch {
-      // Exposure recording must never fail the already-settled operation.
-    }
-  }
+  // Phase 4B: PARTIALLY_PRICED is now fail-closed above and never reaches
+  // settlement. Only FULLY_PRICED operations reach this point.
 
   return {
     outcome: 'SETTLED',
@@ -683,6 +863,20 @@ async function runCacheHitSettlement<T>(
   reservationId: string,
   outcome: Extract<AIExecutionOutcome<T>, { kind: 'SUCCESS' }>,
 ): Promise<UsageBasedBillingResult<T>> {
+  try {
+    await updateReservationMetadata({
+      reservationId,
+      providerExecution: {
+        schemaVersion: 1,
+        executionSource: 'CACHE',
+        providerCalls: [],
+        providerAttempts: [],
+      },
+    });
+  } catch (evidenceErr) {
+    console.error('[usage-billing] cache_hit_evidence_failed', { operationId, reservationId });
+  }
+
   let pricingEvidence: RecordAIBillingOperationPricingResult;
   try {
     pricingEvidence = await dependencies.recordAIBillingOperationPricing({
@@ -842,6 +1036,22 @@ async function runNonBillableFlow<T>(
   reservationId: string,
   outcome: Extract<AIExecutionOutcome<T>, { kind: 'NON_BILLABLE_FAILURE' }>,
 ): Promise<UsageBasedBillingResult<T>> {
+  if (outcome.providerRequestSent === false && reservationId) {
+    try {
+      await updateReservationMetadata({
+        reservationId,
+        providerExecution: {
+          schemaVersion: 1,
+          executionSource: 'NONE',
+          providerCalls: [],
+          providerAttempts: [],
+        },
+      });
+    } catch (evidenceErr) {
+      console.error('[usage-billing] non_billable_evidence_failed', { operationId, reservationId });
+    }
+  }
+
   let failureEvidence: RecordAIBillingOperationFailureResult;
   try {
     failureEvidence = await dependencies.recordAIBillingOperationFailure({
@@ -895,7 +1105,38 @@ async function persistIndeterminate<T>(
   reasonCode: UsageBasedBillingReasonCode,
   retryable?: boolean,
   execution?: Partial<{ provider: string; model: string; providerRequestId?: string }>,
+  rawPayload?: unknown,
 ): Promise<UsageBasedBillingResult<T>> {
+  if (reservationId) {
+    try {
+      const rawAttempts = isRecord(rawPayload)
+        ? (rawPayload.providerAttempts ?? (rawPayload as { data?: { providerAttempts?: unknown } }).data?.providerAttempts)
+        : undefined;
+      const rawCalls = isRecord(rawPayload)
+        ? (rawPayload.providerCalls ?? (rawPayload as { data?: { providerCalls?: unknown } }).data?.providerCalls)
+        : undefined;
+
+      const normalizedAttempts = normalizeProviderAttempts(rawAttempts) ?? [];
+      const callsEvidence = serializePricingCallEvidence([], rawCalls);
+      const attemptExposure = summarizeProviderAttemptExposure(rawAttempts);
+
+      await updateReservationMetadata({
+        reservationId,
+        providerExecution: {
+          schemaVersion: 1,
+          executionSource: 'PROVIDER',
+          providerCalls: callsEvidence,
+          providerAttempts: normalizedAttempts as unknown as Prisma.InputJsonValue[],
+        },
+        ...(attemptExposure === undefined ? {} : { providerAttemptExposure: attemptExposure }),
+      });
+    } catch (evidenceErr) {
+      console.error('[usage-billing] indeterminate_evidence_failed', {
+        operationId, reservationId, error: evidenceErr instanceof Error ? evidenceErr.message : String(evidenceErr),
+      });
+    }
+  }
+
   let failureEvidence: RecordAIBillingOperationFailureResult;
   try {
     failureEvidence = await dependencies.recordAIBillingOperationFailure({
