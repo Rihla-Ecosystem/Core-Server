@@ -51,7 +51,7 @@ import type { ShadowPricingObservation } from './ai-shadow-pricing-observation.s
 import { env } from '../config/env.js';
 import { compareShadowPricingResults } from '../utils/provider-pricing/shadow-comparison.js';
 import type { ShadowComparisonResult, ShadowComparisonStatus } from '../utils/provider-pricing/shadow-comparison.js';
-import { ShadowPricingDependencies, loadShadowRateCard, loadPrimaryRateCard, ShadowRateCardLoadResult, createDefaultShadowPricingDependencies } from './shadow-pricing-deps.js';
+import { ShadowPricingDependencies, loadShadowRateCard, loadPrimaryRateCard, ShadowRateCardLoadResult, createDefaultShadowPricingDependencies, createDefaultDatabaseShadowPricingDependencies } from './shadow-pricing-deps.js';
 
 /** Thin structured logger seam (the repo uses `console.*`). */
 export interface ShadowPricingLogger {
@@ -631,4 +631,6 @@ comparisonResult = compareShadowPricingResults(
 export const DEFAULT_OBSERVATION_BUFFER = new AiShadowPricingObservationService();
 
 /** Application-wide default shadow-pricing service (the integration choke point). */
-export const shadowPricingService = new AiShadowPricingService();
+export const shadowPricingService = new AiShadowPricingService({
+  shadowDeps: createDefaultDatabaseShadowPricingDependencies(),
+});

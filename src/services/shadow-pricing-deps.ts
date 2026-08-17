@@ -1,10 +1,17 @@
 /**
  * Phase 2F-D shadow pricing dependencies for database rate card comparison.
  *
- * Narrow contract injected into the shadow pricing service.
- * Does not import Prisma directly.
+ * Narrow contract injected into the shadow pricing service. This module is the
+ * sanctioned seam through which the DB-backed ACTIVE rate-card loader is wired
+ * into shadow pricing (see `createDefaultDatabaseShadowPricingDependencies`).
+ * `config/prisma` is imported ONLY here so the A+ shadow runtime stays free of
+ * loader/repository imports (enforced by `provider-rate-card-source.test.ts`).
  */
 
+import { env } from '../config/env.js';
+import { prisma } from '../config/prisma.js';
+import { createPrismaProviderRateCardRepository } from '../repositories/provider-rate-card.repository.js';
+import { createDefaultProviderRateCardLoaderDependencies, loadActiveRateCardForDate } from './provider-rate-card-loader.service.js';
 import type { ProviderRateCardLoadResult } from '../services/provider-rate-card-loader.service.js';
 import type { ProviderRateCard } from '../types/provider-pricing.js';
 import type { ShadowPricingResult } from '../types/provider-pricing.js';
@@ -229,5 +236,24 @@ export function createDefaultShadowPricingDependencies(): ShadowPricingDependenc
     dbShadowEnabled: false,
     pricingSource: 'STATIC',
     now: () => Date.now(),
+  };
+}
+
+/**
+ * Production shadow-pricing dependencies. Mirrors the authoritative billing
+ * path (`createDefaultBillingRateCardDependencies`): the SAME DB-backed ACTIVE
+ * rate-card loader is wired into `loadActiveRateCardForDate` so DATABASE_PRIMARY
+ * shadow observations load against the live DB card. The legacy `dbShadowEnabled`
+ * flag stays off unless configured — DB access here is driven by the pricing
+ * source, never by globally enabling shadow mode.
+ */
+export function createDefaultDatabaseShadowPricingDependencies(): ShadowPricingDependencies {
+  const loaderDeps = createDefaultProviderRateCardLoaderDependencies(
+    createPrismaProviderRateCardRepository(prisma),
+  );
+  return {
+    dbShadowEnabled: env.PROVIDER_RATE_CARD_DB_SHADOW_ENABLED,
+    pricingSource: env.PROVIDER_RATE_CARD_PRICING_SOURCE,
+    loadActiveRateCardForDate: (pricingDate) => loadActiveRateCardForDate(loaderDeps, pricingDate),
   };
 }
