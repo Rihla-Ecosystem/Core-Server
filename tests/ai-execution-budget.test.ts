@@ -14,8 +14,8 @@ test('Core owns and serializes the execution budget for each billed AI feature',
     maxInputTokens: 3_000, maxOutputTokens: 400, maxImageBytes: 10 * 1024 * 1024, maxImagePixels: 20_000_000,
   });
   assert.deepEqual(getAIExecutionBudget('REAL_TIME_TRANSLATION'), {
-    maxInputTokens: 1_000, maxOutputTokens: 500, maxAudioBytes: 10 * 1024 * 1024,
-    maxAudioDurationSeconds: 60, maxAudioInputTokens: 1_920, maxTtsCharacters: 500, maxTtsOutputTokens: 750,
+    maxInputTokens: 1_000, maxOutputTokens: 1_200, maxAudioBytes: 10 * 1024 * 1024,
+    maxAudioDurationSeconds: 60, maxAudioInputTokens: 1_920, maxTtsCharacters: 500, maxTtsOutputTokens: 1_200,
   });
   assert.deepEqual(getAIExecutionBudget('AI_TRIP_ITINERARY'), {
     maxInputTokens: 8_000, maxOutputTokens: 1_000, maxCities: 10, maxInterests: 10, maxDays: 14,

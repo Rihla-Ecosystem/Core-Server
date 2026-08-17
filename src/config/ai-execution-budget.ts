@@ -43,7 +43,11 @@ export function getAIExecutionBudget(feature: AIBilledExecutionFeature): Readonl
     case 'AI_IMAGE_ANALYSIS':
       return Object.freeze({ maxInputTokens: 3_000, maxOutputTokens: 400, maxImageBytes: IMAGE_MAX_BYTES, maxImagePixels: 20_000_000 });
     case 'REAL_TIME_TRANSLATION':
-      return Object.freeze({ maxInputTokens: 1_000, maxOutputTokens: 500, maxAudioBytes: VOICE_MAX_BYTES, maxAudioDurationSeconds: 60, maxAudioInputTokens: 1_920, maxTtsCharacters: 500, maxTtsOutputTokens: 750 });
+      // Output caps are set to accommodate the proven two-leg voice execution:
+      // audio understanding (~105 output) plus TTS audio (~920 output) ≈ 1025
+      // combined. 1200 matches the Chat default output cap and leaves headroom
+      // while still failing closed on genuinely excessive output.
+      return Object.freeze({ maxInputTokens: 1_000, maxOutputTokens: 1_200, maxAudioBytes: VOICE_MAX_BYTES, maxAudioDurationSeconds: 60, maxAudioInputTokens: 1_920, maxTtsCharacters: 500, maxTtsOutputTokens: 1_200 });
     case 'AI_TRIP_ITINERARY':
       return Object.freeze({ maxInputTokens: 8_000, maxOutputTokens: 1_000, maxCities: 10, maxInterests: 10, maxDays: 14 });
     case 'AI_CONTEXT_ANALYZE':

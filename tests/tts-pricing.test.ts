@@ -22,6 +22,7 @@ import {
 import { prisma } from '../src/config/prisma.js';
 import { ensureUserRole } from './helpers/test-role-fixtures.js';
 import { parseWalletPolicyConfig } from '../src/config/wallet-policy.js';
+import { getAIExecutionBudget } from '../src/config/ai-execution-budget.js';
 import { PROVIDER_RATE_CARD } from '../src/config/provider-rate-card/index.js';
 import { aggregateProviderCalls } from '../src/utils/provider-pricing/aggregate.js';
 import { computeWalletCharge } from '../src/utils/wallet-conversion.js';
@@ -44,24 +45,28 @@ const CHAT_LIMITS: ChatLimitsConfig = {
 
 const TTS_MODEL = 'gemini-3.1-flash-tts-preview';
 
+// Realistic values from the live E2E voice execution (2026-08-17):
+//   TEXT_TO_SPEECH: input 104, output 920
 const TTS_CALL = {
   provider: 'google',
   providerCallMade: true,
   providerCallId: 'tts-call-1',
   actualModel: TTS_MODEL,
-  inputTokens: 12,
-  outputTokens: 250,
-  audioOutputTokens: 250,
+  inputTokens: 104,
+  outputTokens: 920,
+  audioOutputTokens: 920,
 };
 
+// Realistic values from the live E2E voice execution (2026-08-17):
+//   AUDIO_UNDERSTANDING: input 67, output 105
 const AUDIO_UNDERSTANDING_CALL = {
   provider: 'google',
   providerCallMade: true,
   providerCallId: 'audio-call-1',
   actualModel: 'gemini-3.6-flash',
-  inputTokens: 120,
-  outputTokens: 60,
-  audioInputTokens: 120,
+  inputTokens: 67,
+  outputTokens: 105,
+  audioInputTokens: 67,
 };
 
 describe('Gemini 3.1 Flash TTS usage-based pricing & Wallet integration', () => {
@@ -87,6 +92,10 @@ describe('Gemini 3.1 Flash TTS usage-based pricing & Wallet integration', () => 
     );
     if (userIds.length > 0) {
       await prisma.aIBillingOperation.deleteMany({ where: { userId: { in: userIds } } });
+      await prisma.tokenReservationFundingAllocation.deleteMany({
+        where: { reservation: { userId: { in: userIds } } },
+      });
+      await prisma.tokenFundingLot.deleteMany({ where: { userId: { in: userIds } } });
       await prisma.tokenReservation.deleteMany({ where: { userId: { in: userIds } } });
     }
     await prisma.tokenTransaction.deleteMany({ where: { user: emailFilter } });
@@ -115,11 +124,34 @@ describe('Gemini 3.1 Flash TTS usage-based pricing & Wallet integration', () => 
         status: WalletStatus.ACTIVE,
       },
     });
+    const grant = await prisma.tokenTransaction.create({
+      data: {
+        walletId: wallet.id,
+        userId: user.id,
+        type: 'GRANT',
+        tokens: balance,
+        source: TokenTransactionSource.PURCHASE,
+        referenceId: `test-grant-${crypto.randomUUID()}`,
+      },
+    });
+    await prisma.tokenFundingLot.create({
+      data: {
+        walletId: wallet.id,
+        userId: user.id,
+        source: TokenTransactionSource.PURCHASE,
+        sourceTransactionId: grant.id,
+        originalTokens: balance,
+        availableTokens: balance,
+        reservedTokens: 0,
+        consumedTokens: 0,
+        refundHeldTokens: 0,
+      },
+    });
     return { userId: user.id, walletId: wallet.id };
   }
 
   // TEST 1 — TTS CALL PRICING
-  test('TEST 1 — TTS Call Pricing: input 12, output 250 => 5_012_000 nUSD ($0.005012) & audioOutputTokens not double-counted', () => {
+  test('TEST 1 — TTS Call Pricing: input 104, output 920 => 18_504_000 nUSD & audioOutputTokens not double-counted', () => {
     const r = aggregateProviderCalls({
       providerCalls: [TTS_CALL],
       pricingDate: '2026-08-03',
@@ -130,10 +162,10 @@ describe('Gemini 3.1 Flash TTS usage-based pricing & Wallet integration', () => 
     assert.equal(r.totals.pricedCallCount, 1);
     assert.equal(r.totals.unpricedCallCount, 0);
 
-    // Input: 12 * $1.00 / 1M = 12_000 nUSD
-    // Output: 250 * $20.00 / 1M = 5_000_000 nUSD
-    // Total = 5_012_000 nUSD
-    assert.equal(r.totals.pricedCostNanoUsd, 5_012_000n);
+    // Input: 104 * $1.00 / 1M = 104_000 nUSD
+    // Output: 920 * $20.00 / 1M = 18_400_000 nUSD
+    // Total = 18_504_000 nUSD
+    assert.equal(r.totals.pricedCostNanoUsd, 18_504_000n);
 
     // Prove audioOutputTokens is NOT double-counted: compare with call omitting audioOutputTokens
     const callWithoutAudioModality = {
@@ -141,8 +173,8 @@ describe('Gemini 3.1 Flash TTS usage-based pricing & Wallet integration', () => 
       providerCallMade: true,
       providerCallId: 'tts-call-1',
       actualModel: TTS_MODEL,
-      inputTokens: 12,
-      outputTokens: 250,
+      inputTokens: 104,
+      outputTokens: 920,
     };
     const rWithout = aggregateProviderCalls({
       providerCalls: [callWithoutAudioModality],
@@ -205,6 +237,9 @@ describe('Gemini 3.1 Flash TTS usage-based pricing & Wallet integration', () => 
       providerCalls: [AUDIO_UNDERSTANDING_CALL, TTS_CALL],
       pricingDate: '2026-08-03',
     });
+    assert.equal(aggregated.summaryStatus, 'FULLY_PRICED');
+    assert.equal(aggregated.totals.pricedCallCount, 2);
+    assert.equal(aggregated.totals.unpricedCallCount, 0);
     const expectedCharge = computeWalletCharge(aggregated, WALLET_POLICY);
     const expectedTokens = Number(expectedCharge.tokens);
 
@@ -229,8 +264,11 @@ describe('Gemini 3.1 Flash TTS usage-based pricing & Wallet integration', () => 
       provider: 'google',
       model: 'gemini-3.6-flash',
       chatLimits: CHAT_LIMITS,
+      executionBudget: getAIExecutionBudget('REAL_TIME_TRANSLATION'),
+      estimatedInputTokens: 0,
       rateCard: PROVIDER_RATE_CARD,
       walletPolicy: WALLET_POLICY,
+      pricingSource: 'DATABASE_PRIMARY',
       execute: async () => ({
         kind: 'SUCCESS',
         data: { providerCalls: [AUDIO_UNDERSTANDING_CALL, TTS_CALL] },
@@ -238,9 +276,9 @@ describe('Gemini 3.1 Flash TTS usage-based pricing & Wallet integration', () => 
         usage: {
           provider: 'google',
           model: 'gemini-3.6-flash',
-          inputTokens: 120,
-          outputTokens: 60,
-          totalTokens: 180,
+          inputTokens: 171,
+          outputTokens: 1025,
+          totalTokens: 1377,
         },
       }),
     };
@@ -265,5 +303,60 @@ describe('Gemini 3.1 Flash TTS usage-based pricing & Wallet integration', () => 
 
     const operation = await prisma.aIBillingOperation.findFirst({ where: { userId } });
     assert.equal(operation?.status, AIBillingOperationStatus.SETTLED);
+
+    // Unused reserved tokens are returned: the reservation consumed only the
+    // settled amount; the remaining reserved balance is released back.
+    if (reservation) {
+      const funding = await prisma.tokenReservationFundingAllocation.findFirst({
+        where: { reservationId: reservation.id },
+      });
+      if (funding) {
+        assert.equal(Number(funding.consumedTokens), expectedTokens);
+        assert.ok(Number(funding.reservedTokens) >= expectedTokens);
+      }
+    }
+  });
+
+  // TEST 5 — USAGE LIMITS BOUNDARY (fail-closed preserved)
+  test('TEST 5 — Genuinely excessive Voice output still triggers USAGE_LIMITS_EXCEEDED recovery (boundary kept)', async () => {
+    const { userId } = await createUserWithWallet(1000);
+
+    const voiceInput: UsageBasedBillingInput = {
+      operationId: `usage:REAL_TIME_TRANSLATION:${crypto.randomUUID()}`,
+      userId,
+      feature: 'REAL_TIME_TRANSLATION',
+      source: TokenTransactionSource.VOICE,
+      idempotencyKey: crypto.randomUUID(),
+      adminExempt: false,
+      provider: 'google',
+      model: 'gemini-3.6-flash',
+      chatLimits: CHAT_LIMITS,
+      executionBudget: getAIExecutionBudget('REAL_TIME_TRANSLATION'),
+      estimatedInputTokens: 0,
+      rateCard: PROVIDER_RATE_CARD,
+      walletPolicy: WALLET_POLICY,
+      pricingSource: 'DATABASE_PRIMARY',
+      execute: async () => ({
+        kind: 'SUCCESS',
+        data: { providerCalls: [AUDIO_UNDERSTANDING_CALL, TTS_CALL] },
+        execution: { provider: 'google', model: 'gemini-3.6-flash' },
+        usage: {
+          provider: 'google',
+          model: 'gemini-3.6-flash',
+          inputTokens: 5000,
+          outputTokens: 5000,
+          totalTokens: 10000,
+        },
+      }),
+    };
+
+    const result = await runUsageBasedAIBilling(voiceInput);
+    assert.equal(result.outcome, 'RECOVERY_REQUIRED');
+    assert.equal(result.reasonCode, 'USAGE_LIMITS_EXCEEDED');
+    assert.equal(result.stage, 'USAGE_VALIDATION');
+
+    // Reservation is preserved as PENDING for review — never auto-settled/released.
+    const reservation = await prisma.tokenReservation.findFirst({ where: { userId } });
+    assert.equal(reservation?.status, TokenReservationStatus.PENDING);
   });
 });

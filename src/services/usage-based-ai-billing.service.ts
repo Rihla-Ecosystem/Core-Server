@@ -190,7 +190,10 @@ function buildReservationMetadata<T>(
       feature: input.feature,
       reservationTokens,
       maxInputTokens: input.chatLimits.maxInputTokens,
-      maxOutputTokens: input.chatLimits.maxOutputTokens,
+      // Enforcement compares output against the execution budget (see the
+      // USAGE_LIMITS_EXCEEDED guard), so advertise the enforced cap here
+      // rather than the Chat output cap. Input enforcement uses chatLimits.
+      maxOutputTokens: input.executionBudget.maxOutputTokens,
       ...(input.provider === undefined ? {} : { provider: input.provider }),
       ...(input.model === undefined ? {} : { model: input.model }),
       rateCardVersion: input.rateCard.version,

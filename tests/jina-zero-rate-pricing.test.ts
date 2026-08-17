@@ -22,6 +22,7 @@ import {
 import { prisma } from '../src/config/prisma.js';
 import { ensureUserRole } from './helpers/test-role-fixtures.js';
 import { parseWalletPolicyConfig } from '../src/config/wallet-policy.js';
+import { getAIExecutionBudget } from '../src/config/ai-execution-budget.js';
 import { PROVIDER_RATE_CARD } from '../src/config/provider-rate-card/index.js';
 import { priceProviderCall } from '../src/utils/provider-pricing/price-call.js';
 import { aggregateProviderCalls } from '../src/utils/provider-pricing/aggregate.js';
@@ -90,6 +91,10 @@ describe('Jina v4 explicit zero-rate pricing & Wallet integration', () => {
     );
     if (userIds.length > 0) {
       await prisma.aIBillingOperation.deleteMany({ where: { userId: { in: userIds } } });
+      await prisma.tokenReservationFundingAllocation.deleteMany({
+        where: { reservation: { userId: { in: userIds } } },
+      });
+      await prisma.tokenFundingLot.deleteMany({ where: { userId: { in: userIds } } });
       await prisma.tokenReservation.deleteMany({ where: { userId: { in: userIds } } });
     }
     await prisma.tokenTransaction.deleteMany({ where: { user: emailFilter } });
@@ -116,6 +121,29 @@ describe('Jina v4 explicit zero-rate pricing & Wallet integration', () => {
         tokenBalance: balance,
         reservedBalance: 0,
         status: WalletStatus.ACTIVE,
+      },
+    });
+    const grant = await prisma.tokenTransaction.create({
+      data: {
+        walletId: wallet.id,
+        userId: user.id,
+        type: 'GRANT',
+        tokens: balance,
+        source: TokenTransactionSource.PURCHASE,
+        referenceId: `test-grant-${crypto.randomUUID()}`,
+      },
+    });
+    await prisma.tokenFundingLot.create({
+      data: {
+        walletId: wallet.id,
+        userId: user.id,
+        source: TokenTransactionSource.PURCHASE,
+        sourceTransactionId: grant.id,
+        originalTokens: balance,
+        availableTokens: balance,
+        reservedTokens: 0,
+        consumedTokens: 0,
+        refundHeldTokens: 0,
       },
     });
     return { userId: user.id, walletId: wallet.id };
@@ -182,8 +210,11 @@ describe('Jina v4 explicit zero-rate pricing & Wallet integration', () => {
       provider: 'google',
       model: 'gemini-3.5-flash-lite',
       chatLimits: CHAT_LIMITS,
+      executionBudget: getAIExecutionBudget('AI_CHAT_QUERY'),
+      estimatedInputTokens: 100,
       rateCard: PROVIDER_RATE_CARD,
       walletPolicy: WALLET_POLICY,
+      pricingSource: 'DATABASE_PRIMARY',
       execute: async () => ({
         kind: 'SUCCESS',
         data: { providerCalls: [PRICED_GOOGLE_CALL] },
@@ -205,8 +236,11 @@ describe('Jina v4 explicit zero-rate pricing & Wallet integration', () => {
       provider: 'google',
       model: 'gemini-3.5-flash-lite',
       chatLimits: CHAT_LIMITS,
+      executionBudget: getAIExecutionBudget('AI_CHAT_QUERY'),
+      estimatedInputTokens: 100,
       rateCard: PROVIDER_RATE_CARD,
       walletPolicy: WALLET_POLICY,
+      pricingSource: 'DATABASE_PRIMARY',
       execute: async () => ({
         kind: 'SUCCESS',
         data: { providerCalls: [JINA_V4_CALL, PRICED_GOOGLE_CALL] },
@@ -262,5 +296,44 @@ describe('Jina v4 explicit zero-rate pricing & Wallet integration', () => {
     if (missingRes.kind === 'UNPRICED') {
       assert.equal(missingRes.reason, 'ACTUAL_MODEL_NOT_IN_RATECARD');
     }
+  });
+
+  // 6. P1-A regression: total_tokens-only embeddings now carry inputTokens so
+  // zero-rate Jina is PRICED (cost 0) instead of USAGE_MISSING single-call, and
+  // a Japan-heavy aggregate settles FULLY_PRICED (not PARTIALLY_PRICED).
+  test('6. Total-only Jina embeddings with inputTokens + zero rate aggregate FULLY_PRICED with Google', () => {
+    const ctx = { card: PROVIDER_RATE_CARD, pricingDate: '2026-08-03' };
+
+    const singleTotalOnly = priceProviderCall(
+      { provider: 'jina', providerCallId: 'j1', actualModel: 'jina-embeddings-v4', inputTokens: 9, totalTokens: 9 },
+      ctx,
+    );
+    assert.equal(singleTotalOnly.kind, 'PRICED', 'inputTokens present + explicit zero rate must be PRICED, not USAGE_MISSING');
+    if (singleTotalOnly.kind === 'PRICED') {
+      assert.equal(singleTotalOnly.costNanoUsd, 0n);
+    }
+
+    const jinaUnknownNoInput = priceProviderCall(
+      { provider: 'jina', providerCallId: 'j2', actualModel: 'jina-embeddings-v4', totalTokens: 9 },
+      ctx,
+    );
+    assert.equal(jinaUnknownNoInput.kind, 'UNPRICED');
+    if (jinaUnknownNoInput.kind === 'UNPRICED') {
+      assert.equal(jinaUnknownNoInput.reason, 'USAGE_MISSING');
+    }
+
+    const aggregate = aggregateProviderCalls({
+      providerCalls: [
+        { provider: 'jina', providerCallId: 'j1', actualModel: 'jina-embeddings-v4', inputTokens: 9, totalTokens: 9 },
+        { provider: 'jina', providerCallId: 'j2', actualModel: 'jina-embeddings-v4', inputTokens: 5, totalTokens: 5 },
+        { provider: 'jina', providerCallId: 'j3', actualModel: 'jina-embeddings-v4', inputTokens: 6, totalTokens: 6 },
+        PRICED_GOOGLE_CALL,
+      ],
+      pricingDate: '2026-08-03',
+    });
+    assert.equal(aggregate.summaryStatus, 'FULLY_PRICED');
+    assert.equal(aggregate.totals.pricedCallCount, 4);
+    assert.equal(aggregate.totals.unpricedCallCount, 0);
+    assert.equal(aggregate.totals.pricedCostNanoUsd, BigInt(PRICED_GOOGLE_CALL.outputTokens) * 2_500_000n / 1_000n + BigInt(PRICED_GOOGLE_CALL.inputTokens) * 300_000n / 1_000n);
   });
 });
