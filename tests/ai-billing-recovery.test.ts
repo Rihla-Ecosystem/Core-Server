@@ -2,9 +2,9 @@
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error('Safety check failed: DATABASE_URL is not set');
   const parsed = new URL(dbUrl);
-  if (parsed.pathname !== '/core_server_test') {
+  if (parsed.pathname !== '/core_server_test' && parsed.pathname !== '/core_server_test_suite') {
     throw new Error(
-      `Safety check failed: DATABASE_URL must point to /core_server_test, got "${parsed.pathname}"`,
+      `Safety check failed: DATABASE_URL must point to /core_server_test or /core_server_test_suite, got "${parsed.pathname}"`,
     );
   }
 }
@@ -2010,7 +2010,8 @@ describe('AI Billing Recovery Service', () => {
     );
     assert.equal(err.name, 'AIBillingRecoveryError');
     assert.ok(!(err instanceof AppError));
-    assert.ok(!('statusCode' in err));
+    assert.ok('statusCode' in err);
+    assert.equal(err.statusCode, 404);
   });
 
   test('100. Separation: a valid amount above eight is passed through unchanged', async () => {
@@ -3012,6 +3013,7 @@ describe('AI Billing Recovery DB Integration', () => {
       where: { reservation: { user: emailFilter } },
     });
     await prisma.tokenFundingLot.deleteMany({ where: { user: emailFilter } });
+    await prisma.aIBillingOperation.deleteMany({ where: { reservation: { user: emailFilter } } });
     await prisma.tokenReservation.deleteMany({ where: { user: emailFilter } });
     await prisma.tokenTransaction.deleteMany({ where: { user: emailFilter } });
     await prisma.tokenWallet.deleteMany({ where: { user: emailFilter } });
@@ -3023,6 +3025,7 @@ describe('AI Billing Recovery DB Integration', () => {
       where: { reservation: { userId } },
     });
     await prisma.tokenFundingLot.deleteMany({ where: { userId } });
+    await prisma.aIBillingOperation.deleteMany({ where: { userId } });
     await prisma.tokenReservation.deleteMany({ where: { userId } });
     await prisma.tokenTransaction.deleteMany({ where: { userId } });
     await prisma.tokenWallet.deleteMany({ where: { userId } });
@@ -3365,6 +3368,1014 @@ describe('AI Billing Recovery DB Integration', () => {
       assert.equal(result.recommendation, 'REVIEW');
       assert.equal(result.recoveryRequired, true);
       assert.equal(result.automaticFinancialActionAllowed, false);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('138. Inspect returns repricingRecommendation with PARTIAL_EVIDENCE when provider calls are missing', async () => {
+    const { userId } = await createUserWithWallet(100);
+    try {
+      const reserved = await reserveBusinessTokensForAmount({
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        tokens: 5,
+        idempotencyKey: crypto.randomUUID(),
+        metadata: validMetadata(5) as object,
+      });
+      const deps = createDefaultAIBillingRecoveryDependencies();
+      const result = await inspectAIBillingRecovery(
+        { reservationId: reserved.reservationId },
+        deps,
+      );
+      assert.ok(result.repricingRecommendation);
+      assert.equal(result.repricingRecommendation.repricingStatus, 'PARTIAL_EVIDENCE');
+      assert.equal(result.repricingRecommendation.recommendedActualWalletTokens, null);
+      assert.equal(result.repricingRecommendation.recommendedReturnedTokens, null);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('139. APPROVE_SYSTEM_RECOMMENDATION rejects when status is PARTIAL_EVIDENCE', async () => {
+    const { userId } = await createUserWithWallet(100);
+    try {
+      const reserved = await reserveBusinessTokensForAmount({
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        tokens: 5,
+        idempotencyKey: crypto.randomUUID(),
+        metadata: validMetadata(5) as object,
+      });
+      const deps = createDefaultAIBillingRecoveryDependencies();
+      await assert.rejects(
+        recoverAIBillingReservation(
+          {
+            reservationId: reserved.reservationId,
+            action: {
+              type: 'APPROVE_SYSTEM_RECOMMENDATION',
+              confirmation: 'APPROVE_SYSTEM_RECOMMENDATION',
+              reason: 'Approving recommendation',
+            },
+          },
+          deps,
+        ),
+        (err: unknown) => {
+          assert.ok(err instanceof AIBillingRecoveryError);
+          assert.equal(err.code, 'REPRICING_FAILED');
+          return true;
+        },
+      );
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('140. APPROVE_SYSTEM_RECOMMENDATION rejects extra actualTokens parameter', async () => {
+    const deps = createDefaultAIBillingRecoveryDependencies();
+    await assert.rejects(
+      recoverAIBillingReservation(
+        {
+          reservationId: crypto.randomUUID(),
+          action: {
+            type: 'APPROVE_SYSTEM_RECOMMENDATION',
+            confirmation: 'APPROVE_SYSTEM_RECOMMENDATION',
+            reason: 'Testing bad parameter',
+            actualTokens: 5,
+          } as unknown as AIBillingRecoveryAction,
+        },
+        deps,
+      ),
+      (err: unknown) => {
+        assert.ok(err instanceof AIBillingRecoveryError);
+        assert.equal(err.code, 'INVALID_INPUT');
+        return true;
+      },
+    );
+  });
+
+  test('141. Metadata with walletPolicySnapshot uses stored snapshot for repricing', async () => {
+    const { userId } = await createUserWithWallet(500);
+    try {
+      const reserved = await reserveBusinessTokensForAmount({
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        tokens: 200,
+        idempotencyKey: crypto.randomUUID(),
+        metadata: {
+          aiBilling: {
+            schemaVersion: 1,
+            requestedMode: 'USAGE_BASED',
+            feature: 'AI_CHAT_QUERY',
+            reservationTokens: 200,
+            maxInputTokens: 12000,
+            maxOutputTokens: 1200,
+            rateCardVersion: 'rate-v1',
+            walletPolicyVersion: 'policy-v1',
+            walletPolicySnapshot: {
+              walletTokenValueNanoUsd: 100000,
+              markupBasisPoints: 10000,
+              minimumWalletTokens: 1,
+            },
+          },
+          providerExecution: {
+            providerCalls: [
+              {
+                provider: 'openai',
+                actualModel: 'gpt-4o',
+                operation: 'chat.completion',
+                inputTokens: 1000,
+                outputTokens: 500,
+              },
+            ],
+          },
+        },
+      });
+
+      await prisma.aIBillingOperation.create({
+        data: {
+          operationId: crypto.randomUUID(),
+          reservationId: reserved.reservationId,
+          walletId: reserved.walletId,
+          userId,
+          feature: 'AI_CHAT_QUERY',
+          source: 'CHAT',
+          status: 'REVIEW_REQUIRED',
+          reservedTokens: 200,
+          reservationPricingVersion: 1,
+          rateCardVersion: 'rate-v1',
+          walletPolicyVersion: 'policy-v1',
+        },
+      });
+
+      const snapObj = {
+        id: 'snap-1',
+        version: 'rate-v1',
+        status: 'ACTIVE',
+        schemaVersion: 1,
+        currency: 'USD',
+        storageUnit: 'MICROS',
+        engineUnit: 'NANO_USD',
+        source: 'TEST',
+        generatedAt: new Date(),
+        provenance: 'RESEARCH_SNAPSHOT',
+        publishedAt: new Date(),
+        effectiveFrom: new Date('2020-01-01'),
+        effectiveTo: null,
+        retiredAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        entries: [
+          {
+            id: 'entry-1',
+            provider: 'openai',
+            model: 'gpt-4o',
+            aliases: [],
+            status: 'STABLE',
+            tier: 'STANDARD',
+            billingUnit: 'TOKEN',
+            inputMicrosPerMillion: 2500n,
+            outputMicrosPerMillion: 10000n,
+            cachedInputMicrosPerMillion: 1250n,
+            cachedOutputMicrosPerMillion: null,
+            perUnitMicros: null,
+            audioInputMicrosPerMillion: null,
+            audioOutputMicrosPerMillion: null,
+            tokensPerSecond: null,
+            cachedInputAccounting: 'DISJOINT',
+            effectiveFrom: new Date('2020-01-01'),
+            effectiveTo: null,
+            inactive: false,
+            source: 'TEST',
+            verifiedAt: new Date(),
+          },
+        ],
+      };
+
+      const deps = createDefaultAIBillingRecoveryDependencies();
+      deps.rateCardLoader = {
+        repository: {
+          async findSnapshotByVersion(version: string) {
+            return snapObj;
+          },
+        },
+      } as unknown as typeof deps.rateCardLoader;
+
+      const result = await inspectAIBillingRecovery(
+        { reservationId: reserved.reservationId },
+        deps,
+      );
+
+      assert.ok(result.repricingRecommendation);
+      assert.equal(result.repricingRecommendation.repricingStatus, 'AUTHORITATIVE_REPRICE_AVAILABLE');
+      assert.equal(result.repricingRecommendation.walletPolicySnapshot?.sourceNote, 'PERSISTED_SNAPSHOT');
+      assert.equal(result.repricingRecommendation.walletPolicySnapshot?.walletTokenValueNanoUsd, 100000);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('142. Missing walletPolicySnapshot in metadata causes PARTIAL_EVIDENCE with null recommendation', async () => {
+    const { userId } = await createUserWithWallet(100);
+    try {
+      const reserved = await reserveBusinessTokensForAmount({
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        tokens: 10,
+        idempotencyKey: crypto.randomUUID(),
+        metadata: {
+          aiBilling: {
+            schemaVersion: 1,
+            requestedMode: 'USAGE_BASED',
+            feature: 'AI_CHAT_QUERY',
+            reservationTokens: 10,
+            maxInputTokens: 12000,
+            maxOutputTokens: 1200,
+            rateCardVersion: 'rate-v1',
+            walletPolicyVersion: 'policy-v1',
+            // NO walletPolicySnapshot
+          },
+          providerExecution: {
+            providerCalls: [
+              {
+                provider: 'openai',
+                actualModel: 'gpt-4o',
+                operation: 'chat.completion',
+                costNanoUsd: 500000,
+              },
+            ],
+          },
+        },
+      });
+
+      const deps = createDefaultAIBillingRecoveryDependencies();
+      const result = await inspectAIBillingRecovery(
+        { reservationId: reserved.reservationId },
+        deps,
+      );
+
+      assert.ok(result.repricingRecommendation);
+      assert.equal(result.repricingRecommendation.repricingStatus, 'PARTIAL_EVIDENCE');
+      assert.equal(result.repricingRecommendation.recommendedActualWalletTokens, null);
+      assert.equal(result.repricingRecommendation.walletPolicySnapshot, null);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('143. Empty providerCalls without explicit non-billable proof returns PARTIAL_EVIDENCE with null recommendation', async () => {
+    const { userId } = await createUserWithWallet(100);
+    try {
+      const reserved = await reserveBusinessTokensForAmount({
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        tokens: 10,
+        idempotencyKey: crypto.randomUUID(),
+        metadata: {
+          aiBilling: {
+            schemaVersion: 1,
+            requestedMode: 'USAGE_BASED',
+            feature: 'AI_CHAT_QUERY',
+            reservationTokens: 10,
+            maxInputTokens: 12000,
+            maxOutputTokens: 1200,
+            rateCardVersion: 'rate-v1',
+            walletPolicyVersion: 'policy-v1',
+            walletPolicySnapshot: {
+              walletTokenValueNanoUsd: 100000,
+              markupBasisPoints: 10000,
+              minimumWalletTokens: 1,
+            },
+          },
+          providerExecution: {
+            providerCalls: [], // empty
+          },
+        },
+      });
+
+      const deps = createDefaultAIBillingRecoveryDependencies();
+      const result = await inspectAIBillingRecovery(
+        { reservationId: reserved.reservationId },
+        deps,
+      );
+
+      assert.ok(result.repricingRecommendation);
+      assert.equal(result.repricingRecommendation.repricingStatus, 'PARTIAL_EVIDENCE');
+      assert.equal(result.repricingRecommendation.recommendedActualWalletTokens, null);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('144. providerRequestSent=true with missing providerCalls is NEVER classified as NON_BILLABLE_CONFIRMED', async () => {
+    const { userId } = await createUserWithWallet(100);
+    try {
+      const reserved = await reserveBusinessTokensForAmount({
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        tokens: 10,
+        idempotencyKey: crypto.randomUUID(),
+        metadata: {
+          aiBilling: {
+            schemaVersion: 1,
+            requestedMode: 'USAGE_BASED',
+            feature: 'AI_CHAT_QUERY',
+            reservationTokens: 10,
+            maxInputTokens: 12000,
+            maxOutputTokens: 1200,
+            rateCardVersion: 'rate-v1',
+            walletPolicyVersion: 'policy-v1',
+            walletPolicySnapshot: {
+              walletTokenValueNanoUsd: 100000,
+              markupBasisPoints: 10000,
+              minimumWalletTokens: 1,
+            },
+          },
+          providerExecution: {
+            providerCalls: [],
+          },
+        },
+      });
+
+      // Create linked AIBillingOperation with providerRequestSent = true
+      await prisma.aIBillingOperation.create({
+        data: {
+          operationId: crypto.randomUUID(),
+          reservationId: reserved.reservationId,
+          walletId: reserved.walletId,
+          userId,
+          feature: 'AI_CHAT_QUERY',
+          source: 'CHAT',
+          status: 'REVIEW_REQUIRED',
+          reservedTokens: 10,
+          reservationPricingVersion: 1,
+          providerRequestSent: true, // Request was sent!
+          rateCardVersion: 'rate-v1',
+          walletPolicyVersion: 'policy-v1',
+        },
+      });
+
+      const deps = createDefaultAIBillingRecoveryDependencies();
+      const result = await inspectAIBillingRecovery(
+        { reservationId: reserved.reservationId },
+        deps,
+      );
+
+      assert.ok(result.repricingRecommendation);
+      assert.notEqual(result.repricingRecommendation.repricingStatus, 'NON_BILLABLE_CONFIRMED');
+      assert.equal(result.repricingRecommendation.repricingStatus, 'PARTIAL_EVIDENCE');
+      assert.equal(result.repricingRecommendation.recommendedActualWalletTokens, null);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('145. Explicit providerRequestSent=false classifies as NON_BILLABLE_CONFIRMED with 0 charge recommendation', async () => {
+    const { userId } = await createUserWithWallet(100);
+    try {
+      const reserved = await reserveBusinessTokensForAmount({
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        tokens: 10,
+        idempotencyKey: crypto.randomUUID(),
+        metadata: {
+          aiBilling: {
+            schemaVersion: 1,
+            requestedMode: 'USAGE_BASED',
+            feature: 'AI_CHAT_QUERY',
+            reservationTokens: 10,
+            maxInputTokens: 12000,
+            maxOutputTokens: 1200,
+            rateCardVersion: 'rate-v1',
+            walletPolicyVersion: 'policy-v1',
+            walletPolicySnapshot: {
+              walletTokenValueNanoUsd: 100000,
+              markupBasisPoints: 10000,
+              minimumWalletTokens: 1,
+            },
+          },
+          providerExecution: {
+            providerCalls: [],
+          },
+        },
+      });
+
+      // Create linked AIBillingOperation with providerRequestSent = false
+      await prisma.aIBillingOperation.create({
+        data: {
+          operationId: crypto.randomUUID(),
+          reservationId: reserved.reservationId,
+          walletId: reserved.walletId,
+          userId,
+          feature: 'AI_CHAT_QUERY',
+          source: 'CHAT',
+          status: 'REVIEW_REQUIRED',
+          reservedTokens: 10,
+          reservationPricingVersion: 1,
+          providerRequestSent: false, // Request was NEVER sent!
+          rateCardVersion: 'rate-v1',
+          walletPolicyVersion: 'policy-v1',
+        },
+      });
+
+      const deps = createDefaultAIBillingRecoveryDependencies();
+      const result = await inspectAIBillingRecovery(
+        { reservationId: reserved.reservationId },
+        deps,
+      );
+
+      assert.ok(result.repricingRecommendation);
+      assert.equal(result.repricingRecommendation.repricingStatus, 'NON_BILLABLE_CONFIRMED');
+      assert.equal(result.repricingRecommendation.recommendedActualWalletTokens, 0);
+      assert.equal(result.repricingRecommendation.recommendedReturnedTokens, 10);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  test('146. APPROVE_SYSTEM_RECOMMENDATION on NON_BILLABLE_CONFIRMED releases reservation, returns 100% reserved tokens, and creates no consume transaction', async () => {
+    const { userId } = await createUserWithWallet(100);
+    try {
+      const reserved = await reserveBusinessTokensForAmount({
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        tokens: 10,
+        idempotencyKey: crypto.randomUUID(),
+        metadata: {
+          aiBilling: {
+            schemaVersion: 1,
+            requestedMode: 'USAGE_BASED',
+            feature: 'AI_CHAT_QUERY',
+            reservationTokens: 10,
+            maxInputTokens: 12000,
+            maxOutputTokens: 1200,
+            rateCardVersion: 'rate-v1',
+            walletPolicyVersion: 'policy-v1',
+            walletPolicySnapshot: {
+              walletTokenValueNanoUsd: 100000,
+              markupBasisPoints: 10000,
+              minimumWalletTokens: 1,
+            },
+            providerExecution: {
+              providerCalls: [],
+            },
+          },
+        },
+      });
+
+      await prisma.aIBillingOperation.create({
+        data: {
+          operationId: crypto.randomUUID(),
+          reservationId: reserved.reservationId,
+          walletId: reserved.walletId,
+          userId,
+          feature: 'AI_CHAT_QUERY',
+          source: 'CHAT',
+          status: 'REVIEW_REQUIRED',
+          reservedTokens: 10,
+          reservationPricingVersion: 1,
+          providerRequestSent: false,
+          rateCardVersion: 'rate-v1',
+          walletPolicyVersion: 'policy-v1',
+        },
+      });
+
+      const deps = createDefaultAIBillingRecoveryDependencies();
+      const res = await recoverAIBillingReservation(
+        {
+          reservationId: reserved.reservationId,
+          action: {
+            type: 'APPROVE_SYSTEM_RECOMMENDATION',
+            confirmation: 'APPROVE_SYSTEM_RECOMMENDATION',
+            reason: 'System approval for non-billable confirmed execution',
+          },
+        },
+        deps,
+      );
+
+      assert.equal(res.outcome, 'RELEASED');
+      assert.equal(res.status, 'RELEASED');
+      assert.equal(res.financialMutationPerformed, true);
+      assert.equal(res.recoveryRequired, false);
+
+      const reservationInDb = await prisma.tokenReservation.findUnique({
+        where: { id: reserved.reservationId },
+      });
+      assert.equal(reservationInDb?.status, 'RELEASED');
+      assert.ok(reservationInDb?.releasedAt);
+
+      const consumes = await prisma.tokenTransaction.findMany({
+        where: { referenceId: reserved.reservationId, type: 'CONSUME' },
+      });
+      assert.equal(consumes.length, 0);
+
+      const walletInDb = await prisma.tokenWallet.findUnique({
+        where: { id: reserved.walletId },
+      });
+      assert.equal(walletInDb?.tokenBalance, 100);
+      assert.equal(walletInDb?.reservedBalance, 0);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  // ---- Runtime bug fix regression tests (persisted usageApplied normalization) ----
+
+  const geminiSnapshot = (): object => ({
+    id: 'snap-gemini',
+    version: '1.0.0',
+    status: 'ACTIVE',
+    schemaVersion: 1,
+    currency: 'USD',
+    storageUnit: 'MICROS',
+    engineUnit: 'NANO_USD',
+    source: 'TEST',
+    generatedAt: new Date(),
+    provenance: 'RESEARCH_SNAPSHOT',
+    publishedAt: new Date(),
+    effectiveFrom: new Date('2025-01-01'),
+    effectiveTo: null,
+    retiredAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    entries: [
+      {
+        id: 'entry-gemini-3-6-flash',
+        provider: 'google',
+        model: 'gemini-3.6-flash',
+        aliases: [],
+        status: 'STABLE',
+        tier: 'STANDARD',
+        billingUnit: 'TOKEN',
+        inputMicrosPerMillion: 1500000n,
+        outputMicrosPerMillion: 7500000n,
+        cachedInputMicrosPerMillion: 150000n,
+        cachedOutputMicrosPerMillion: null,
+        perUnitMicros: null,
+        audioInputMicrosPerMillion: null,
+        audioOutputMicrosPerMillion: null,
+        tokensPerSecond: null,
+        cachedInputAccounting: 'DISJOINT',
+        effectiveFrom: new Date('2025-01-01'),
+        effectiveTo: null,
+        inactive: false,
+        source: 'TEST',
+        verifiedAt: new Date(),
+      },
+      {
+        id: 'entry-gemini-3-5-flash-lite',
+        provider: 'google',
+        model: 'gemini-3.5-flash-lite',
+        aliases: [],
+        status: 'STABLE',
+        tier: 'STANDARD',
+        billingUnit: 'TOKEN',
+        inputMicrosPerMillion: 300000n,
+        outputMicrosPerMillion: 2500000n,
+        cachedInputMicrosPerMillion: 30000n,
+        cachedOutputMicrosPerMillion: null,
+        perUnitMicros: null,
+        audioInputMicrosPerMillion: null,
+        audioOutputMicrosPerMillion: null,
+        tokensPerSecond: null,
+        cachedInputAccounting: 'DISJOINT',
+        effectiveFrom: new Date('2025-01-01'),
+        effectiveTo: null,
+        inactive: false,
+        source: 'TEST',
+        verifiedAt: new Date(),
+      },
+      {
+        id: 'entry-gemini-3-1-flash-tts-preview',
+        provider: 'google',
+        model: 'gemini-3.1-flash-tts-preview',
+        aliases: [],
+        status: 'STABLE',
+        tier: 'STANDARD',
+        billingUnit: 'TOKEN',
+        inputMicrosPerMillion: 1000000n,
+        outputMicrosPerMillion: 20000000n,
+        cachedInputMicrosPerMillion: null,
+        cachedOutputMicrosPerMillion: null,
+        perUnitMicros: null,
+        audioInputMicrosPerMillion: null,
+        audioOutputMicrosPerMillion: null,
+        tokensPerSecond: null,
+        cachedInputAccounting: null,
+        effectiveFrom: new Date('2025-01-01'),
+        effectiveTo: null,
+        inactive: false,
+        source: 'TEST',
+        verifiedAt: new Date(),
+      },
+    ],
+  });
+
+  async function createRecoveryFixture(
+    userId: string,
+    reservedTokens: number,
+    providerCalls: unknown[],
+    options: { rateCardVersion?: string } = {},
+  ): Promise<{ reservationId: string; walletId: string }> {
+    const rateCardVersion = options.rateCardVersion ?? '1.0.0';
+    const reserved = await reserveBusinessTokensForAmount({
+      userId,
+      feature: 'AI_CHAT_QUERY',
+      source: 'CHAT',
+      tokens: reservedTokens,
+      idempotencyKey: crypto.randomUUID(),
+      metadata: {
+        aiBilling: {
+          schemaVersion: 1,
+          requestedMode: 'USAGE_BASED',
+          feature: 'AI_CHAT_QUERY',
+          reservationTokens: reservedTokens,
+          maxInputTokens: 12000,
+          maxOutputTokens: 1200,
+          rateCardVersion,
+          walletPolicyVersion: '1',
+          walletPolicySnapshot: {
+            walletTokenValueNanoUsd: 100000,
+            markupBasisPoints: 10000,
+            minimumWalletTokens: 1,
+          },
+        },
+        providerExecution: {
+          providerCalls,
+        },
+      },
+    });
+
+    await prisma.aIBillingOperation.create({
+      data: {
+        operationId: crypto.randomUUID(),
+        reservationId: reserved.reservationId,
+        walletId: reserved.walletId,
+        userId,
+        feature: 'AI_CHAT_QUERY',
+        source: 'CHAT',
+        status: 'REVIEW_REQUIRED',
+        reservedTokens,
+        reservationPricingVersion: 1,
+        rateCardVersion,
+        walletPolicyVersion: '1',
+      },
+    });
+
+    return { reservationId: reserved.reservationId, walletId: reserved.walletId };
+  }
+
+  function geminiDeps(): ReturnType<typeof createDefaultAIBillingRecoveryDependencies> {
+    const deps = createDefaultAIBillingRecoveryDependencies();
+    deps.rateCardLoader = {
+      repository: {
+        async findSnapshotByVersion() {
+          return geminiSnapshot();
+        },
+      },
+    } as unknown as typeof deps.rateCardLoader;
+    return deps;
+  }
+
+  const realChatEvidence = {
+    kind: 'PRICED',
+    reason: 'ACTUAL_MODEL',
+    pricedAt: '2026-08-18',
+    provider: 'google',
+    rateCard: { tier: 'standard', model: 'gemini-3.6-flash', version: '1.0.0', billingUnit: 'TOKEN' },
+    operation: 'TEXT_CHAT',
+    actualModel: 'gemini-3.6-flash',
+    costNanoUsd: '9435000',
+    usageApplied: { inputTokens: 2835, outputTokens: 691 },
+    providerCallId: 'call-1',
+    requestedModel: 'gemini-3.6-flash',
+  };
+
+  // A. Real nested usageApplied (live persisted shape) reprices authoritatively.
+  test('150-A. REGRESSION FIX: persisted usageApplied-only evidence reprices authoritatively (chat 94/131/9435000)', async () => {
+    const { userId } = await createUserWithWallet(500);
+    try {
+      const { reservationId } = await createRecoveryFixture(userId, 225, [realChatEvidence]);
+      const deps = geminiDeps();
+      const result = await inspectAIBillingRecovery({ reservationId }, deps);
+      const rec = result.repricingRecommendation;
+      assert.equal(rec.repricingStatus, 'AUTHORITATIVE_REPRICE_AVAILABLE');
+      assert.equal(rec.recommendedActualWalletTokens, 94);
+      assert.equal(rec.recommendedReturnedTokens, 131);
+      assert.equal(rec.totalProviderCostNanoUsd, '9435000');
+      assert.equal(rec.recommendedAction, 'APPROVE_SETTLEMENT');
+      assert.equal(rec.itemizedCalls.length, 1);
+      assert.equal(rec.itemizedCalls[0].kind, 'PRICED');
+      assert.equal(rec.itemizedCalls[0].costNanoUsd, '9435000');
+      assert.equal(rec.walletPolicySnapshot?.sourceNote, 'PERSISTED_SNAPSHOT');
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  // B. Flat fields still price identically (existing behavior preserved).
+  test('150-B. REGRESSION FIX: flat evidence still reprices authoritatively (chat 94/131/9435000)', async () => {
+    const { userId } = await createUserWithWallet(500);
+    try {
+      const flatEvidence = {
+        ...realChatEvidence,
+        usageApplied: undefined,
+        inputTokens: 2835,
+        outputTokens: 691,
+      };
+      const { reservationId } = await createRecoveryFixture(userId, 225, [flatEvidence]);
+      const deps = geminiDeps();
+      const result = await inspectAIBillingRecovery({ reservationId }, deps);
+      const rec = result.repricingRecommendation;
+      assert.equal(rec.repricingStatus, 'AUTHORITATIVE_REPRICE_AVAILABLE');
+      assert.equal(rec.recommendedActualWalletTokens, 94);
+      assert.equal(rec.recommendedReturnedTokens, 131);
+      assert.equal(rec.totalProviderCostNanoUsd, '9435000');
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  // C. Explicit flat fields win over usageApplied (never overwritten).
+  test('150-C. REGRESSION FIX: flat fields take precedence over usageApplied (no overwrite)', async () => {
+    const { userId } = await createUserWithWallet(500);
+    try {
+      const conflicting = {
+        ...realChatEvidence,
+        inputTokens: 2835,
+        outputTokens: 691,
+        usageApplied: { inputTokens: 1, outputTokens: 1 },
+      };
+      const { reservationId } = await createRecoveryFixture(userId, 225, [conflicting]);
+      const deps = geminiDeps();
+      const result = await inspectAIBillingRecovery({ reservationId }, deps);
+      const rec = result.repricingRecommendation;
+      assert.equal(rec.repricingStatus, 'AUTHORITATIVE_REPRICE_AVAILABLE');
+      assert.equal(rec.totalProviderCostNanoUsd, '9435000');
+      assert.equal(rec.recommendedActualWalletTokens, 94);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  // D. Absent usage everywhere still fails closed (PARTIAL_EVIDENCE / USAGE_MISSING, null recommendation).
+  test('150-D. REGRESSION FIX: no usage anywhere still fails closed PARTIAL_EVIDENCE / USAGE_MISSING / null', async () => {
+    const { userId } = await createUserWithWallet(500);
+    try {
+      const noUsage = {
+        provider: 'google',
+        actualModel: 'gemini-3.6-flash',
+        operation: 'TEXT_CHAT',
+        providerCallId: 'call-1',
+        requestedModel: 'gemini-3.6-flash',
+      };
+      const { reservationId } = await createRecoveryFixture(userId, 225, [noUsage]);
+      const deps = geminiDeps();
+      const result = await inspectAIBillingRecovery({ reservationId }, deps);
+      const rec = result.repricingRecommendation;
+      assert.equal(rec.repricingStatus, 'PARTIAL_EVIDENCE');
+      assert.equal(rec.recommendedActualWalletTokens, null);
+      assert.equal(rec.recommendedReturnedTokens, null);
+      assert.equal(rec.recommendedAction, 'KEEP_UNDER_REVIEW');
+      assert.equal(rec.itemizedCalls[0].kind, 'UNPRICED');
+      assert.equal(rec.itemizedCalls[0].reason, 'USAGE_MISSING');
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  // E. Real multi-modal persisted shapes: image (imageInputTokens) and voice (AUDIO_UNDERSTANDING + TTS).
+  test('150-E. REGRESSION FIX: real image + voice persisted usageApplied modalities price authoritatively (6 / 73)', async () => {
+    const { userId } = await createUserWithWallet(2000);
+    try {
+      const imageEvidence = {
+        kind: 'PRICED',
+        reason: 'ACTUAL_MODEL',
+        pricedAt: '2026-08-18',
+        provider: 'google',
+        rateCard: { tier: 'standard', model: 'gemini-3.5-flash-lite', version: '1.0.0', billingUnit: 'TOKEN' },
+        operation: 'IMAGE_ANALYSIS',
+        actualModel: 'gemini-3.5-flash-lite',
+        costNanoUsd: '559900',
+        usageApplied: { inputTokens: 1233, outputTokens: 76, imageInputTokens: 1089 },
+        providerCallId: 'call-1',
+        requestedModel: 'gemini-3.5-flash-lite',
+      };
+      const { reservationId: imageReservationId } = await createRecoveryFixture(userId, 75, [imageEvidence]);
+
+      const voiceEvidence = [
+        {
+          kind: 'PRICED',
+          reason: 'ACTUAL_MODEL',
+          pricedAt: '2026-08-18',
+          provider: 'google',
+          rateCard: { tier: 'standard', model: 'gemini-3.5-flash-lite', version: '1.0.0', billingUnit: 'TOKEN' },
+          operation: 'AUDIO_UNDERSTANDING',
+          actualModel: 'gemini-3.5-flash-lite',
+          costNanoUsd: '121100',
+          usageApplied: { inputTokens: 62, outputTokens: 41 },
+          providerCallId: 'call-1',
+          requestedModel: 'gemini-3.5-flash-lite',
+        },
+        {
+          kind: 'PRICED',
+          reason: 'ACTUAL_MODEL',
+          pricedAt: '2026-08-18',
+          provider: 'google',
+          rateCard: { tier: 'standard', model: 'gemini-3.1-flash-tts-preview', version: '1.0.0', billingUnit: 'TOKEN' },
+          operation: 'TEXT_TO_SPEECH',
+          actualModel: 'gemini-3.1-flash-tts-preview',
+          costNanoUsd: '7202000',
+          usageApplied: { inputTokens: 42, outputTokens: 358 },
+          providerCallId: 'call-2',
+          requestedModel: 'gemini-3.1-flash-tts-preview',
+        },
+      ];
+      const { reservationId: voiceReservationId } = await createRecoveryFixture(userId, 360, voiceEvidence as unknown[]);
+
+      const deps = geminiDeps();
+
+      const imageResult = await inspectAIBillingRecovery({ reservationId: imageReservationId }, deps);
+      const imageRec = imageResult.repricingRecommendation;
+      assert.equal(imageRec.repricingStatus, 'AUTHORITATIVE_REPRICE_AVAILABLE');
+      assert.equal(imageRec.totalProviderCostNanoUsd, '559900');
+      assert.equal(imageRec.recommendedActualWalletTokens, 6);
+      assert.equal(imageRec.recommendedReturnedTokens, 69);
+      assert.equal(imageRec.itemizedCalls[0].kind, 'PRICED');
+      assert.equal(imageRec.itemizedCalls[0].costNanoUsd, '559900');
+
+      const voiceResult = await inspectAIBillingRecovery({ reservationId: voiceReservationId }, deps);
+      const voiceRec = voiceResult.repricingRecommendation;
+      assert.equal(voiceRec.repricingStatus, 'AUTHORITATIVE_REPRICE_AVAILABLE');
+      assert.equal(voiceRec.totalProviderCostNanoUsd, '7323100');
+      assert.equal(voiceRec.recommendedActualWalletTokens, 73);
+      assert.equal(voiceRec.recommendedReturnedTokens, 287);
+      assert.equal(voiceRec.itemizedCalls.length, 2);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  // ---- Final hardening regression tests ----
+
+  // A loader whose findSnapshotByVersion returns null (=> RATE_CARD_VERSION_NOT_FOUND)
+  // and whose ACTIVE lookup would throw, proving the engine never falls back to ACTIVE.
+  function versionNotFoundDeps(): ReturnType<typeof createDefaultAIBillingRecoveryDependencies> {
+    const deps = createDefaultAIBillingRecoveryDependencies();
+    deps.rateCardLoader = {
+      repository: {
+        async findSnapshotByVersion() {
+          return null;
+        },
+        async findActiveSnapshotForDate() {
+          throw new Error('ACTIVE fallback must NEVER be attempted');
+        },
+      },
+    } as unknown as typeof deps.rateCardLoader;
+    return deps;
+  }
+
+  // A. Explicit historical rate card version that does not exist fails closed.
+  test('150-F. REGRESSION FIX: recorded rate card VERSION_NOT_FOUND fails closed with no ACTIVE fallback, zero mutation', async () => {
+    const { userId, walletId } = await createUserWithWallet(500);
+    try {
+      const { reservationId } = await createRecoveryFixture(
+        userId,
+        225,
+        [realChatEvidence],
+        { rateCardVersion: '9.9.9-missing-version' },
+      );
+      const deps = versionNotFoundDeps();
+
+      const result = await inspectAIBillingRecovery({ reservationId }, deps);
+      const rec = result.repricingRecommendation;
+      assert.equal(rec.repricingStatus, 'PARTIAL_EVIDENCE');
+      assert.equal(rec.recommendedActualWalletTokens, null);
+      assert.equal(rec.recommendedReturnedTokens, null);
+      assert.equal(rec.recommendedAction, 'KEEP_UNDER_REVIEW');
+      assert.match(rec.discrepancyNote ?? '', /RATE_CARD_VERSION_NOT_FOUND/);
+
+      await assert.rejects(
+        recoverAIBillingReservation(
+          {
+            reservationId,
+            action: {
+              type: 'APPROVE_SYSTEM_RECOMMENDATION',
+              confirmation: 'APPROVE_SYSTEM_RECOMMENDATION',
+              reason: 'Approve version-not-found repricing',
+            },
+          },
+          deps,
+        ),
+        (err: unknown) => {
+          assert.ok(err instanceof AIBillingRecoveryError);
+          assert.equal(err.code, 'REPRICING_FAILED');
+          assert.equal(err.statusCode, 409);
+          return true;
+        },
+      );
+
+      const reservationInDb = await prisma.tokenReservation.findUnique({
+        where: { id: reservationId },
+      });
+      assert.equal(reservationInDb?.status, 'PENDING');
+      assert.equal(reservationInDb?.settledAt, null);
+      assert.equal(reservationInDb?.releasedAt, null);
+
+      const consumes = await prisma.tokenTransaction.findMany({
+        where: { referenceId: reservationId, type: 'CONSUME' },
+      });
+      assert.equal(consumes.length, 0);
+
+      const walletInDb = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
+      assert.equal(walletInDb?.tokenBalance, 275);
+      assert.equal(walletInDb?.reservedBalance, 225);
+    } finally {
+      await cleanupUser(userId);
+    }
+  });
+
+  // B. TOCTOU: a stale inspected recommendation is never trusted; approval recalculates
+  //    from current persisted evidence and fails closed when that evidence changed.
+  test('150-G. TOCTOU: stale inspected recommendation is never trusted; evidence mutation causes fail-closed approval with zero mutation', async () => {
+    const { userId, walletId } = await createUserWithWallet(500);
+    try {
+      const { reservationId } = await createRecoveryFixture(userId, 225, [realChatEvidence]);
+      const deps = geminiDeps();
+
+      const inspected = await inspectAIBillingRecovery({ reservationId }, deps);
+      const rec = inspected.repricingRecommendation;
+      assert.equal(rec.repricingStatus, 'AUTHORITATIVE_REPRICE_AVAILABLE');
+      assert.equal(rec.recommendedActualWalletTokens, 94);
+
+      const reservationInDb = await prisma.tokenReservation.findUnique({
+        where: { id: reservationId },
+      });
+      const originalMetadata = reservationInDb?.metadata as Record<string, unknown>;
+
+      await prisma.tokenReservation.update({
+        where: { id: reservationId },
+        data: {
+          metadata: {
+            ...originalMetadata,
+            providerExecution: {
+              providerCalls: [
+                {
+                  provider: 'google',
+                  actualModel: 'gemini-3.6-flash',
+                  operation: 'TEXT_CHAT',
+                  providerCallId: 'call-1',
+                  requestedModel: 'gemini-3.6-flash',
+                },
+              ],
+            },
+          },
+        },
+      });
+
+      await assert.rejects(
+        recoverAIBillingReservation(
+          {
+            reservationId,
+            action: {
+              type: 'APPROVE_SYSTEM_RECOMMENDATION',
+              confirmation: 'APPROVE_SYSTEM_RECOMMENDATION',
+              reason: 'Approve against mutated evidence',
+            },
+          },
+          deps,
+        ),
+        (err: unknown) => {
+          assert.ok(err instanceof AIBillingRecoveryError);
+          assert.equal(err.code, 'REPRICING_FAILED');
+          assert.equal(err.statusCode, 409);
+          return true;
+        },
+      );
+
+      const reservationAfter = await prisma.tokenReservation.findUnique({
+        where: { id: reservationId },
+      });
+      assert.equal(reservationAfter?.status, 'PENDING');
+      assert.equal(reservationAfter?.settledAt, null);
+      assert.equal(reservationAfter?.releasedAt, null);
+
+      const consumes = await prisma.tokenTransaction.findMany({
+        where: { referenceId: reservationId, type: 'CONSUME' },
+      });
+      assert.equal(consumes.length, 0);
+
+      const walletInDb = await prisma.tokenWallet.findUnique({ where: { id: walletId } });
+      assert.equal(walletInDb?.tokenBalance, 275);
+      assert.equal(walletInDb?.reservedBalance, 225);
     } finally {
       await cleanupUser(userId);
     }

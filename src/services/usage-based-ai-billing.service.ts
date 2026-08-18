@@ -198,6 +198,11 @@ function buildReservationMetadata<T>(
       ...(input.model === undefined ? {} : { model: input.model }),
       rateCardVersion: input.rateCard.version,
       walletPolicyVersion: input.walletPolicy.version,
+      walletPolicySnapshot: {
+        walletTokenValueNanoUsd: input.walletPolicy.walletTokenValueNanoUsd,
+        markupBasisPoints: input.walletPolicy.markupBasisPoints,
+        minimumWalletTokens: input.walletPolicy.minimumWalletTokens,
+      },
       ...(input.pricingSource === undefined ? {} : { pricingSource: input.pricingSource }),
     },
   };

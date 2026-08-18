@@ -72,6 +72,29 @@ export interface AIBillingRecoveryAuditLogRecord {
   createdAt: Date;
 }
 
+/**
+ * Billing operation row used by the repricing engine to access execution
+ * evidence, reason codes, rate-card version, and operation timestamps.
+ * Read-only — never mutated by the recovery domain.
+ */
+export interface AIBillingRecoveryOperationRow {
+  id: string;
+  operationId: string;
+  status: string;
+  reviewReasonCode: string | null;
+  failureCode: string | null;
+  failureKind: string | null;
+  rateCardVersion: string | null;
+  walletPolicyVersion: string | null;
+  actualProvider: string | null;
+  actualModel: string | null;
+  providerRequestSent: boolean | null;
+  cached: boolean | null;
+  createdAt: Date;
+  executedAt: Date | null;
+  pricedAt: Date | null;
+}
+
 export interface AIBillingRecoveryRepository {
   findReservationById(reservationId: string): Promise<AIBillingRecoveryReservationRow | null>;
   findWalletById(walletId: string): Promise<AIBillingRecoveryWalletRow | null>;
@@ -91,6 +114,8 @@ export interface AIBillingRecoveryRepository {
   }): Promise<AIBillingRecoveryAuditLogRecord>;
   findLatestRecoveryAuditLog(reservationId: string): Promise<AIBillingRecoveryAuditLogRecord | null>;
   findLatestRecoveryReviewAuditLog(reservationId: string): Promise<AIBillingRecoveryAuditLogRecord | null>;
+  /** Read the linked AIBillingOperation for a reservation. Returns null when no operation exists. */
+  findAIBillingOperationByReservationId(reservationId: string): Promise<AIBillingRecoveryOperationRow | null>;
 }
 
 function toReservationRow(reservation: TokenReservation): AIBillingRecoveryReservationRow {
@@ -288,6 +313,47 @@ export function createPrismaAIBillingRecoveryRepository(): AIBillingRecoveryRepo
             createdAt: matched.createdAt,
           }
         : null;
+    },
+
+    async findAIBillingOperationByReservationId(reservationId) {
+      const op = await prisma.aIBillingOperation.findUnique({
+        where: { reservationId },
+        select: {
+          id: true,
+          operationId: true,
+          status: true,
+          reviewReasonCode: true,
+          failureCode: true,
+          failureKind: true,
+          rateCardVersion: true,
+          walletPolicyVersion: true,
+          actualProvider: true,
+          actualModel: true,
+          providerRequestSent: true,
+          cached: true,
+          createdAt: true,
+          executedAt: true,
+          pricedAt: true,
+        },
+      });
+      if (!op) return null;
+      return {
+        id: op.id,
+        operationId: op.operationId,
+        status: op.status as string,
+        reviewReasonCode: op.reviewReasonCode,
+        failureCode: op.failureCode,
+        failureKind: op.failureKind as string | null,
+        rateCardVersion: op.rateCardVersion,
+        walletPolicyVersion: op.walletPolicyVersion,
+        actualProvider: op.actualProvider,
+        actualModel: op.actualModel,
+        providerRequestSent: op.providerRequestSent,
+        cached: op.cached,
+        createdAt: op.createdAt,
+        executedAt: op.executedAt,
+        pricedAt: op.pricedAt,
+      };
     },
   };
 }

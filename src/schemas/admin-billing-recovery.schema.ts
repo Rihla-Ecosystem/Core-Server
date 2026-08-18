@@ -57,6 +57,12 @@ export const adminBillingRecoveryActionBodySchema = z.discriminatedUnion('type',
     reason: recoveryReasonSchema,
     evidenceReference: evidenceReferenceSchema,
   }).strict(),
+  z.object({
+    type: z.literal('APPROVE_SYSTEM_RECOMMENDATION'),
+    confirmation: z.literal('APPROVE_SYSTEM_RECOMMENDATION'),
+    reason: recoveryReasonSchema,
+    evidenceReference: evidenceReferenceSchema,
+  }).strict(),
 ]);
 
 export type AdminBillingRecoveryActionBody = z.infer<typeof adminBillingRecoveryActionBodySchema>;

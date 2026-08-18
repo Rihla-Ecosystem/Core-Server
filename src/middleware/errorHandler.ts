@@ -4,6 +4,8 @@ import { Prisma } from '@prisma/client';
 import multer from 'multer';
 import { ProviderRateCardAdminError } from '../types/provider-rate-card-admin.js';
 import { providerRateCardAdminStatus } from '../types/provider-rate-card-admin.js';
+import { aiBillingRecoveryErrorStatus } from '../types/ai-billing-recovery.js';
+import type { AIBillingRecoveryErrorCode } from '../types/ai-billing-recovery.js';
 
 export class AppError extends Error {
   constructor(
@@ -51,6 +53,24 @@ export function errorHandler(
     if (err.mapperCode !== undefined) body.mapperCode = err.mapperCode;
     if (err.version !== undefined) body.version = err.version;
     res.status(providerRateCardAdminStatus(err.code)).json(body);
+    return;
+  }
+
+  if (err instanceof Error && err.name === 'AIBillingRecoveryError') {
+    const recoveryErr = err as Error & {
+      code: AIBillingRecoveryErrorCode;
+      statusCode?: number;
+      reservationId?: string;
+      recoveryRequired?: boolean;
+    };
+    res.status(recoveryErr.statusCode ?? aiBillingRecoveryErrorStatus(recoveryErr.code)).json({
+      error: recoveryErr.message,
+      code: recoveryErr.code,
+      ...(recoveryErr.reservationId !== undefined
+        ? { reservationId: recoveryErr.reservationId }
+        : {}),
+      recoveryRequired: recoveryErr.recoveryRequired,
+    });
     return;
   }
 

@@ -8,6 +8,9 @@ import type {
   AIBillingRecoveryQueueResult,
   AIBillingRecoveryReasonCode,
   AIBillingRecoveryRecommendation,
+  AIBillingRecoveryRepricingRecommendation,
+  AIBillingRepricingItemizedCall,
+  AIBillingRepricingStatus,
   InspectAIBillingRecoveryInput,
   InspectAIBillingRecoveryResult,
   MetadataIssue,
@@ -15,7 +18,9 @@ import type {
   ReconcileWalletReservationsResult,
   RecoverAIBillingReservationInput,
   RecoverAIBillingReservationResult,
+  WalletPolicySnapshot,
 } from '../types/ai-billing-recovery.js';
+import { aiBillingRecoveryErrorStatus } from '../types/ai-billing-recovery.js';
 import type { AIUsagePricingMode } from '../types/ai-pricing.js';
 import type {
   AIBillingRecoveryRepository,
@@ -34,6 +39,16 @@ import {
   settleBusinessTokenReservationForAmount,
 } from './token-reservation.service.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { aggregateProviderCalls } from '../utils/provider-pricing/aggregate.js';
+import { normalizePersistedProviderCallsForPricing } from '../utils/provider-pricing/persisted-call.js';
+import { computeWalletCharge } from '../utils/wallet-conversion.js';
+import {
+  loadRateCardByVersion,
+  type ProviderRateCardLoaderDependencies,
+  createDefaultProviderRateCardLoaderDependencies,
+} from './provider-rate-card-loader.service.js';
+import { ProviderRateCardLoadError } from '../types/provider-rate-card-load.js';
+import { createPrismaProviderRateCardRepository } from '../repositories/provider-rate-card.repository.js';
 
 // ---------------------------------------------------------------------------
 // Error Class & Helpers
@@ -41,6 +56,7 @@ import { AppError } from '../middleware/errorHandler.js';
 
 export class AIBillingRecoveryError extends Error {
   readonly code: AIBillingRecoveryErrorCode;
+  readonly statusCode: number;
   readonly reservationId?: string;
   readonly recoveryRequired: boolean;
 
@@ -52,6 +68,7 @@ export class AIBillingRecoveryError extends Error {
     super(message);
     this.name = 'AIBillingRecoveryError';
     this.code = code;
+    this.statusCode = options.statusCode ?? aiBillingRecoveryErrorStatus(code);
     this.reservationId = options.reservationId;
     this.recoveryRequired = options.recoveryRequired ?? true;
   }
@@ -153,6 +170,8 @@ export interface AIBillingRecoveryDependencies {
   releaseReservation: (
     input: ReleaseBusinessTokenReservationInput,
   ) => Promise<ReleaseBusinessTokenReservationResult>;
+  /** Rate-card loader dependency injected for testability; defaults to Prisma-backed loader. */
+  rateCardLoader: ProviderRateCardLoaderDependencies;
 }
 
 export function createDefaultAIBillingRecoveryDependencies(): AIBillingRecoveryDependencies {
@@ -160,6 +179,9 @@ export function createDefaultAIBillingRecoveryDependencies(): AIBillingRecoveryD
     repository: createPrismaAIBillingRecoveryRepository(),
     settleForAmount: settleBusinessTokenReservationForAmount,
     releaseReservation: releaseBusinessTokenReservation,
+    rateCardLoader: createDefaultProviderRateCardLoaderDependencies(
+      createPrismaProviderRateCardRepository(),
+    ),
   };
 }
 
@@ -177,6 +199,8 @@ function wrapRepositoryRead(
   throw recoveryError(code, message, {
     reservationId,
     recoveryRequired: true,
+    // A thrown repository read is an infrastructure failure, not a domain conflict.
+    statusCode: 500,
   });
 }
 
@@ -401,8 +425,32 @@ function assertRecoveryAction(value: unknown): AIBillingRecoveryAction {
     };
   }
 
+  if (action.type === 'APPROVE_SYSTEM_RECOMMENDATION') {
+    const reason = assertRecoveryReason(action.reason);
+    const evidenceReference = assertOptionalEvidenceReference(action.evidenceReference);
+    if (action.confirmation !== 'APPROVE_SYSTEM_RECOMMENDATION') {
+      throw recoveryError(
+        'INVALID_INPUT',
+        'System recommendation approval requires APPROVE_SYSTEM_RECOMMENDATION confirmation',
+      );
+    }
+    if (action.actualTokens !== undefined) {
+      throw recoveryError(
+        'INVALID_INPUT',
+        'System recommendation approval must not include actualTokens — the server computes the amount',
+      );
+    }
+    return {
+      type: 'APPROVE_SYSTEM_RECOMMENDATION',
+      confirmation: 'APPROVE_SYSTEM_RECOMMENDATION',
+      reason,
+      ...(evidenceReference === undefined ? {} : { evidenceReference }),
+    };
+  }
+
   throw recoveryError('INVALID_INPUT', 'action type is not a recognized recovery action');
 }
+
 
 
 
@@ -710,6 +758,270 @@ export function parseAIBillingMetadata(metadata: unknown): ParsedAIBillingMetada
   return parseLegacyMetadata(section);
 }
 
+// ---------------------------------------------------------------------------
+// Repricing Recommendation Engine
+//
+// 6-Gate fail-closed logic (all gates must pass for AUTHORITATIVE_REPRICE_AVAILABLE):
+//  Gate 1: reservation.status === 'PENDING'
+//  Gate 2: providerCalls array is non-empty
+//  Gate 3: Every call has provider, model, operation fields
+//  Gate 4: rateCardVersion non-empty, loads successfully, aggregateProviderCalls => FULLY_PRICED
+//  Gate 5: Wallet policy params available from runtime env
+//  Gate 6: 0 <= calculatedTokens <= reservation.tokens
+//
+// If ANY gate fails: repricingStatus = PARTIAL_EVIDENCE, recommendedActualWalletTokens = null.
+// NO GUESSED NUMBERS ARE EVER OUTPUT.
+// ---------------------------------------------------------------------------
+
+export async function calculateAIBillingRecoveryRecommendation(
+  reservation: AIBillingRecoveryReservationRow,
+  dependencies: AIBillingRecoveryDependencies,
+): Promise<AIBillingRecoveryRepricingRecommendation> {
+  const noCallsResult = (status: AIBillingRepricingStatus, note: string): AIBillingRecoveryRepricingRecommendation => ({
+    repricingStatus: status,
+    recommendedActualWalletTokens: null,
+    recommendedReturnedTokens: null,
+    recommendedAction: 'KEEP_UNDER_REVIEW',
+    pricingDate: (reservation.expiresAt ?? new Date()).toISOString().slice(0, 10),
+    rateCardVersion: null,
+    walletPolicyVersion: null,
+    walletPolicySnapshot: null,
+    totalProviderCostNanoUsd: null,
+    totalPricedCalls: 0,
+    totalUnpricedCalls: 0,
+    itemizedCalls: [],
+    discrepancyNote: note,
+  });
+
+  // Gate 1: only PENDING reservations are eligible for repricing
+  if (reservation.status !== 'PENDING') {
+    return noCallsResult('ALREADY_PRICED', 'Reservation is not in PENDING status; no repricing required.');
+  }
+
+  // Read the AIBillingOperation for rate card + wallet policy version context
+  let operation: Awaited<ReturnType<AIBillingRecoveryDependencies['repository']['findAIBillingOperationByReservationId']>>;
+  try {
+    operation = await dependencies.repository.findAIBillingOperationByReservationId(reservation.id);
+  } catch (_) {
+    return noCallsResult('PARTIAL_EVIDENCE', 'Could not read AIBillingOperation for this reservation.');
+  }
+
+  // Check for indeterminate execution state
+  if (operation?.failureKind === 'INDETERMINATE') {
+    return noCallsResult('INDETERMINATE_EXECUTION',
+      'Provider execution outcome is unknown (INDETERMINATE). Cannot safely compute a settlement amount.');
+  }
+
+  // Determine pricing date from operation timestamps (executedAt > createdAt fallback)
+  const pricingDateRaw = operation?.executedAt ?? operation?.createdAt ?? reservation.expiresAt;
+  const pricingDate = pricingDateRaw.toISOString().slice(0, 10);
+
+  // Read providerCalls from reservation metadata
+  const meta = reservation.metadata;
+  if (meta === null || meta === undefined || typeof meta !== 'object' || Array.isArray(meta)) {
+    return noCallsResult('PARTIAL_EVIDENCE', 'Reservation metadata is missing or malformed.');
+  }
+  const root = meta as Record<string, unknown>;
+  const providerExecution = root.providerExecution;
+  const execSection = (providerExecution !== null && providerExecution !== undefined &&
+      typeof providerExecution === 'object' && !Array.isArray(providerExecution))
+    ? (providerExecution as Record<string, unknown>)
+    : undefined;
+
+  const providerCalls = execSection?.providerCalls;
+
+  // Gate 2: providerCalls non-empty check
+  const hasProviderCalls = Array.isArray(providerCalls) && providerCalls.length > 0;
+  if (!hasProviderCalls) {
+    // Check if independent execution evidence explicitly proves a non-billable operation
+    const isProvenNonBillable =
+      operation?.status === 'NON_BILLABLE_CONFIRMED' ||
+      operation?.reviewReasonCode === 'NO_PROVIDER_CALLS' ||
+      operation?.failureKind === 'NON_BILLABLE' ||
+      operation?.providerRequestSent === false;
+
+    if (isProvenNonBillable) {
+      return {
+        repricingStatus: 'NON_BILLABLE_CONFIRMED',
+        recommendedActualWalletTokens: 0,
+        recommendedReturnedTokens: reservation.tokens,
+        recommendedAction: 'RELEASE_RESERVATION',
+        pricingDate,
+        rateCardVersion: operation?.rateCardVersion ?? null,
+        walletPolicyVersion: operation?.walletPolicyVersion ?? null,
+        walletPolicySnapshot: null,
+        totalProviderCostNanoUsd: '0',
+        totalPricedCalls: 0,
+        totalUnpricedCalls: 0,
+        itemizedCalls: [],
+        discrepancyNote: 'Independent execution state explicitly proves a non-billable operation (request not sent or confirmed non-billable). Full release recommended.',
+      };
+    }
+
+    // Absence of recorded providerCalls when not explicitly proven non-billable MUST return PARTIAL_EVIDENCE with null recommendation
+    return noCallsResult(
+      'PARTIAL_EVIDENCE',
+      'providerExecution.providerCalls is missing or empty and execution state does not explicitly prove a non-billable operation. Authoritative settlement cannot be calculated without provider calls.',
+    );
+  }
+
+  // Gate 3: every call must have required identity fields
+  for (const call of providerCalls as unknown[]) {
+    if (typeof call !== 'object' || call === null) {
+      return noCallsResult('PARTIAL_EVIDENCE', 'One or more providerCalls entries are malformed.');
+    }
+    const c = call as Record<string, unknown>;
+    const hasProvider = typeof c.provider === 'string' && c.provider.trim().length > 0;
+    const hasModel = (typeof c.actualModel === 'string' && c.actualModel.trim().length > 0) ||
+                     (typeof c.model === 'string' && c.model.trim().length > 0);
+    const hasOperation = typeof c.operation === 'string' && c.operation.trim().length > 0;
+    if (!hasProvider || !hasModel || !hasOperation) {
+      return noCallsResult('PARTIAL_EVIDENCE',
+        'One or more providerCalls entries are missing required identity fields (provider, model, operation).');
+    }
+  }
+
+  // Gate 4: load rate card by version and run aggregateProviderCalls
+  const rateCardVersion = operation?.rateCardVersion ?? null;
+  if (!rateCardVersion || rateCardVersion.trim().length === 0) {
+    return noCallsResult('PARTIAL_EVIDENCE',
+      'No rateCardVersion recorded on the billing operation. Cannot load historical rate card for repricing.');
+  }
+
+  let rateCardResult: Awaited<ReturnType<typeof loadRateCardByVersion>>;
+  try {
+    rateCardResult = await loadRateCardByVersion(dependencies.rateCardLoader, rateCardVersion);
+  } catch (err) {
+    const errNote = err instanceof ProviderRateCardLoadError
+      ? `Rate card version '${rateCardVersion}' could not be loaded: ${err.code}.`
+      : `Rate card version '${rateCardVersion}' was not found in persistent snapshot store.`;
+    return noCallsResult('PARTIAL_EVIDENCE', errNote);
+  }
+
+  // Persisted calls carry applied usage nested under `usageApplied`; project it
+  // to the canonical flat pricing shape so authoritative repricing reads the
+  // same evidence the live billing engine used. Identity fields pass through.
+  const normalizedProviderCalls = normalizePersistedProviderCallsForPricing(providerCalls);
+
+  const pricingResult = aggregateProviderCalls({
+    providerCalls: normalizedProviderCalls as unknown[],
+    pricingDate,
+    card: rateCardResult.card,
+  });
+
+  // Build itemized call list regardless of FULLY_PRICED status (for transparency)
+  const itemizedCalls: AIBillingRepricingItemizedCall[] = pricingResult.calls.map((priced) => ({
+    providerCallId: typeof priced.providerCallId === 'string' ? priced.providerCallId : undefined,
+    provider: priced.provider ?? '',
+    model: priced.actualModel ?? priced.requestedModel ?? (priced.kind === 'PRICED' ? priced.rateCard.model : ''),
+    operation: priced.operation ?? '',
+    kind: priced.kind as 'PRICED' | 'UNPRICED',
+    costNanoUsd: priced.kind === 'PRICED' ? String(priced.costNanoUsd) : '0',
+    reason: priced.kind === 'UNPRICED' ? priced.reason : 'PRICED',
+  }));
+
+  if (pricingResult.summaryStatus !== 'FULLY_PRICED') {
+    const unpricedNote = `${pricingResult.totals.unpricedCallCount} of ${pricingResult.totals.callCount} provider call(s) could not be priced under rate card ${rateCardVersion}. ` +
+      'Authoritative repricing requires all calls to be fully priced.';
+    return {
+      repricingStatus: 'PARTIAL_EVIDENCE',
+      recommendedActualWalletTokens: null,
+      recommendedReturnedTokens: null,
+      recommendedAction: 'KEEP_UNDER_REVIEW',
+      pricingDate,
+      rateCardVersion,
+      walletPolicyVersion: operation?.walletPolicyVersion ?? null,
+      walletPolicySnapshot: null,
+      totalProviderCostNanoUsd: String(pricingResult.totals.pricedCostNanoUsd),
+      totalPricedCalls: pricingResult.totals.pricedCallCount,
+      totalUnpricedCalls: pricingResult.totals.unpricedCallCount,
+      itemizedCalls,
+      discrepancyNote: unpricedNote,
+    };
+  }
+
+  // Gate 5: Read STORED walletPolicySnapshot from reservation metadata
+  const aiBillingSection = root.aiBilling && typeof root.aiBilling === 'object' && !Array.isArray(root.aiBilling)
+    ? (root.aiBilling as Record<string, unknown>)
+    : undefined;
+  const storedPolicy = aiBillingSection?.walletPolicySnapshot;
+
+  let walletPolicySnapshot: WalletPolicySnapshot | null = null;
+  if (storedPolicy !== null && storedPolicy !== undefined && typeof storedPolicy === 'object' && !Array.isArray(storedPolicy)) {
+    const p = storedPolicy as Record<string, unknown>;
+    if (
+      isSafeNonNegativeInteger(p.walletTokenValueNanoUsd) &&
+      (p.walletTokenValueNanoUsd as number) > 0 &&
+      isSafeNonNegativeInteger(p.markupBasisPoints) &&
+      isSafeNonNegativeInteger(p.minimumWalletTokens)
+    ) {
+      walletPolicySnapshot = {
+        walletTokenValueNanoUsd: p.walletTokenValueNanoUsd as number,
+        markupBasisPoints: p.markupBasisPoints as number,
+        minimumWalletTokens: p.minimumWalletTokens as number,
+        sourceNote: 'PERSISTED_SNAPSHOT',
+      };
+    }
+  }
+
+  if (!walletPolicySnapshot) {
+    return {
+      repricingStatus: 'PARTIAL_EVIDENCE',
+      recommendedActualWalletTokens: null,
+      recommendedReturnedTokens: null,
+      recommendedAction: 'KEEP_UNDER_REVIEW',
+      pricingDate,
+      rateCardVersion,
+      walletPolicyVersion: operation?.walletPolicyVersion ?? null,
+      walletPolicySnapshot: null,
+      totalProviderCostNanoUsd: String(pricingResult.totals.pricedCostNanoUsd),
+      totalPricedCalls: pricingResult.totals.pricedCallCount,
+      totalUnpricedCalls: 0,
+      itemizedCalls,
+      discrepancyNote: 'Reservation metadata is missing stored walletPolicySnapshot. Authoritative historical recovery requires a stored wallet policy snapshot.',
+    };
+  }
+
+  const walletCharge = computeWalletCharge(pricingResult, walletPolicySnapshot);
+  const calculatedTokens = Number(walletCharge.tokens);
+
+  // Gate 6: overflow guard — calculated amount must not exceed reserved tokens
+  if (calculatedTokens > reservation.tokens) {
+    return {
+      repricingStatus: 'PARTIAL_EVIDENCE',
+      recommendedActualWalletTokens: null,
+      recommendedReturnedTokens: null,
+      recommendedAction: 'KEEP_UNDER_REVIEW',
+      pricingDate,
+      rateCardVersion,
+      walletPolicyVersion: operation?.walletPolicyVersion ?? null,
+      walletPolicySnapshot,
+      totalProviderCostNanoUsd: String(pricingResult.totals.pricedCostNanoUsd),
+      totalPricedCalls: pricingResult.totals.pricedCallCount,
+      totalUnpricedCalls: 0,
+      itemizedCalls,
+      discrepancyNote: `Calculated token charge (${calculatedTokens}) exceeds reserved tokens (${reservation.tokens}). Manual review required.`,
+    };
+  }
+
+  // All 6 gates passed: AUTHORITATIVE_REPRICE_AVAILABLE
+  const returnedTokens = reservation.tokens - calculatedTokens;
+  return {
+    repricingStatus: 'AUTHORITATIVE_REPRICE_AVAILABLE',
+    recommendedActualWalletTokens: calculatedTokens,
+    recommendedReturnedTokens: returnedTokens,
+    recommendedAction: 'APPROVE_SETTLEMENT',
+    pricingDate,
+    rateCardVersion,
+    walletPolicyVersion: operation?.walletPolicyVersion ?? null,
+    walletPolicySnapshot,
+    totalProviderCostNanoUsd: String(pricingResult.totals.pricedCostNanoUsd),
+    totalPricedCalls: pricingResult.totals.pricedCallCount,
+    totalUnpricedCalls: 0,
+    itemizedCalls,
+  };
+}
+
 export async function inspectAIBillingRecovery(
   input: InspectAIBillingRecoveryInput,
   dependencies: AIBillingRecoveryDependencies = createDefaultAIBillingRecoveryDependencies(),
@@ -910,6 +1222,7 @@ export async function inspectAIBillingRecovery(
     integrityConflict,
     inspectedAt,
     ...(review === undefined ? {} : { review }),
+    repricingRecommendation: await calculateAIBillingRecoveryRecommendation(reservation, dependencies),
   };
 }
 
@@ -1361,6 +1674,11 @@ export async function recoverAIBillingReservation(
 
       const idempotentReplay = settlement.idempotentReplay;
       try {
+        let repricingRec: AIBillingRecoveryRepricingRecommendation | undefined;
+        try {
+          repricingRec = await calculateAIBillingRecoveryRecommendation(reservation, dependencies);
+        } catch (_) {}
+
         await dependencies.repository.recordAuditLog({
           actorId: input.actorId,
           action: 'AI_BILLING_RECOVERY_MANUAL_SETTLE',
@@ -1368,6 +1686,11 @@ export async function recoverAIBillingReservation(
           metadata: {
             reservationId,
             action: 'MANUAL_SETTLE',
+            recoveryResolutionType: 'MANUAL_OVERRIDE',
+            systemRecommendedTokens: repricingRec?.recommendedActualWalletTokens ?? null,
+            adminApprovedTokens: action.actualTokens,
+            override: true,
+            repricingStatus: repricingRec?.repricingStatus ?? 'UNKNOWN',
             actualTokens: action.actualTokens,
             reason: action.reason,
             evidenceReference: action.evidenceReference,
@@ -1437,6 +1760,316 @@ export async function recoverAIBillingReservation(
           : { evidenceReference: action.evidenceReference }),
       };
     }
+
+    case 'APPROVE_SYSTEM_RECOMMENDATION': {
+      await assertReservationWalletOwnership(reservation, dependencies);
+      if (reservation.status !== 'PENDING') {
+        throw recoveryError(
+          'INTEGRITY_CONFLICT',
+          'Only PENDING reservations can be processed via system recommendation approval',
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
+      // Re-run the repricing engine fresh at approval time.
+      // The client sends NO actualTokens — the server computes the authoritative action & amount.
+      let repricingRecommendation: AIBillingRecoveryRepricingRecommendation;
+      try {
+        repricingRecommendation = await calculateAIBillingRecoveryRecommendation(reservation, dependencies);
+      } catch (err) {
+        throw recoveryError('REPRICING_FAILED', 'Failed to compute system repricing recommendation', {
+          reservationId,
+          recoveryRequired: true,
+          // A thrown repricing computation is an unexpected internal failure, not a domain rejection.
+          statusCode: 500,
+        });
+      }
+
+      const recStatus = repricingRecommendation.repricingStatus;
+
+      if (recStatus !== 'AUTHORITATIVE_REPRICE_AVAILABLE' && recStatus !== 'NON_BILLABLE_CONFIRMED') {
+        throw recoveryError(
+          'REPRICING_FAILED',
+          `System recommendation approval requires AUTHORITATIVE_REPRICE_AVAILABLE or NON_BILLABLE_CONFIRMED status, got: ${recStatus}. ${repricingRecommendation.discrepancyNote ?? ''}`,
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
+      // ---------------------------------------------------------------------
+      // Branch A: NON_BILLABLE_CONFIRMED => Canonical Release Path
+      // ---------------------------------------------------------------------
+      if (recStatus === 'NON_BILLABLE_CONFIRMED') {
+        let consumes;
+        try {
+          consumes = await dependencies.repository.findConsumeForReservation(reservation);
+        } catch (err) {
+          wrapRepositoryRead(
+            'INTEGRITY_CONFLICT',
+            'AI billing reservation data could not be read reliably',
+            reservationId,
+            err,
+          );
+        }
+        if (consumes.length > 0) {
+          throw recoveryError(
+            'INTEGRITY_CONFLICT',
+            'Reservation has associated consume transactions and cannot be released via system recommendation',
+            { reservationId, recoveryRequired: true },
+          );
+        }
+
+        try {
+          await dependencies.repository.recordAuditLog({
+            actorId: input.actorId,
+            action: 'AI_BILLING_RECOVERY_SYSTEM_APPROVAL_ATTEMPT',
+            targetUserId: reservation.userId,
+            metadata: {
+              reservationId,
+              action: 'APPROVE_SYSTEM_RECOMMENDATION',
+              actorId: input.actorId,
+              recommendedAction: 'RELEASE_RESERVATION',
+              systemRecommendedTokens: 0,
+              overrideFlag: false,
+              reason: action.reason,
+              evidenceReference: action.evidenceReference,
+              repricingStatus: recStatus,
+              status: 'ATTEMPT',
+            },
+          });
+        } catch (err) {
+          if (err instanceof AIBillingRecoveryError) throw err;
+          throw recoveryError(
+            'INTEGRITY_CONFLICT',
+            'System recommendation approval audit logging failed',
+            { reservationId, recoveryRequired: true },
+          );
+        }
+
+        let released: ReleaseBusinessTokenReservationResult;
+        try {
+          released = await dependencies.releaseReservation({
+            reservationId,
+            reason: action.reason,
+          });
+        } catch (err) {
+          const errorType = err instanceof AppError ? 'AppError' : 'Error';
+          const statusCode = err instanceof AppError ? err.statusCode : undefined;
+          try {
+            await dependencies.repository.recordAuditLog({
+              actorId: input.actorId,
+              action: 'AI_BILLING_RECOVERY_SYSTEM_APPROVAL_FAILED',
+              targetUserId: reservation.userId,
+              metadata: {
+                reservationId,
+                action: 'APPROVE_SYSTEM_RECOMMENDATION',
+                recommendedAction: 'RELEASE_RESERVATION',
+                errorType,
+                ...(statusCode !== undefined ? { statusCode } : {}),
+                reason: action.reason,
+                status: 'FAILED',
+              },
+            });
+          } catch (_) {}
+
+          if (err instanceof AppError) {
+            if (err.statusCode === 404) {
+              throw recoveryError(
+                'RESERVATION_NOT_FOUND',
+                'AI billing reservation not found during system recommendation release',
+                { reservationId, recoveryRequired: true },
+              );
+            }
+            if (err.statusCode === 409) {
+              throw recoveryError('INTEGRITY_CONFLICT', 'AI billing reservation cannot be released', {
+                reservationId,
+                recoveryRequired: true,
+              });
+            }
+          }
+          throw recoveryError('RELEASE_FAILED', 'System recommendation release failed', {
+            reservationId,
+            recoveryRequired: true,
+          });
+        }
+
+        const idempotentReplay = released.idempotentReplay;
+        try {
+          await dependencies.repository.recordAuditLog({
+            actorId: input.actorId,
+            action: 'AI_BILLING_RECOVERY_SYSTEM_APPROVAL',
+            targetUserId: reservation.userId,
+            metadata: {
+              reservationId,
+              action: 'APPROVE_SYSTEM_RECOMMENDATION',
+              recoveryResolutionType: 'SYSTEM_RECOMMENDATION_APPROVED',
+              recommendedAction: 'RELEASE_RESERVATION',
+              systemRecommendedTokens: 0,
+              adminApprovedTokens: 0,
+              overrideFlag: false,
+              reason: action.reason,
+              evidenceReference: action.evidenceReference,
+              repricingStatus: recStatus,
+              status: 'RELEASED',
+            },
+          });
+        } catch (_) {}
+
+        return {
+          reservationId,
+          outcome: idempotentReplay ? 'ALREADY_RELEASED' : 'RELEASED',
+          status: released.status,
+          financialMutationPerformed: !idempotentReplay,
+          recoveryRequired: false,
+          idempotentReplay,
+          reason: action.reason,
+          ...(action.evidenceReference === undefined
+            ? {}
+            : { evidenceReference: action.evidenceReference }),
+        };
+      }
+
+      // ---------------------------------------------------------------------
+      // Branch B: AUTHORITATIVE_REPRICE_AVAILABLE => Canonical Settlement Path
+      // ---------------------------------------------------------------------
+      const systemRecommendedTokens = repricingRecommendation.recommendedActualWalletTokens!;
+
+      // Verify no prior consume transactions exist
+      let consumes;
+      try {
+        consumes = await dependencies.repository.findConsumeForReservation(reservation);
+      } catch (err) {
+        wrapRepositoryRead(
+          'INTEGRITY_CONFLICT',
+          'AI billing reservation data could not be read reliably',
+          reservationId,
+          err,
+        );
+      }
+      if (consumes.length > 0) {
+        throw recoveryError(
+          'INTEGRITY_CONFLICT',
+          'Reservation has associated consume transactions and cannot be settled via system recommendation',
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
+      try {
+        await dependencies.repository.recordAuditLog({
+          actorId: input.actorId,
+          action: 'AI_BILLING_RECOVERY_SYSTEM_APPROVAL_ATTEMPT',
+          targetUserId: reservation.userId,
+          metadata: {
+            reservationId,
+            action: 'APPROVE_SYSTEM_RECOMMENDATION',
+            actorId: input.actorId,
+            systemRecommendedTokens,
+            overrideFlag: false,
+            reason: action.reason,
+            evidenceReference: action.evidenceReference,
+            repricingStatus: repricingRecommendation.repricingStatus,
+            rateCardVersion: repricingRecommendation.rateCardVersion,
+            totalProviderCostNanoUsd: repricingRecommendation.totalProviderCostNanoUsd,
+            status: 'ATTEMPT',
+          },
+        });
+      } catch (err) {
+        if (err instanceof AIBillingRecoveryError) throw err;
+        throw recoveryError(
+          'INTEGRITY_CONFLICT',
+          'System recommendation approval audit logging failed',
+          { reservationId, recoveryRequired: true },
+        );
+      }
+
+      let settlement: SettleBusinessTokenReservationResult;
+      try {
+        settlement = await dependencies.settleForAmount({
+          reservationId,
+          actualTokens: systemRecommendedTokens,
+        });
+      } catch (err) {
+        const errorType = err instanceof AppError ? 'AppError' : 'Error';
+        const statusCode = err instanceof AppError ? err.statusCode : undefined;
+        try {
+          await dependencies.repository.recordAuditLog({
+            actorId: input.actorId,
+            action: 'AI_BILLING_RECOVERY_SYSTEM_APPROVAL_FAILED',
+            targetUserId: reservation.userId,
+            metadata: {
+              reservationId,
+              action: 'APPROVE_SYSTEM_RECOMMENDATION',
+              systemRecommendedTokens,
+              errorType,
+              ...(statusCode !== undefined ? { statusCode } : {}),
+              reason: action.reason,
+              status: 'FAILED',
+            },
+          });
+        } catch (_) {}
+
+        if (err instanceof AppError) {
+          if (err.statusCode === 404) {
+            throw recoveryError(
+              'RESERVATION_NOT_FOUND',
+              'AI billing reservation not found during system recommendation settlement',
+              { reservationId, recoveryRequired: true },
+            );
+          }
+          if (err.statusCode === 409) {
+            throw recoveryError('INTEGRITY_CONFLICT', 'AI billing reservation cannot be settled', {
+              reservationId,
+              recoveryRequired: true,
+            });
+          }
+        }
+        throw recoveryError('SETTLEMENT_FAILED', 'System recommendation settlement failed', {
+          reservationId,
+          recoveryRequired: true,
+        });
+      }
+
+      const idempotentReplay = settlement.idempotentReplay;
+      try {
+        await dependencies.repository.recordAuditLog({
+          actorId: input.actorId,
+          action: 'AI_BILLING_RECOVERY_SYSTEM_APPROVAL',
+          targetUserId: reservation.userId,
+          metadata: {
+            reservationId,
+            action: 'APPROVE_SYSTEM_RECOMMENDATION',
+            systemRecommendedTokens,
+            adminApprovedTokens: systemRecommendedTokens,
+            overrideFlag: false,
+            reason: action.reason,
+            evidenceReference: action.evidenceReference,
+            repricingStatus: repricingRecommendation.repricingStatus,
+            rateCardVersion: repricingRecommendation.rateCardVersion,
+            totalProviderCostNanoUsd: repricingRecommendation.totalProviderCostNanoUsd,
+            status: 'SETTLED',
+          },
+        });
+      } catch (_) {}
+
+      return {
+        reservationId,
+        outcome: idempotentReplay ? 'ALREADY_SETTLED' : 'SETTLED',
+        status: settlement.status,
+        financialMutationPerformed: !idempotentReplay,
+        recoveryRequired: false,
+        actualTokens: settlement.actualTokens,
+        releasedTokens: settlement.releasedTokens,
+        consumeTransactionId: settlement.consumeTransactionId,
+        idempotentReplay,
+        reason: action.reason,
+        ...(action.evidenceReference === undefined
+          ? {}
+          : { evidenceReference: action.evidenceReference }),
+        systemApproval: {
+          systemRecommendedTokens,
+          overrideFlag: false,
+        },
+      };
+    }
   }
 }
 
@@ -1459,7 +2092,9 @@ export async function reconcileWalletReservations(
   }
 
   if (!snapshot.wallet) {
-    throw recoveryError('RECONCILIATION_FAILED', 'Wallet not found for reservation reconciliation');
+    throw recoveryError('RECONCILIATION_FAILED', 'Wallet not found for reservation reconciliation', {
+      statusCode: 404,
+    });
   }
 
   const actualReservedBalance = snapshot.wallet.reservedBalance;
@@ -1474,6 +2109,7 @@ export async function reconcileWalletReservations(
     throw recoveryError(
       'RECONCILIATION_FAILED',
       'Wallet reservation reconciliation encountered invalid balances',
+      { statusCode: 409 },
     );
   }
 

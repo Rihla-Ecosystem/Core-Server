@@ -175,6 +175,8 @@ function databaseError(message: string, cause: unknown): ProviderRateCardLoadErr
   return new ProviderRateCardLoadError('RATE_CARD_DATABASE_ERROR', message, { cause });
 }
 
+import { prisma } from '../config/prisma.js';
+
 /**
  * Build a Prisma-backed repository.
  *
@@ -183,7 +185,7 @@ function databaseError(message: string, cause: unknown): ProviderRateCardLoadErr
  * Defaults to the application `prisma` client.
  */
 export function createPrismaProviderRateCardRepository(
-  client: ProviderRateCardRepositoryClient,
+  client: ProviderRateCardRepositoryClient = prisma,
 ): ProviderRateCardRepository {
   const entriesInclude = { entries: { orderBy: ENTRY_ORDER_BY } } as const;
 
