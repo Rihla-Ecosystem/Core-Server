@@ -632,12 +632,41 @@ model Conversation {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages Message[]
+  user          User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages      Message[]
+  contextEvents ConversationContextEvent[]
 
   @@index([userId])
   @@index([updatedAt])
   @@map("conversations")
+}
+
+enum ConversationContextEventStatus {
+  PENDING
+  MATERIALIZED
+  FAILED
+}
+
+model ConversationContextEvent {
+  id                String                         @id @default(uuid()) @db.Uuid
+  conversationId    String                         @map("conversation_id") @db.Uuid
+  businessRequestId String                         @map("business_request_id") @db.VarChar(255)
+  feature           String                         @db.VarChar(50)
+  userContent       String                         @map("user_content") @db.Text
+  assistantContent  String                         @map("assistant_content") @db.Text
+  status            ConversationContextEventStatus @default(PENDING)
+  attemptCount      Int                            @default(0) @map("attempt_count")
+  lastError         String?                        @map("last_error") @db.Text
+  createdAt         DateTime                       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime                       @updatedAt @map("updated_at") @db.Timestamptz
+  materializedAt    DateTime?                      @map("materialized_at") @db.Timestamptz
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, businessRequestId, feature], map: "unique_conv_br_feature")
+  @@index([conversationId])
+  @@index([status])
+  @@map("conversation_context_events")
 }
 
 model Message {

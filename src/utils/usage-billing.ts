@@ -125,6 +125,8 @@ export interface UsageBillingLabels {
   replayMessage: string;
   /** HTTP 502 message when the AI service is unavailable. */
   aiUnavailableMessage: string;
+  /** Optional callback invoked on idempotent replay before throwing AppError(409). */
+  onReplay?: (result: Extract<UsageBasedBillingResult<any>, { outcome: 'RECOVERY_REQUIRED' }>) => Promise<void> | void;
 }
 
 /**
@@ -161,6 +163,18 @@ export function resolveUsageBasedBillingResult<T>(
         result.reasonCode === 'OPERATION_REPLAY_REQUIRES_RECOVERY' ||
         result.reasonCode === 'OPERATION_CREATE_REPLAY'
       ) {
+        if (labels.onReplay) {
+          try {
+            const p = labels.onReplay(result);
+            if (p && typeof (p as any).then === 'function') {
+              (p as any).catch((err: unknown) => {
+                console.error('[usage-billing] onReplay async error:', err);
+              });
+            }
+          } catch (err) {
+            console.error('[usage-billing] onReplay sync error:', err);
+          }
+        }
         throw new AppError(409, labels.replayMessage);
       }
       console.error('[usage-billing] recovery_required', {
@@ -174,4 +188,24 @@ export function resolveUsageBasedBillingResult<T>(
       throw new AppError(500, 'AI request could not be completed. Please retry.');
     }
   }
+}
+
+export async function resolveUsageBasedBillingResultAsync<T>(
+  result: UsageBasedBillingResult<T>,
+  labels: UsageBillingLabels,
+): Promise<T> {
+  if (
+    result.outcome === 'RECOVERY_REQUIRED' &&
+    (result.reasonCode === 'OPERATION_REPLAY_REQUIRES_RECOVERY' || result.reasonCode === 'OPERATION_CREATE_REPLAY')
+  ) {
+    if (labels.onReplay) {
+      try {
+        await labels.onReplay(result);
+      } catch (err) {
+        console.error('[usage-billing] onReplay error:', err);
+      }
+    }
+    return resolveUsageBasedBillingResult(result, { ...labels, onReplay: undefined });
+  }
+  return resolveUsageBasedBillingResult(result, labels);
 }

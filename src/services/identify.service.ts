@@ -8,8 +8,9 @@ import {
   buildExplicitCacheHitOutcome,
   buildSuccessOutcome,
   aiUnavailableOutcome,
-  resolveUsageBasedBillingResult,
+  resolveUsageBasedBillingResultAsync,
 } from '../utils/usage-billing.js';
+import { repairConversationContextEvent } from '../utils/conversation-context.js';
 import {
   BillingRateCardUnavailableError,
   resolveBillingRateCard,
@@ -95,6 +96,7 @@ export interface IdentifyLandmarkWithTokensInput {
   radius?: number;
   authorization?: string;
   user?: TokenExemptUser;
+  conversationId?: string;
 }
 
 const CHAT_LIMITS = parseChatLimitsConfig(process.env);
@@ -156,9 +158,23 @@ export async function identifyLandmarkWithTokens(
       }
     },
   });
-  return resolveUsageBasedBillingResult(result, {
+
+  return resolveUsageBasedBillingResultAsync(result, {
     feature: 'AI_IMAGE_ANALYSIS',
     replayMessage: 'Image analysis request already processed',
     aiUnavailableMessage: 'AI identification service unavailable',
+    onReplay: async () => {
+      if (input.conversationId) {
+        try {
+          await repairConversationContextEvent({
+            conversationId: input.conversationId,
+            businessRequestId: input.businessRequestId,
+            feature: 'AI_IMAGE_ANALYSIS',
+          });
+        } catch (err) {
+          console.error('[identify] replay context repair error:', err);
+        }
+      }
+    },
   });
 }

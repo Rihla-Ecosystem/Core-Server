@@ -10,6 +10,7 @@ import {
 } from '../utils/upload.js';
 import { identifyLandmarkWithTokens } from '../services/identify.service.js';
 import { userRateLimit } from '../utils/rate-limit.js';
+import { validateConversationOwnership, persistAndMaterializeConversationContext, formatCompactImageSummary } from '../utils/conversation-context.js';
 
 const router = Router();
 
@@ -138,6 +139,12 @@ router.post(
 
       const businessRequestId = readIdempotencyKey(req);
 
+      // Optional conversation linkage — validate ownership before billing
+      const rawConversationId = typeof req.body.conversation_id === 'string' ? req.body.conversation_id.trim() : undefined;
+      const conversationId = rawConversationId
+        ? await validateConversationOwnership(userId, rawConversationId)
+        : undefined;
+
       const result = await identifyLandmarkWithTokens({
         userId,
         businessRequestId,
@@ -148,7 +155,25 @@ router.post(
         radius,
         authorization: req.headers.authorization,
         user: req.user,
+        conversationId,
       });
+
+      // Post-settlement context persistence (durable ConversationContextEvent + deterministic Message materialization)
+      if (conversationId && result.name) {
+        const userContent = `[Image identification request${lat !== undefined && lon !== undefined ? ` at ${lat.toFixed(4)},${lon.toFixed(4)}` : ''}]`;
+        const assistantContent = formatCompactImageSummary(result.name, result.category, result.description);
+
+        await persistAndMaterializeConversationContext({
+          conversationId,
+          businessRequestId,
+          feature: 'AI_IMAGE_ANALYSIS',
+          userContent,
+          assistantContent,
+        }).catch((err: unknown) => {
+          console.error('[identify] CONVERSATION_CONTEXT_PERSISTENCE_FAILED:', err);
+        });
+      }
+
       res.json(result);
     } catch (err) {
       next(err);
