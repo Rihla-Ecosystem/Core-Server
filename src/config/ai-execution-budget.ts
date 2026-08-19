@@ -49,7 +49,12 @@ export function getAIExecutionBudget(feature: AIBilledExecutionFeature): Readonl
       // while still failing closed on genuinely excessive output.
       return Object.freeze({ maxInputTokens: 1_000, maxOutputTokens: 1_200, maxAudioBytes: VOICE_MAX_BYTES, maxAudioDurationSeconds: 60, maxAudioInputTokens: 1_920, maxTtsCharacters: 500, maxTtsOutputTokens: 1_200 });
     case 'AI_TRIP_ITINERARY':
-      return Object.freeze({ maxInputTokens: 8_000, maxOutputTokens: 1_000, maxCities: 10, maxInterests: 10, maxDays: 14 });
+      // maxOutputTokens tuned to the provider boundary: gemini-3.6-flash
+      // (free-tier API, real production key) truncates responses when the
+      // requested cap is below ~1800 tokens. 2048 matches the ai-service
+      // safety ceiling and yields a complete STOP response for the full
+      // markdown + structured-itinerary JSON payload.
+      return Object.freeze({ maxInputTokens: 8_000, maxOutputTokens: 2_048, maxCities: 10, maxInterests: 10, maxDays: 14 });
     case 'AI_CONTEXT_ANALYZE':
       // The /analyze request is a compact, Core-built location/risk digest.
       // Its only provider-visible controls are bounded text input and JSON output.
