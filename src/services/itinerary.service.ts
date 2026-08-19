@@ -16,6 +16,7 @@ import type { TokenExemptUser } from '../utils/token-exempt.js';
 
 export interface ItineraryResult {
   itinerary: string;
+  structured?: unknown;
   blocked?: boolean;
   reason?: string | null;
   usage?: {
